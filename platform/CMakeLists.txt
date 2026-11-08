@@ -1,0 +1,12 @@
+if(WIN32)
+  set(TW_PLATFORM_SRC windows/win_probe.cpp windows/paths_win.cpp)
+else()
+  set(TW_PLATFORM_SRC linux/linux_probe.cpp linux/paths_posix.cpp)
+endif()
+
+add_library(tw_platform STATIC ${TW_PLATFORM_SRC})
+target_include_directories(tw_platform PUBLIC include)
+target_link_libraries(tw_platform PUBLIC tw_core)
+if(WIN32)
+  target_link_libraries(tw_platform PRIVATE dwmapi)
+endif()

@@ -1,0 +1,12 @@
+if(WIN32)
+  set(TW_IPC_SRC src/ipc_win.cpp)
+else()
+  set(TW_IPC_SRC src/ipc_stub.cpp)
+endif()
+
+add_library(tw_ipc STATIC ${TW_IPC_SRC})
+target_include_directories(tw_ipc PUBLIC include)
+target_link_libraries(tw_ipc PUBLIC tw_core)
+if(WIN32)
+  target_link_libraries(tw_ipc PUBLIC tw_platform)
+endif()

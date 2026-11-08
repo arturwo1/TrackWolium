@@ -1,0 +1,3 @@
+add_executable(trackwolium_console main.cpp)
+target_link_libraries(trackwolium_console PRIVATE tw_core tw_platform tw_console tw_storage tw_ipc)
+set_target_properties(trackwolium_console PROPERTIES OUTPUT_NAME trackwolium-console)

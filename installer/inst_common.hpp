@@ -1,0 +1,103 @@
+#pragma once
+#include <windows.h>
+#include <tlhelp32.h>
+#include <shlobj.h>
+#include <filesystem>
+#include <string>
+
+namespace inst {
+
+constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kRunValue[] = L"Wolium";
+constexpr wchar_t kAppName[] = L"Wolium";
+
+inline std::wstring lower(std::wstring s) {
+  for (auto& c : s) c = static_cast<wchar_t>(towlower(c));
+  return s;
+}
+
+inline std::wstring self_path() {
+  wchar_t buf[MAX_PATH * 2];
+  DWORD n = GetModuleFileNameW(nullptr, buf, static_cast<DWORD>(sizeof(buf) / sizeof(buf[0])));
+  return std::wstring(buf, n);
+}
+
+inline std::wstring dir_of(const std::wstring& p) {
+  std::size_t i = p.find_last_of(L"\\/");
+  return i == std::wstring::npos ? std::wstring() : p.substr(0, i);
+}
+
+inline bool is_inside(const std::wstring& path, const std::wstring& dir) {
+  std::wstring p = lower(path), d = lower(dir);
+  if (!d.empty() && d.back() != L'\\') d += L'\\';
+  return p.compare(0, d.size(), d) == 0;
+}
+
+inline void kill_in_dir(const std::wstring& dir) {
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snap == INVALID_HANDLE_VALUE) return;
+  PROCESSENTRY32W pe{};
+  pe.dwSize = sizeof(pe);
+  DWORD me = GetCurrentProcessId();
+  if (Process32FirstW(snap, &pe)) {
+    do {
+      if (pe.th32ProcessID == me) continue;
+      HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pe.th32ProcessID);
+      if (!h) continue;
+      wchar_t buf[MAX_PATH * 2];
+      DWORD n = static_cast<DWORD>(sizeof(buf) / sizeof(buf[0]));
+      if (QueryFullProcessImageNameW(h, 0, buf, &n) && is_inside(std::wstring(buf, n), dir)) {
+        TerminateProcess(h, 0);
+        WaitForSingleObject(h, 3000);
+      }
+      CloseHandle(h);
+    } while (Process32NextW(snap, &pe));
+  }
+  CloseHandle(snap);
+}
+
+inline void set_autostart(const std::wstring& dir, bool on) {
+  HKEY key;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) return;
+  if (on) {
+    std::wstring cmd = L"\"" + dir + L"\\trackwolium.exe\" --background";
+    RegSetValueExW(key, kRunValue, 0, REG_SZ, reinterpret_cast<const BYTE*>(cmd.c_str()),
+                   static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t)));
+  } else {
+    RegDeleteValueW(key, kRunValue);
+  }
+  RegCloseKey(key);
+}
+
+inline std::wstring known_folder(REFKNOWNFOLDERID id) {
+  PWSTR p = nullptr;
+  std::wstring out;
+  if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &p)) && p) out = p;
+  CoTaskMemFree(p);
+  return out;
+}
+
+inline std::wstring desktop_link() { return known_folder(FOLDERID_Desktop) + L"\\Wolium.lnk"; }
+inline std::wstring start_menu_link() { return known_folder(FOLDERID_Programs) + L"\\Wolium.lnk"; }
+
+inline bool make_link(const std::wstring& link, const std::wstring& target, const std::wstring& dir) {
+  IShellLinkW* sl = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&sl)))) return false;
+  sl->SetPath(target.c_str());
+  sl->SetWorkingDirectory(dir.c_str());
+  IPersistFile* pf = nullptr;
+  bool ok = false;
+  if (SUCCEEDED(sl->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&pf)))) {
+    ok = SUCCEEDED(pf->Save(link.c_str(), TRUE));
+    pf->Release();
+  }
+  sl->Release();
+  return ok;
+}
+
+inline bool looks_installed(const std::wstring& dir) {
+  std::error_code ec;
+  return std::filesystem::exists(dir + L"\\trackwolium.exe", ec) && std::filesystem::exists(dir + L"\\uninstall.exe", ec);
+}
+
+}
