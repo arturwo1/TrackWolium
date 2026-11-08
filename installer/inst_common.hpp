@@ -4,6 +4,7 @@
 #include <shlobj.h>
 #include <filesystem>
 #include <string>
+#include "tw/i18n.hpp"
 
 namespace inst {
 
@@ -93,6 +94,12 @@ inline bool make_link(const std::wstring& link, const std::wstring& target, cons
   }
   sl->Release();
   return ok;
+}
+
+inline std::wstring lang_file(const std::wstring& dir) { return dir + L"\\userdata\\lang"; }
+
+inline void apply_language(const std::wstring& dir) {
+  tw::i18n::load(std::filesystem::path(lang_file(dir)), GetUserDefaultUILanguage());
 }
 
 inline bool looks_installed(const std::wstring& dir) {

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
+import 'l10n.dart';
 
 class AppUsage {
   AppUsage(this.app);
@@ -20,11 +21,31 @@ String dbPath() => '${dataDir()}${Platform.pathSeparator}usage.db';
 
 String formatMs(int ms) {
   final s = ms ~/ 1000;
-  if (s < 60) return '${s}s';
+  if (s < 60) return '$s${tr('unitS')}';
   final m = s ~/ 60;
-  if (m < 60) return '${m}m ${s % 60}s';
+  if (m < 60) return '$m${tr('unitM')} ${s % 60}${tr('unitS')}';
   final h = m ~/ 60;
-  return '${h}h ${m % 60}m';
+  return '$h${tr('unitH')} ${m % 60}${tr('unitM')}';
+}
+
+String langFile() => '${dataDir()}${Platform.pathSeparator}lang';
+
+void loadLanguage() {
+  try {
+    final f = File(langFile());
+    if (f.existsSync()) {
+      final code = f.readAsStringSync().trim();
+      if (languages.containsKey(code)) language.value = code;
+    }
+  } catch (_) {}
+}
+
+void saveLanguage(String code) {
+  language.value = code;
+  try {
+    Directory(dataDir()).createSync(recursive: true);
+    File(langFile()).writeAsStringSync('$code\n');
+  } catch (_) {}
 }
 
 class Usage {

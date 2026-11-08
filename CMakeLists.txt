@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(trackwolium LANGUAGES C CXX)
+if(WIN32)
+  enable_language(RC)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,6 +19,7 @@ else()
 endif()
 
 add_subdirectory(core)
+add_subdirectory(i18n)
 add_subdirectory(capi)
 
 if(NOT ANDROID)

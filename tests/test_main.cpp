@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <thread>
+#include "tw/i18n.hpp"
 #include "tw/ipc.hpp"
 #include "tw/platform.hpp"
 #include "tw/serialize.hpp"
@@ -362,6 +363,22 @@ void test_ipc_roundtrip() {
 #endif
 
 
+void test_i18n_complete() {
+  CHECK(tw::i18n::count() >= 2);
+  for (int i = 0; i < tw::i18n::count(); ++i) {
+    tw::i18n::set(i);
+    for (int k = 0; k < tw::i18n::kKeyCount; ++k) {
+      const wchar_t* text = tw::i18n::tr(static_cast<tw::i18n::Key>(k));
+      CHECK(text != nullptr && text[0] != L'\0');
+    }
+  }
+  CHECK(tw::i18n::find("ru") >= 0);
+  CHECK(tw::i18n::find("xx") < 0);
+  CHECK(tw::i18n::from_langid(0x19) == tw::i18n::find("ru"));
+  CHECK(tw::i18n::from_langid(0x09) == tw::i18n::find("en"));
+  tw::i18n::set(0);
+}
+
 int main() {
   test_accumulates_per_state();
   test_gap_is_ignored();
@@ -376,6 +393,7 @@ int main() {
   test_filter_hides_background_only_and_ignored();
   test_parse_ignore_list();
   test_native_probe_smoke();
+  test_i18n_complete();
   test_serialize_roundtrip();
   test_engine_store_flush_and_finish();
   test_engine_seeds_from_store();

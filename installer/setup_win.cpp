@@ -1,5 +1,6 @@
 #include <objbase.h>
 #include <shobjidl.h>
+#include <dwmapi.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -11,6 +12,9 @@
 
 namespace {
 
+using tw::i18n::Key;
+using tw::i18n::tr;
+
 constexpr UINT kDone = WM_APP + 1;
 constexpr int kIdPath = 101;
 constexpr int kIdBrowse = 102;
@@ -18,9 +22,28 @@ constexpr int kIdAuto = 103;
 constexpr int kIdDesk = 104;
 constexpr int kIdInstall = 105;
 constexpr int kIdStatus = 106;
+constexpr int kIdLabel = 107;
+constexpr int kIdTitle = 108;
+constexpr int kIdSub = 109;
+constexpr int kIdLangBase = 200;
 constexpr char kMagic[8] = {'W', 'O', 'L', 'I', 'U', 'M', 'P', 'K'};
 
-HWND g_path, g_auto, g_desk, g_install, g_status, g_browse;
+constexpr COLORREF kBg = RGB(35, 39, 42);
+constexpr COLORREF kPanel = RGB(41, 46, 50);
+constexpr COLORREF kBorder = RGB(58, 66, 74);
+constexpr COLORREF kText = RGB(128, 224, 245);
+constexpr COLORREF kMuted = RGB(173, 176, 179);
+constexpr COLORREF kError = RGB(242, 63, 67);
+
+HWND g_main, g_path, g_status, g_install, g_browse;
+HBRUSH g_bg_brush, g_panel_brush;
+HFONT g_font, g_font_big;
+bool g_auto = false;
+bool g_desk = true;
+bool g_busy = false;
+bool g_error = false;
+bool g_installing = false;
+std::wstring g_status_text;
 
 std::wstring read_text(HWND h) {
   int n = GetWindowTextLengthW(h);
@@ -30,18 +53,40 @@ std::wstring read_text(HWND h) {
   return s;
 }
 
-void set_status(const wchar_t* t) { SetWindowTextW(g_status, t); }
+void set_status(const std::wstring& text, bool error) {
+  g_status_text = text;
+  g_error = error;
+  SetWindowTextW(g_status, text.c_str());
+  InvalidateRect(g_status, nullptr, TRUE);
+}
 
-bool extract_payload(const std::wstring& zip_path, std::wstring* error) {
+void show_hint() {
+  set_status(tr(Key::SetupHint), false);
+}
+
+void apply_texts() {
+  SetWindowTextW(g_main, tr(Key::SetupTitle));
+  SetWindowTextW(GetDlgItem(g_main, kIdTitle), L"Wolium");
+  SetWindowTextW(GetDlgItem(g_main, kIdSub), tr(Key::SetupSubtitle));
+  SetWindowTextW(GetDlgItem(g_main, kIdLabel), tr(Key::InstallFolder));
+  SetWindowTextW(g_browse, tr(Key::Browse));
+  SetWindowTextW(GetDlgItem(g_main, kIdAuto), tr(Key::AutoStart));
+  SetWindowTextW(GetDlgItem(g_main, kIdDesk), tr(Key::DesktopShortcut));
+  SetWindowTextW(g_install, tr(Key::Install));
+  if (!g_error && !g_installing) show_hint();
+  InvalidateRect(g_main, nullptr, TRUE);
+}
+
+bool extract_payload(const std::wstring& zip_path, Key* error) {
   std::ifstream in(std::filesystem::path(inst::self_path()), std::ios::binary);
   if (!in) {
-    *error = L"Could not read the installer";
+    *error = Key::ErrReadInstaller;
     return false;
   }
   in.seekg(0, std::ios::end);
   std::uint64_t total = static_cast<std::uint64_t>(in.tellg());
   if (total < 16) {
-    *error = L"The installer is corrupted";
+    *error = Key::ErrCorrupt;
     return false;
   }
   char trailer[16];
@@ -50,13 +95,13 @@ bool extract_payload(const std::wstring& zip_path, std::wstring* error) {
   std::uint64_t size = 0;
   std::memcpy(&size, trailer, 8);
   if (std::memcmp(trailer + 8, kMagic, 8) != 0 || size == 0 || size > total - 16) {
-    *error = L"The installer has no payload";
+    *error = Key::ErrNoPayload;
     return false;
   }
   in.seekg(static_cast<std::streamoff>(total - 16 - size));
   std::ofstream out(std::filesystem::path(zip_path), std::ios::binary | std::ios::trunc);
   if (!out) {
-    *error = L"Could not create a temporary file";
+    *error = Key::ErrTempFile;
     return false;
   }
   std::vector<char> buf(1 << 16);
@@ -65,7 +110,7 @@ bool extract_payload(const std::wstring& zip_path, std::wstring* error) {
     std::size_t n = static_cast<std::size_t>(left < buf.size() ? left : buf.size());
     in.read(buf.data(), static_cast<std::streamsize>(n));
     if (static_cast<std::size_t>(in.gcount()) != n) {
-      *error = L"The installer is corrupted";
+      *error = Key::ErrCorrupt;
       return false;
     }
     out.write(buf.data(), static_cast<std::streamsize>(n));
@@ -97,18 +142,19 @@ struct Job {
   std::wstring dir;
   bool autostart;
   bool desktop;
+  int lang;
   HWND hwnd;
 };
 
 void do_install(Job job) {
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-  std::wstring err;
+  Key err = Key::ErrExtract;
   bool ok = false;
   std::error_code ec;
   inst::kill_in_dir(job.dir);
   std::filesystem::create_directories(job.dir, ec);
   if (ec) {
-    err = L"Could not create the folder";
+    err = Key::ErrCreateDir;
   } else {
     wchar_t tmp[MAX_PATH];
     DWORD n = GetTempPathW(MAX_PATH, tmp);
@@ -117,12 +163,13 @@ void do_install(Job job) {
       if (run_tar(zip, job.dir) && inst::looks_installed(job.dir)) {
         ok = true;
       } else {
-        err = L"Could not extract the files";
+        err = Key::ErrExtract;
       }
     }
     std::filesystem::remove(zip, ec);
   }
   if (ok) {
+    tw::i18n::write_code(std::filesystem::path(inst::lang_file(job.dir)), tw::i18n::code(job.lang));
     inst::set_autostart(job.dir, job.autostart);
     inst::make_link(inst::start_menu_link(), job.dir + L"\\wolium.exe", job.dir);
     if (job.desktop) inst::make_link(inst::desktop_link(), job.dir + L"\\wolium.exe", job.dir);
@@ -137,8 +184,7 @@ void do_install(Job job) {
     }
   }
   CoUninitialize();
-  auto* msg = new std::wstring(ok ? L"" : err);
-  PostMessageW(job.hwnd, kDone, ok ? 1 : 0, reinterpret_cast<LPARAM>(msg));
+  PostMessageW(job.hwnd, kDone, ok ? 1 : 0, static_cast<LPARAM>(err));
 }
 
 std::wstring browse(HWND owner) {
@@ -162,70 +208,177 @@ std::wstring browse(HWND owner) {
   return result;
 }
 
-std::wstring resolve_target(std::wstring dir) {
-  while (dir.size() > 3 && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
-  std::error_code ec;
-  std::filesystem::path p(dir);
-  if (!std::filesystem::exists(p, ec)) return dir;
-  if (inst::looks_installed(dir)) return dir;
-  if (std::filesystem::is_empty(p, ec)) return dir;
-  return dir + L"\\Wolium";
+HWND make(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w, int h, HWND parent, int id, HFONT font) {
+  HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, parent,
+                           reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+  SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+  return c;
 }
 
-HWND make(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w, int h, HWND parent, int id) {
-  HWND c = CreateWindowExW(cls == std::wstring(L"EDIT") ? WS_EX_CLIENTEDGE : 0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h,
-                           parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
-  SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-  return c;
+void draw_button(const DRAWITEMSTRUCT* d) {
+  int id = static_cast<int>(d->CtlID);
+  bool disabled = (d->itemState & ODS_DISABLED) != 0;
+  bool pressed = (d->itemState & ODS_SELECTED) != 0;
+  bool is_check = id == kIdAuto || id == kIdDesk;
+  bool is_lang = id >= kIdLangBase;
+  bool accent = id == kIdInstall;
+  bool selected = is_lang && (id - kIdLangBase) == tw::i18n::current();
+
+  RECT r = d->rcItem;
+  FillRect(d->hDC, &r, g_bg_brush);
+
+  COLORREF text = disabled ? kMuted : kText;
+  std::wstring label = read_text(d->hwndItem);
+  SetBkMode(d->hDC, TRANSPARENT);
+  SelectObject(d->hDC, g_font);
+
+  if (is_check) {
+    bool on = id == kIdAuto ? g_auto : g_desk;
+    RECT box{r.left + 1, r.top + (r.bottom - r.top - 18) / 2, r.left + 19, r.top + (r.bottom - r.top - 18) / 2 + 18};
+    HPEN pen = CreatePen(PS_SOLID, 1, on ? kText : kBorder);
+    HBRUSH br = CreateSolidBrush(on ? kText : kPanel);
+    HGDIOBJ op = SelectObject(d->hDC, pen);
+    HGDIOBJ ob = SelectObject(d->hDC, br);
+    RoundRect(d->hDC, box.left, box.top, box.right, box.bottom, 6, 6);
+    if (on) {
+      HPEN tick = CreatePen(PS_SOLID, 2, kBg);
+      SelectObject(d->hDC, tick);
+      MoveToEx(d->hDC, box.left + 4, box.top + 9, nullptr);
+      LineTo(d->hDC, box.left + 8, box.top + 13);
+      LineTo(d->hDC, box.left + 14, box.top + 5);
+      SelectObject(d->hDC, pen);
+      DeleteObject(tick);
+    }
+    SelectObject(d->hDC, op);
+    SelectObject(d->hDC, ob);
+    DeleteObject(pen);
+    DeleteObject(br);
+    RECT tr{r.left + 28, r.top, r.right, r.bottom};
+    SetTextColor(d->hDC, text);
+    DrawTextW(d->hDC, label.c_str(), -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+    return;
+  }
+
+  COLORREF fill = accent ? (pressed ? RGB(100, 190, 215) : kText) : (selected ? RGB(50, 76, 86) : (pressed ? kBorder : kPanel));
+  COLORREF edge = accent ? kText : (selected ? kText : kBorder);
+  if (accent) text = disabled ? kMuted : kBg;
+  if (accent && disabled) fill = kBorder;
+  HPEN pen = CreatePen(PS_SOLID, 1, edge);
+  HBRUSH br = CreateSolidBrush(fill);
+  HGDIOBJ op = SelectObject(d->hDC, pen);
+  HGDIOBJ ob = SelectObject(d->hDC, br);
+  RoundRect(d->hDC, r.left, r.top, r.right, r.bottom, 12, 12);
+  SelectObject(d->hDC, op);
+  SelectObject(d->hDC, ob);
+  DeleteObject(pen);
+  DeleteObject(br);
+  SetTextColor(d->hDC, text);
+  DrawTextW(d->hDC, label.c_str(), -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+}
+
+void set_busy(bool busy) {
+  g_busy = busy;
+  EnableWindow(g_install, !busy);
+  EnableWindow(g_browse, !busy);
+  EnableWindow(g_path, !busy);
 }
 
 LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_CREATE: {
-      make(L"STATIC", L"Install folder:", 0, 16, 16, 400, 18, hwnd, 0);
-      g_path = make(L"EDIT", L"", ES_AUTOHSCROLL, 16, 38, 330, 24, hwnd, kIdPath);
-      g_browse = make(L"BUTTON", L"Browse…", BS_PUSHBUTTON, 356, 37, 80, 26, hwnd, kIdBrowse);
-      g_auto = make(L"BUTTON", L"Start with Windows", BS_AUTOCHECKBOX, 16, 76, 400, 20, hwnd, kIdAuto);
-      g_desk = make(L"BUTTON", L"Desktop shortcut", BS_AUTOCHECKBOX, 16, 100, 400, 20, hwnd, kIdDesk);
-      g_status = make(L"STATIC", L"Everything lives in one folder. Deleting it removes Wolium.", 0, 16, 134, 420, 36, hwnd, kIdStatus);
-      g_install = make(L"BUTTON", L"Install", BS_DEFPUSHBUTTON, 336, 178, 100, 30, hwnd, kIdInstall);
-      SendMessageW(g_desk, BM_SETCHECK, BST_CHECKED, 0);
-      std::wstring def = inst::known_folder(FOLDERID_Profile) + L"\\Wolium";
+      g_main = hwnd;
+      BOOL dark = TRUE;
+      DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark));
+      g_bg_brush = CreateSolidBrush(kBg);
+      g_panel_brush = CreateSolidBrush(kPanel);
+      g_font = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+      g_font_big = CreateFontW(-26, 0, 0, 0, FW_BLACK, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+      make(L"STATIC", L"", 0, 24, 18, 200, 34, hwnd, kIdTitle, g_font_big);
+      make(L"STATIC", L"", 0, 26, 54, 220, 20, hwnd, kIdSub, g_font);
+      int x = 480 - 24;
+      for (int i = tw::i18n::count() - 1; i >= 0; --i) {
+        x -= 92;
+        make(L"BUTTON", tw::i18n::name(i), BS_OWNERDRAW | WS_TABSTOP, x, 22, 88, 30, hwnd, kIdLangBase + i, g_font);
+        x -= 6;
+      }
+      make(L"STATIC", L"", 0, 24, 98, 430, 20, hwnd, kIdLabel, g_font);
+      g_path = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 24, 122, 340, 30, hwnd,
+                               reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdPath)), nullptr, nullptr);
+      SendMessageW(g_path, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
+      g_browse = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 372, 121, 84, 32, hwnd, kIdBrowse, g_font);
+      make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 170, 430, 24, hwnd, kIdAuto, g_font);
+      make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 200, 430, 24, hwnd, kIdDesk, g_font);
+      g_status = make(L"STATIC", L"", 0, 24, 240, 430, 40, hwnd, kIdStatus, g_font);
+      g_install = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 336, 288, 120, 36, hwnd, kIdInstall, g_font);
+      std::wstring def = inst::known_folder(FOLDERID_LocalAppData) + L"\\Programs\\Wolium";
       SetWindowTextW(g_path, def.c_str());
+      tw::i18n::load(std::filesystem::path(), GetUserDefaultUILanguage());
+      apply_texts();
       return 0;
     }
-    case WM_COMMAND:
-      if (LOWORD(wp) == kIdBrowse) {
+    case WM_CTLCOLORSTATIC: {
+      HDC dc = reinterpret_cast<HDC>(wp);
+      HWND c = reinterpret_cast<HWND>(lp);
+      int id = GetDlgCtrlID(c);
+      COLORREF col = kText;
+      if (id == kIdSub || id == kIdLabel) col = kMuted;
+      if (id == kIdStatus) col = g_error ? kError : kMuted;
+      SetTextColor(dc, col);
+      SetBkColor(dc, kBg);
+      return reinterpret_cast<LRESULT>(g_bg_brush);
+    }
+    case WM_CTLCOLOREDIT: {
+      HDC dc = reinterpret_cast<HDC>(wp);
+      SetTextColor(dc, kText);
+      SetBkColor(dc, kPanel);
+      return reinterpret_cast<LRESULT>(g_panel_brush);
+    }
+    case WM_ERASEBKGND: {
+      RECT r;
+      GetClientRect(hwnd, &r);
+      FillRect(reinterpret_cast<HDC>(wp), &r, g_bg_brush);
+      return 1;
+    }
+    case WM_DRAWITEM:
+      draw_button(reinterpret_cast<const DRAWITEMSTRUCT*>(lp));
+      return TRUE;
+    case WM_COMMAND: {
+      int id = LOWORD(wp);
+      if (id >= kIdLangBase && id < kIdLangBase + tw::i18n::count()) {
+        tw::i18n::set(id - kIdLangBase);
+        apply_texts();
+        for (int i = 0; i < tw::i18n::count(); ++i) InvalidateRect(GetDlgItem(hwnd, kIdLangBase + i), nullptr, TRUE);
+      } else if (id == kIdAuto || id == kIdDesk) {
+        (id == kIdAuto ? g_auto : g_desk) = !(id == kIdAuto ? g_auto : g_desk);
+        InvalidateRect(GetDlgItem(hwnd, id), nullptr, TRUE);
+      } else if (id == kIdBrowse) {
         std::wstring p = browse(hwnd);
         if (!p.empty()) SetWindowTextW(g_path, p.c_str());
-      } else if (LOWORD(wp) == kIdInstall) {
-        std::wstring dir = resolve_target(read_text(g_path));
+      } else if (id == kIdInstall && !g_busy) {
+        std::wstring dir = read_text(g_path);
+        while (dir.size() > 3 && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
         if (dir.size() < 4) {
-          set_status(L"Choose a folder.");
+          set_status(tr(Key::ChooseFolder), true);
           return 0;
         }
-        SetWindowTextW(g_path, dir.c_str());
-        EnableWindow(g_install, FALSE);
-        EnableWindow(g_browse, FALSE);
-        EnableWindow(g_path, FALSE);
-        set_status(L"Installing…");
-        Job job{dir, SendMessageW(g_auto, BM_GETCHECK, 0, 0) == BST_CHECKED, SendMessageW(g_desk, BM_GETCHECK, 0, 0) == BST_CHECKED, hwnd};
+        set_busy(true);
+        g_installing = true;
+        set_status(tr(Key::Installing), false);
+        Job job{dir, g_auto, g_desk, tw::i18n::current(), hwnd};
         std::thread(do_install, job).detach();
       }
       return 0;
-    case kDone: {
-      std::unique_ptr<std::wstring> err(reinterpret_cast<std::wstring*>(lp));
+    }
+    case kDone:
+      g_installing = false;
       if (wp) {
-        MessageBoxW(hwnd, L"Wolium is installed and running, look for the tray icon.", L"Wolium", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(hwnd, tr(Key::InstallDone), tr(Key::SetupTitle), MB_OK | MB_ICONINFORMATION);
         DestroyWindow(hwnd);
       } else {
-        set_status(err->c_str());
-        EnableWindow(g_install, TRUE);
-        EnableWindow(g_browse, TRUE);
-        EnableWindow(g_path, TRUE);
+        set_status(tr(static_cast<Key>(lp)), true);
+        set_busy(false);
       }
       return 0;
-    }
     case WM_DESTROY:
       PostQuitMessage(0);
       return 0;
@@ -241,13 +394,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   wc.lpfnWndProc = proc;
   wc.hInstance = inst;
   wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
-  wc.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
+  wc.hbrBackground = nullptr;
+  wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
   wc.lpszClassName = L"WoliumSetup";
   RegisterClassW(&wc);
-  RECT r{0, 0, 452, 226};
-  AdjustWindowRect(&r, WS_CAPTION | WS_SYSMENU, FALSE);
-  HWND w = CreateWindowExW(0, wc.lpszClassName, L"Wolium Setup", WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT, CW_USEDEFAULT,
+  RECT r{0, 0, 480, 344};
+  AdjustWindowRect(&r, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
+  HWND w = CreateWindowExW(0, wc.lpszClassName, L"Wolium", WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT, CW_USEDEFAULT,
                            r.right - r.left, r.bottom - r.top, nullptr, nullptr, inst, nullptr);
   ShowWindow(w, show);
   MSG m;

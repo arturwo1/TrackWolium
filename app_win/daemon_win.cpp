@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 #include "tw/engine.hpp"
+#include "tw/i18n.hpp"
 #include "tw/ipc.hpp"
 #include "tw/paths.hpp"
 #include "tw/platform.hpp"
@@ -101,58 +102,18 @@ void launch_viewer(HANDLE* process) {
     if (process) *process = pi.hProcess;
     else CloseHandle(pi.hProcess);
   } else {
-    MessageBoxW(nullptr, L"wolium.exe was not found next to trackwolium.exe", L"Wolium", MB_OK | MB_ICONWARNING);
+    MessageBoxW(nullptr, tw::i18n::tr(tw::i18n::Key::ViewerMissing), L"Wolium", MB_OK | MB_ICONWARNING);
   }
 }
 
-HICON make_icon() {
-  const int n = 32;
-  BITMAPV5HEADER bi{};
-  bi.bV5Size = sizeof(bi);
-  bi.bV5Width = n;
-  bi.bV5Height = -n;
-  bi.bV5Planes = 1;
-  bi.bV5BitCount = 32;
-  bi.bV5Compression = BI_BITFIELDS;
-  bi.bV5RedMask = 0x00FF0000;
-  bi.bV5GreenMask = 0x0000FF00;
-  bi.bV5BlueMask = 0x000000FF;
-  bi.bV5AlphaMask = 0xFF000000;
+HICON make_icon(HINSTANCE inst) {
+  int n = GetSystemMetrics(SM_CXSMICON);
+  HANDLE h = LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, n, n, LR_DEFAULTCOLOR);
+  return h ? static_cast<HICON>(h) : LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
+}
 
-  void* bits = nullptr;
-  HDC dc = GetDC(nullptr);
-  HBITMAP color = CreateDIBSection(dc, reinterpret_cast<BITMAPINFO*>(&bi), DIB_RGB_COLORS, &bits, nullptr, 0);
-  ReleaseDC(nullptr, dc);
-  HBITMAP mask = CreateBitmap(n, n, 1, 1, nullptr);
-  if (!color || !mask || !bits) {
-    if (color) DeleteObject(color);
-    if (mask) DeleteObject(mask);
-    return LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
-  }
-
-  auto* px = static_cast<std::uint32_t*>(bits);
-  const std::uint32_t teal = 0xFF14A098;
-  const std::uint32_t white = 0xFFFFFFFF;
-  for (int y = 0; y < n; ++y) {
-    for (int x = 0; x < n; ++x) {
-      bool corner = (x < 3 && y < 3 && (3 - x) * (3 - x) + (3 - y) * (3 - y) > 9) ||
-                    (x >= n - 3 && y < 3 && (x - (n - 4)) * (x - (n - 4)) + (3 - y) * (3 - y) > 9) ||
-                    (x < 3 && y >= n - 3 && (3 - x) * (3 - x) + (y - (n - 4)) * (y - (n - 4)) > 9) ||
-                    (x >= n - 3 && y >= n - 3 && (x - (n - 4)) * (x - (n - 4)) + (y - (n - 4)) * (y - (n - 4)) > 9);
-      bool bar = y >= 6 && y < 11 && x >= 6 && x < 26;
-      bool stem = y >= 11 && y < 27 && x >= 13 && x < 19;
-      px[y * n + x] = corner ? 0u : (bar || stem ? white : teal);
-    }
-  }
-
-  ICONINFO ii{};
-  ii.fIcon = TRUE;
-  ii.hbmColor = color;
-  ii.hbmMask = mask;
-  HICON icon = CreateIconIndirect(&ii);
-  DeleteObject(color);
-  DeleteObject(mask);
-  return icon ? icon : LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
+void reload_language() {
+  tw::i18n::load(std::filesystem::path(sibling_path(L"userdata\\lang")), GetUserDefaultUILanguage());
 }
 
 void tray_add(App& app) {
@@ -163,8 +124,9 @@ void tray_add(App& app) {
   nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
   nid.uCallbackMessage = kTrayMsg;
   nid.hIcon = app.icon;
-  const wchar_t* tip = app.history ? L"Wolium" : L"Wolium (history is not saved)";
-  wcsncpy_s(nid.szTip, tip, _TRUNCATE);
+  std::wstring tip = L"Wolium";
+  if (!app.history) tip += std::wstring(L" (") + tw::i18n::tr(tw::i18n::Key::TrayNoHistory) + L")";
+  wcsncpy_s(nid.szTip, tip.c_str(), _TRUNCATE);
   Shell_NotifyIconW(NIM_ADD, &nid);
   nid.uVersion = NOTIFYICON_VERSION_4;
   Shell_NotifyIconW(NIM_SETVERSION, &nid);
@@ -188,10 +150,11 @@ void open_viewer(App& app) {
 }
 
 void show_menu(App& app) {
+  reload_language();
   HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, kCmdOpen, L"Open");
+  AppendMenuW(menu, MF_STRING, kCmdOpen, tw::i18n::tr(tw::i18n::Key::TrayOpen));
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu, MF_STRING, kCmdExit, L"Exit");
+  AppendMenuW(menu, MF_STRING, kCmdExit, tw::i18n::tr(tw::i18n::Key::TrayExit));
   SetMenuDefaultItem(menu, kCmdOpen, FALSE);
   POINT pt;
   GetCursorPos(&pt);
@@ -294,7 +257,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   if (!app.hwnd) return 1;
 
   app.taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
-  app.icon = make_icon();
+  reload_language();
+  app.icon = make_icon(inst);
   start_worker(app);
   tray_add(app);
   if (!app.opt.background) open_viewer(app);

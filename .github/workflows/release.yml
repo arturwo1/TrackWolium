@@ -25,6 +25,7 @@ jobs:
         working-directory: ui
         run: |
           flutter create --platforms=windows --project-name wolium .
+          python tool\patch_windows.py . ..\assets\icon\wolium.ico
           flutter pub get
           flutter build windows --release
       - name: package

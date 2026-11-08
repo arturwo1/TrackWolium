@@ -1,5 +1,6 @@
-add_executable(trackwolium_daemon WIN32 daemon_win.cpp)
-target_link_libraries(trackwolium_daemon PRIVATE tw_core tw_platform tw_storage tw_ipc shell32 user32 gdi32 advapi32)
+add_executable(trackwolium_daemon WIN32 daemon_win.cpp ${CMAKE_SOURCE_DIR}/res/daemon.rc)
+target_include_directories(trackwolium_daemon PRIVATE ${CMAKE_SOURCE_DIR}/assets/icon)
+target_link_libraries(trackwolium_daemon PRIVATE tw_core tw_platform tw_storage tw_ipc tw_i18n shell32 user32 gdi32 advapi32)
 set_target_properties(trackwolium_daemon PROPERTIES OUTPUT_NAME trackwolium)
 if(MSVC)
   target_link_options(trackwolium_daemon PRIVATE /ENTRY:wWinMainCRTStartup)
