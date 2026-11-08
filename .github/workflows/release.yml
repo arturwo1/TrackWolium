@@ -19,7 +19,7 @@ jobs:
       - name: native
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release --target trackwolium_daemon wolium_setup wolium_uninstall
+          cmake --build build --config Release --target trackwolium_daemon wolium_setup wolium_uninstall tw_tests
           ctest --test-dir build -C Release --output-on-failure
       - name: ui
         working-directory: ui
