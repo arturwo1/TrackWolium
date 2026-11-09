@@ -19,7 +19,7 @@ jobs:
       - name: native
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release --target trackwolium_daemon wolium_setup wolium_uninstall tw_tests
+          cmake --build build --config Release --target trackwolium_guard trackwolium_core wolium_setup wolium_uninstall tw_tests
           ctest --test-dir build -C Release --output-on-failure
       - name: ui
         working-directory: ui
@@ -34,6 +34,7 @@ jobs:
           New-Item -ItemType Directory -Force stage | Out-Null
           Copy-Item -Recurse ui\build\windows\x64\runner\Release\* stage\
           Copy-Item build\bin\Release\trackwolium.exe stage\
+          Copy-Item build\bin\Release\trackwolium-core.exe stage\
           Copy-Item build\bin\Release\uninstall.exe stage\
           python tools\pack_installer.py build\bin\Release\WoliumSetup.exe stage WoliumSetup.exe
       - uses: actions/upload-artifact@v4

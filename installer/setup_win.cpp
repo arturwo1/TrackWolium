@@ -1,6 +1,5 @@
 #include <objbase.h>
 #include <shobjidl.h>
-#include <dwmapi.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -9,6 +8,7 @@
 #include <thread>
 #include <vector>
 #include "inst_common.hpp"
+#include "theme_win.hpp"
 
 namespace {
 
@@ -25,24 +25,22 @@ constexpr int kIdStatus = 106;
 constexpr int kIdLabel = 107;
 constexpr int kIdTitle = 108;
 constexpr int kIdSub = 109;
-constexpr int kIdLangBase = 200;
+constexpr int kIdLang = 200;
 constexpr char kMagic[8] = {'W', 'O', 'L', 'I', 'U', 'M', 'P', 'K'};
 
-constexpr COLORREF kBg = RGB(35, 39, 42);
-constexpr COLORREF kPanel = RGB(41, 46, 50);
-constexpr COLORREF kBorder = RGB(58, 66, 74);
-constexpr COLORREF kText = RGB(128, 224, 245);
-constexpr COLORREF kMuted = RGB(173, 176, 179);
-constexpr COLORREF kError = RGB(242, 63, 67);
+using theme::kBg;
+using theme::kError;
+using theme::kMuted;
+using theme::kPanel;
+using theme::kText;
 
-HWND g_main, g_path, g_status, g_install, g_browse;
-HBRUSH g_bg_brush, g_panel_brush;
-HFONT g_font, g_font_big;
+HWND g_main, g_path, g_status, g_install, g_browse, g_lang;
 bool g_auto = false;
 bool g_desk = true;
 bool g_busy = false;
 bool g_error = false;
 bool g_installing = false;
+bool g_done = false;
 std::wstring g_status_text;
 
 std::wstring read_text(HWND h) {
@@ -72,8 +70,10 @@ void apply_texts() {
   SetWindowTextW(g_browse, tr(Key::Browse));
   SetWindowTextW(GetDlgItem(g_main, kIdAuto), tr(Key::AutoStart));
   SetWindowTextW(GetDlgItem(g_main, kIdDesk), tr(Key::DesktopShortcut));
-  SetWindowTextW(g_install, tr(Key::Install));
-  if (!g_error && !g_installing) show_hint();
+  SetWindowTextW(g_install, g_done ? tr(Key::Close) : tr(Key::Install));
+  if (g_done) set_status(tr(Key::InstallDone), false);
+  if (!g_error && !g_installing && !g_done) show_hint();
+  SetWindowTextW(g_lang, tw::i18n::name(tw::i18n::current()));
   InvalidateRect(g_main, nullptr, TRUE);
 }
 
@@ -176,7 +176,7 @@ void do_install(Job job) {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    std::wstring exe = job.dir + L"\\trackwolium.exe";
+    std::wstring exe = job.dir + L"\\wolium.exe";
     std::wstring cmd = L"\"" + exe + L"\"";
     if (CreateProcessW(exe.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, job.dir.c_str(), &si, &pi)) {
       CloseHandle(pi.hThread);
@@ -219,61 +219,19 @@ void draw_button(const DRAWITEMSTRUCT* d) {
   int id = static_cast<int>(d->CtlID);
   bool disabled = (d->itemState & ODS_DISABLED) != 0;
   bool pressed = (d->itemState & ODS_SELECTED) != 0;
-  bool is_check = id == kIdAuto || id == kIdDesk;
-  bool is_lang = id >= kIdLangBase;
-  bool accent = id == kIdInstall;
-  bool selected = is_lang && (id - kIdLangBase) == tw::i18n::current();
-
-  RECT r = d->rcItem;
-  FillRect(d->hDC, &r, g_bg_brush);
-
-  COLORREF text = disabled ? kMuted : kText;
   std::wstring label = read_text(d->hwndItem);
-  SetBkMode(d->hDC, TRANSPARENT);
-  SelectObject(d->hDC, g_font);
-
-  if (is_check) {
-    bool on = id == kIdAuto ? g_auto : g_desk;
-    RECT box{r.left + 1, r.top + (r.bottom - r.top - 18) / 2, r.left + 19, r.top + (r.bottom - r.top - 18) / 2 + 18};
-    HPEN pen = CreatePen(PS_SOLID, 1, on ? kText : kBorder);
-    HBRUSH br = CreateSolidBrush(on ? kText : kPanel);
-    HGDIOBJ op = SelectObject(d->hDC, pen);
-    HGDIOBJ ob = SelectObject(d->hDC, br);
-    RoundRect(d->hDC, box.left, box.top, box.right, box.bottom, 6, 6);
-    if (on) {
-      HPEN tick = CreatePen(PS_SOLID, 2, kBg);
-      SelectObject(d->hDC, tick);
-      MoveToEx(d->hDC, box.left + 4, box.top + 9, nullptr);
-      LineTo(d->hDC, box.left + 8, box.top + 13);
-      LineTo(d->hDC, box.left + 14, box.top + 5);
-      SelectObject(d->hDC, pen);
-      DeleteObject(tick);
-    }
-    SelectObject(d->hDC, op);
-    SelectObject(d->hDC, ob);
-    DeleteObject(pen);
-    DeleteObject(br);
-    RECT tr{r.left + 28, r.top, r.right, r.bottom};
-    SetTextColor(d->hDC, text);
-    DrawTextW(d->hDC, label.c_str(), -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
-    return;
+  POINT p;
+  GetCursorPos(&p);
+  RECT wr;
+  GetWindowRect(d->hwndItem, &wr);
+  bool hover = !disabled && PtInRect(&wr, p) != 0;
+  if (id == kIdAuto || id == kIdDesk) {
+    theme::paint_check(d->hDC, d->rcItem, label, id == kIdAuto ? g_auto : g_desk, disabled);
+  } else if (id == kIdLang) {
+    theme::paint_button(d->hDC, d->rcItem, label, theme::Look::Normal, disabled, pressed, true, hover);
+  } else {
+    theme::paint_button(d->hDC, d->rcItem, label, id == kIdInstall ? theme::Look::Accent : theme::Look::Normal, disabled, pressed, false, hover);
   }
-
-  COLORREF fill = accent ? (pressed ? RGB(100, 190, 215) : kText) : (selected ? RGB(50, 76, 86) : (pressed ? kBorder : kPanel));
-  COLORREF edge = accent ? kText : (selected ? kText : kBorder);
-  if (accent) text = disabled ? kMuted : kBg;
-  if (accent && disabled) fill = kBorder;
-  HPEN pen = CreatePen(PS_SOLID, 1, edge);
-  HBRUSH br = CreateSolidBrush(fill);
-  HGDIOBJ op = SelectObject(d->hDC, pen);
-  HGDIOBJ ob = SelectObject(d->hDC, br);
-  RoundRect(d->hDC, r.left, r.top, r.right, r.bottom, 12, 12);
-  SelectObject(d->hDC, op);
-  SelectObject(d->hDC, ob);
-  DeleteObject(pen);
-  DeleteObject(br);
-  SetTextColor(d->hDC, text);
-  DrawTextW(d->hDC, label.c_str(), -1, &r, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
 }
 
 void set_busy(bool busy) {
@@ -287,30 +245,22 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_CREATE: {
       g_main = hwnd;
-      BOOL dark = TRUE;
-      DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark));
-      g_bg_brush = CreateSolidBrush(kBg);
-      g_panel_brush = CreateSolidBrush(kPanel);
-      g_font = CreateFontW(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-      g_font_big = CreateFontW(-26, 0, 0, 0, FW_BLACK, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-      make(L"STATIC", L"", 0, 24, 18, 200, 34, hwnd, kIdTitle, g_font_big);
-      make(L"STATIC", L"", 0, 26, 54, 220, 20, hwnd, kIdSub, g_font);
-      int x = 480 - 24;
-      for (int i = tw::i18n::count() - 1; i >= 0; --i) {
-        x -= 92;
-        make(L"BUTTON", tw::i18n::name(i), BS_OWNERDRAW | WS_TABSTOP, x, 22, 88, 30, hwnd, kIdLangBase + i, g_font);
-        x -= 6;
-      }
-      make(L"STATIC", L"", 0, 24, 98, 430, 20, hwnd, kIdLabel, g_font);
+      theme::init();
+      theme::dark_title(hwnd);
+      HFONT font = theme::res().font;
+      make(L"STATIC", L"", 0, 24, 18, 200, 34, hwnd, kIdTitle, theme::res().big);
+      make(L"STATIC", L"", 0, 26, 54, 220, 20, hwnd, kIdSub, font);
+      g_lang = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 480 - 24 - 150, 22, 150, 34, hwnd, kIdLang, font);
+      make(L"STATIC", L"", 0, 24, 98, 430, 20, hwnd, kIdLabel, font);
       g_path = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 24, 122, 340, 30, hwnd,
                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdPath)), nullptr, nullptr);
-      SendMessageW(g_path, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
-      g_browse = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 372, 121, 84, 32, hwnd, kIdBrowse, g_font);
-      make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 170, 430, 24, hwnd, kIdAuto, g_font);
-      make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 200, 430, 24, hwnd, kIdDesk, g_font);
-      g_status = make(L"STATIC", L"", 0, 24, 240, 430, 40, hwnd, kIdStatus, g_font);
-      g_install = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 336, 288, 120, 36, hwnd, kIdInstall, g_font);
-      std::wstring def = inst::known_folder(FOLDERID_LocalAppData) + L"\\Programs\\Wolium";
+      SendMessageW(g_path, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+      g_browse = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 372, 121, 84, 32, hwnd, kIdBrowse, font);
+      make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 170, 430, 24, hwnd, kIdAuto, font);
+      make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 200, 430, 24, hwnd, kIdDesk, font);
+      g_status = make(L"STATIC", L"", 0, 24, 240, 430, 40, hwnd, kIdStatus, font);
+      g_install = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 336, 288, 120, 36, hwnd, kIdInstall, font);
+      std::wstring def = inst::known_folder(FOLDERID_LocalAppData) + L"\\Programs\\DTSys\\Wolium";
       SetWindowTextW(g_path, def.c_str());
       tw::i18n::load(std::filesystem::path(), GetUserDefaultUILanguage());
       apply_texts();
@@ -322,21 +272,21 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       int id = GetDlgCtrlID(c);
       COLORREF col = kText;
       if (id == kIdSub || id == kIdLabel) col = kMuted;
-      if (id == kIdStatus) col = g_error ? kError : kMuted;
+      if (id == kIdStatus) col = g_error ? kError : (g_done ? kText : kMuted);
       SetTextColor(dc, col);
       SetBkColor(dc, kBg);
-      return reinterpret_cast<LRESULT>(g_bg_brush);
+      return reinterpret_cast<LRESULT>(theme::res().bg);
     }
     case WM_CTLCOLOREDIT: {
       HDC dc = reinterpret_cast<HDC>(wp);
       SetTextColor(dc, kText);
       SetBkColor(dc, kPanel);
-      return reinterpret_cast<LRESULT>(g_panel_brush);
+      return reinterpret_cast<LRESULT>(theme::res().panel);
     }
     case WM_ERASEBKGND: {
       RECT r;
       GetClientRect(hwnd, &r);
-      FillRect(reinterpret_cast<HDC>(wp), &r, g_bg_brush);
+      FillRect(reinterpret_cast<HDC>(wp), &r, theme::res().bg);
       return 1;
     }
     case WM_DRAWITEM:
@@ -344,16 +294,25 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return TRUE;
     case WM_COMMAND: {
       int id = LOWORD(wp);
-      if (id >= kIdLangBase && id < kIdLangBase + tw::i18n::count()) {
-        tw::i18n::set(id - kIdLangBase);
-        apply_texts();
-        for (int i = 0; i < tw::i18n::count(); ++i) InvalidateRect(GetDlgItem(hwnd, kIdLangBase + i), nullptr, TRUE);
+      if (id == kIdLang) {
+        RECT r;
+        GetWindowRect(g_lang, &r);
+        std::vector<std::wstring> names;
+        for (int i = 0; i < tw::i18n::count(); ++i) names.push_back(tw::i18n::name(i));
+        int pick = theme::popup_list(hwnd, r, names, tw::i18n::current());
+        if (pick >= 0) {
+          tw::i18n::set(pick);
+          apply_texts();
+        }
+        InvalidateRect(g_lang, nullptr, TRUE);
       } else if (id == kIdAuto || id == kIdDesk) {
         (id == kIdAuto ? g_auto : g_desk) = !(id == kIdAuto ? g_auto : g_desk);
         InvalidateRect(GetDlgItem(hwnd, id), nullptr, TRUE);
       } else if (id == kIdBrowse) {
         std::wstring p = browse(hwnd);
         if (!p.empty()) SetWindowTextW(g_path, p.c_str());
+      } else if (id == kIdInstall && g_done) {
+        DestroyWindow(hwnd);
       } else if (id == kIdInstall && !g_busy) {
         std::wstring dir = read_text(g_path);
         while (dir.size() > 3 && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
@@ -372,8 +331,11 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case kDone:
       g_installing = false;
       if (wp) {
-        MessageBoxW(hwnd, tr(Key::InstallDone), tr(Key::SetupTitle), MB_OK | MB_ICONINFORMATION);
-        DestroyWindow(hwnd);
+        g_done = true;
+        g_busy = false;
+        EnableWindow(g_install, TRUE);
+        SetWindowTextW(g_install, tr(Key::Close));
+        set_status(tr(Key::InstallDone), false);
       } else {
         set_status(tr(static_cast<Key>(lp)), true);
         set_busy(false);

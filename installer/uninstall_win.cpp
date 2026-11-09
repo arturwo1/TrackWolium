@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "inst_common.hpp"
+#include "theme_win.hpp"
 
 namespace {
 
@@ -66,7 +67,7 @@ bool remove_tree_retry(const std::wstring& path) {
 int finish(const std::wstring& dir, bool keep_data) {
   inst::apply_language(dir);
   if (!inst::looks_installed(dir)) {
-    MessageBoxW(nullptr, tr(Key::UnNotWolium), L"Wolium", MB_OK | MB_ICONWARNING);
+    theme::dialog(L"Wolium", tr(Key::UnNotWolium), {tr(Key::Close)}, 0);
     return 1;
   }
   Sleep(500);
@@ -93,10 +94,14 @@ int finish(const std::wstring& dir, bool keep_data) {
   if (!keep_data) {
     if (!remove_tree_retry(dir + L"\\userdata")) ok = false;
   }
-  RemoveDirectoryW(dir.c_str());
+  if (RemoveDirectoryW(dir.c_str())) {
+    std::wstring parent = inst::dir_of(dir);
+    std::wstring leaf = parent.substr(parent.find_last_of(L"\\/") == std::wstring::npos ? 0 : parent.find_last_of(L"\\/") + 1);
+    if (inst::lower(leaf) == L"dtsys") RemoveDirectoryW(parent.c_str());
+  }
 
   const wchar_t* text = !ok ? tr(Key::UnPartial) : (keep_data ? tr(Key::UnDoneKeep) : tr(Key::UnDoneAll));
-  MessageBoxW(nullptr, text, L"Wolium", MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONWARNING));
+  theme::dialog(L"Wolium", text, {tr(Key::Close)}, 0);
   return ok ? 0 : 1;
 }
 
@@ -117,19 +122,19 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   std::wstring dir = inst::dir_of(inst::self_path());
   inst::apply_language(dir);
   if (!inst::looks_installed(dir)) {
-    MessageBoxW(nullptr, tr(Key::UnRunFromFolder), L"Wolium", MB_OK | MB_ICONWARNING);
+    theme::dialog(L"Wolium", tr(Key::UnRunFromFolder), {tr(Key::Close)}, 0);
     return 1;
   }
-  std::wstring q = std::wstring(tr(Key::UnPrompt)) + L"\n" + dir + L"\n\n" + tr(Key::UnChoices);
-  int answer = MessageBoxW(nullptr, q.c_str(), L"Wolium", MB_YESNOCANCEL | MB_ICONQUESTION);
-  if (answer == IDCANCEL) return 0;
-  bool keep = answer == IDNO;
+  std::wstring q = std::wstring(tr(Key::UnPrompt)) + L"\n" + dir;
+  int answer = theme::dialog(L"Wolium", q, {tr(Key::UnYesAll), tr(Key::UnNoKeep), tr(Key::Cancel)}, 1);
+  if (answer != 0 && answer != 1) return 0;
+  bool keep = answer == 1;
 
   wchar_t tmp[MAX_PATH];
   DWORD n = GetTempPathW(MAX_PATH, tmp);
   std::wstring copy = std::wstring(tmp, n) + L"wolium_uninstall_" + std::to_wstring(GetCurrentProcessId()) + L".exe";
   if (!CopyFileW(inst::self_path().c_str(), copy.c_str(), FALSE)) {
-    MessageBoxW(nullptr, tr(Key::UnPrepare), L"Wolium", MB_OK | MB_ICONWARNING);
+    theme::dialog(L"Wolium", tr(Key::UnPrepare), {tr(Key::Close)}, 0);
     return 1;
   }
   std::wstring cmd = L"\"" + copy + L"\" --finish \"" + dir + L"\" " + (keep ? L"keep" : L"all");

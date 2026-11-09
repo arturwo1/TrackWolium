@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 const cPrimary = Color(0xFF80E0F5);
 const cMuted = Color(0xFFADB0B3);
@@ -104,7 +105,7 @@ class _HoverBoxState extends State<HoverBox> {
 class NavItem extends StatelessWidget {
   const NavItem({super.key, required this.icon, required this.label, required this.active, required this.onTap});
 
-  final IconData icon;
+  final String icon;
   final String label;
   final bool active;
   final VoidCallback onTap;
@@ -122,7 +123,7 @@ class NavItem extends StatelessWidget {
           border: Border.all(color: active ? const Color(0x5980E0F5) : cBorder),
         ),
         child: Row(children: [
-          Icon(icon, size: 18, color: cPrimary.withValues(alpha: 0.85)),
+          Opacity(opacity: 0.85, child: SvgPicture.asset('assets/icons/$icon.svg', width: 18, height: 18)),
           const SizedBox(width: 12),
           Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
         ]),

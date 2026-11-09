@@ -76,3 +76,23 @@ Implement IProbe and return it from `make_native_probe`, or feed data from outsi
 ## Checking Linux and Android without installing them
 
 `.github/workflows/ci.yml` builds and tests the project on windows-latest and ubuntu-latest, and builds the core with the C API for Android arm64 via the NDK.
+
+## Runtime layout
+
+Installed by default to `%LOCALAPPDATA%\Programs\DTSys\Wolium` (any folder can be chosen).
+
+| File | Role |
+|---|---|
+| `trackwolium.exe` | Guard: tray icon + supervisor. Starts at Windows logon (`--background`), restarts the core, notifies if it dies. |
+| `trackwolium-core.exe` | Collector. Runs only after consent. |
+| `wolium.exe` | Flutter UI. Starts the service if it is not running. |
+| `uninstall.exe` | Uninstaller (optionally keeps `userdata`). |
+| `userdata\` | `consent`, `lang`, `paused`, `heartbeat`, `usage.db`. |
+
+Privacy: nothing is recorded and no tray is started until the consent file exists
+(created by accepting the policy in the UI/installer, removed by withdrawing it in Settings).
+
+Language: the installer and apps pick the system UI language (Russian or English fallback);
+the choice is stored in `userdata\lang`. Add a language with a new `i18n/include/tw/lang/<code>.def`.
+
+Tray states: Active, Paused, Updating, Error (a colored dot on the icon).

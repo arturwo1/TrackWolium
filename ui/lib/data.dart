@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import 'l10n.dart';
@@ -98,16 +97,10 @@ class Usage {
     return list;
   }
 
-  Duration? sinceLastWrite() {
-    final candidates = [dbPath(), '${dbPath()}-wal'];
-    DateTime? newest;
-    for (final p in candidates) {
-      final f = File(p);
-      if (!f.existsSync()) continue;
-      final t = f.lastModifiedSync();
-      if (newest == null || t.isAfter(newest)) newest = t;
-    }
-    return newest == null ? null : DateTime.now().difference(newest);
+  Duration? sinceHeartbeat() {
+    final f = File('${dataDir()}${Platform.pathSeparator}heartbeat');
+    if (!f.existsSync()) return null;
+    return DateTime.now().difference(f.lastModifiedSync());
   }
 
   void close() {
@@ -117,33 +110,32 @@ class Usage {
 }
 
 class Settings {
-  Settings._(this._file, this._map);
+  Settings._();
 
-  final File _file;
-  final Map<String, dynamic> _map;
+  static Settings load() => Settings._();
 
-  static Settings load() {
-    final f = File('${dataDir()}${Platform.pathSeparator}ui.json');
-    Map<String, dynamic> m = {};
-    try {
-      if (f.existsSync()) m = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
-    } catch (_) {}
-    return Settings._(f, m);
-  }
+  String get _consent => '${dataDir()}${Platform.pathSeparator}consent';
 
-  bool get accepted => _map['accepted'] == true;
+  bool get accepted => File(_consent).existsSync();
 
   set accepted(bool v) {
-    _map['accepted'] = v;
-    _save();
-  }
-
-  void _save() {
     try {
-      _file.parent.createSync(recursive: true);
-      _file.writeAsStringSync(jsonEncode(_map));
+      if (v) {
+        Directory(dataDir()).createSync(recursive: true);
+        File(_consent).writeAsStringSync('1');
+      } else if (File(_consent).existsSync()) {
+        File(_consent).deleteSync();
+      }
     } catch (_) {}
   }
+}
+
+Future<void> startService() async {
+  final exe = '${installDir()}${Platform.pathSeparator}trackwolium.exe';
+  if (!File(exe).existsSync()) return;
+  try {
+    await Process.start(exe, ['--background'], mode: ProcessStartMode.detached);
+  } catch (_) {}
 }
 
 const _runKey = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';

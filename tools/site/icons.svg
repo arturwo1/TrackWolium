@@ -1,0 +1,260 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="     position:absolute;     left:-9999px;     top:-9999px;     overflow:hidden;     pointer-events:none;   ">
+  <symbol id="offline" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="12" fill="rgb(var(--rgb-offline))"/>
+    <circle cx="12" cy="12" r="10" fill="rgb(var(--rgb-bg))"/>
+  </symbol>
+
+  <symbol id="online" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="12" fill="rgb(var(--rgb-online))"/>
+    <circle cx="12" cy="12" r="10" fill="rgb(var(--rgb-bg))"/>
+  </symbol>
+
+  <symbol id="dnd" viewBox="0 0 24 24">
+    <path style="fill:rgb(var(--rgb-dnd))" d="M 24,12 A 12,12 0 0 1 12,24 12,12 0 0 1 0,12 12,12 0 0 1 12,0 12,12 0 0 1 24,12 Z"/>
+    <path style="fill:rgb(var(--rgb-bg));stroke-width:1" d="M 22,12 A 10,10 0 0 1 12,22 10,10 0 0 1 2,12 10,10 0 0 1 12,2 10,10 0 0 1 22,12 Z"/>
+    <path style="fill:rgb(var(--rgb-dnd));stroke-width:6;stroke-linecap:round;stroke-linejoin:bevel;stroke-miterlimit:9000" d="m 7,11 h 10 c 0.554,0 1,0.446 1,1 0,0.554 -0.446,1 -1,1 H 7 C 6.446,13 6,12.554 6,12 6,11.446 6.446,11 7,11 Z"/>
+  </symbol>
+
+  <symbol id="idle" viewBox="0 0 24 24">
+    <path fill="rgb(var(--rgb-bg))" stroke="rgb(var(--rgb-idle))" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 1.73A9.99 10.48 0 0 0 10.67 1.82 6.42 6.83 0 0 1 15.07 8.3 6.42 6.83 0 0 1 8.66 15.1 6.42 6.83 0 0 1 2.85 9.64 9.99 10.48 0 0 0 2.56 12.24 9.99 10.48 0 0 0 12 22.27 9.99 10.48 0 0 0 21.44 12.24 9.99 10.48 0 0 0 12 1.73Z"/>
+  </symbol>
+
+  <symbol id="desktop" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="20" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20" height="16" x="2" y="2" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="2" height="4" x="11" y="20"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="10" height="2" x="7" y="22" rx="1" ry="1"/>
+  </symbol>
+
+  <symbol id="mobile" viewBox="0 0 12 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="12" height="24" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="8" height="20" x="2" y="2" rx="2" ry="2"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="6" cy="3" r="0.5"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="6" cy="19.5" r="1.5"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="6" cy="19.5" r="0.75"/>
+  </symbol>
+
+  <symbol id="web" viewBox="0 0 24 24">
+    <circle style="fill:rgb(var(--rgb-primary))" cx="12" cy="12" r="12"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="12" cy="12" r="10"/>
+    <ellipse style="fill:none;stroke:rgb(var(--rgb-primary));stroke-width:2" cx="12" cy="12" rx="4" ry="11"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="2" y="11" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="4" height="2" x="5.2" y="2.5"/>
+    <path style="fill:none;stroke:rgb(var(--rgb-primary));stroke-width:2" d="M 12 1 A 6 11 0 0 0 9.7 1.8 L 9.7 1.8 L 8.1 10 L 8.1 12.8 L 6 12.8 A 6 11 0 0 0 12 23 A 6 11 0 0 0 14.4 22.1 L 14.4 22.1 L 16.1 12.6 L 16.1 11.7 L 16.2 11.7 L 16.5 10.4 L 18 10.7 A 6 11 0 0 0 12 1 z"/>
+  </symbol>
+
+  <symbol id="profile" viewBox="0 0 24 24">
+    <path style="fill:rgb(var(--rgb-primary))" d="M 18,6 A 6,6 0 0 1 12,12 6,6 0 0 1 6,6 6,6 0 0 1 12,0 6,6 0 0 1 18,6 Z"/>
+    <path style="fill:rgb(var(--rgb-bg))" d="M 16,6 A 4,4 0 0 1 12,10 4,4 0 0 1 8,6 4,4 0 0 1 12,2 4,4 0 0 1 16,6 Z"/>
+    <path style="fill:rgb(var(--rgb-bg));stroke:rgb(var(--rgb-primary));stroke-width:2" d="m 1.0058796,22.70292 c 0.1876659,-4.734424 4.8445344,-8.54458 10.6310584,-8.69811 0.20046,-0.0053 0.525679,-0.0053 0.726159,10e-7 5.817905,0.154377 10.49386,4.005149 10.633683,8.775255 C 23.000339,22.901493 22.901503,23 22.78,23 H 12.22 1.2971573 C 1.1330419,23 0.99937987,22.866896 1.0058796,22.70292 Z"/>
+  </symbol>
+
+  <symbol id="servers" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" rx="2" ry="2" height="24"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20" height="20" x="2" y="2" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="22" height="2" x="1" y="7"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="8" height="2" x="12.5" y="3.5" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="22" height="2" x="1" y="15"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="4.5" cy="4.5" r="1"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="7.5" cy="4.5" r="1"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="10.5" cy="4.5" r="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="8" height="2" x="12.5" y="11" rx="1" ry="1"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="4.5" cy="12" r="1"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="7.5" cy="12" r="1"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="10.5" cy="12" r="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="8" height="2" x="12.5" y="18.5" rx="1" ry="1"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="4.5" cy="19.5" r="1"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="7.5" cy="19.5" r="1"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="10.5" cy="19.5" r="1"/>
+  </symbol>
+
+  <symbol id="leaderboard" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="16" y="8" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="8" x="8" y="16" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="8" height="24" x="8" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="6" height="12" x="2" y="10" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="6" height="4" x="16" y="18" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="4" height="20" x="10" y="2" rx="1" ry="1"/>
+  </symbol>
+
+  <symbol id="news" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="24" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20" height="20" x="2" y="2" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="8" height="2" x="4" y="7" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="14" height="2" x="4" y="11" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="2" x="4" y="15" rx="1" ry="1"/>
+  </symbol>
+
+  <symbol id="settings" viewBox="0 0 24 24">
+    <path style="fill:rgb(var(--rgb-primary))" d="m 12,0 a 12,12 0 0 0 -0.55,0.01 l -0.98,2.52 a 9.59,9.59 0 0 0 -3.63,1.39 l -2.41,-1.23 a 12,12 0 0 0 -1.3,1.22 l 1.09,2.48 a 9.59,9.59 0 0 0 -1.58,3.54 L 0.06,10.76 A 12,12 0 0 0 0,12 12,12 0 0 0 0.01,12.55 L 2.53,13.53 a 9.59,9.59 0 0 0 1.38,3.63 l -1.23,2.41 a 12,12 0 0 0 1.23,1.3 l 2.48,-1.09 a 9.59,9.59 0 0 0 3.54,1.59 l 0.83,2.57 a 12,12 0 0 0 1.24,0.06 12,12 0 0 0 0.55,-0.01 l 0.98,-2.52 a 9.59,9.59 0 0 0 3.63,-1.38 l 2.41,1.23 a 12,12 0 0 0 1.3,-1.23 l -1.09,-2.48 a 9.59,9.59 0 0 0 1.59,-3.54 l 2.57,-0.83 a 12,12 0 0 0 0.06,-1.24 12,12 0 0 0 -0.01,-0.55 l -2.52,-0.98 a 9.59,9.59 0 0 0 -1.39,-3.63 l 1.23,-2.41 a 12,12 0 0 0 -1.22,-1.3 l -2.48,1.09 a 9.59,9.59 0 0 0 -3.54,-1.58 l -0.83,-2.58 a 12,12 0 0 0 -1.24,-0.06 z"/>
+    <path style="fill:rgb(var(--rgb-bg))" d="m 12,2 a 10,10 0 0 0 -0.46,0.01 l -0.81,2.1 a 7.99,7.99 0 0 0 -3.03,1.16 v 0 l -2.01,-1.03 a 10,10 0 0 0 -1.08,1.02 l 0.91,2.06 a 7.99,7.99 0 0 0 -1.32,2.95 l -2.15,0.69 a 10,10 0 0 0 -0.05,1.03 10,10 0 0 0 0.01,0.46 l 2.1,0.82 a 7.99,7.99 0 0 0 1.15,3.02 l -1.03,2.01 a 10,10 0 0 0 1.02,1.08 l 2.06,-0.91 a 7.99,7.99 0 0 0 2.97,1.33 l 0.69,2.15 v 0 a 10,10 0 0 0 1.03,0.05 10,10 0 0 0 0.46,-0.01 l 0.82,-2.1 a 7.99,7.99 0 0 0 3.02,-1.15 v 0 l 2.01,1.03 a 10,10 0 0 0 1.08,-1.02 l -0.91,-2.06 a 7.99,7.99 0 0 0 1.32,-2.95 l 2.15,-0.69 a 10,10 0 0 0 0.05,-1.03 10,10 0 0 0 -0.01,-0.46 l -2.1,-0.83 a 7.99,7.99 0 0 0 -1.16,-3.03 l 1.03,-2.01 a 10,10 0 0 0 -1.02,-1.08 l -2.06,0.91 a 7.99,7.99 0 0 0 -2.96,-1.32 l -0.69,-2.15 a 10,10 0 0 0 -1.03,-0.05 z"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="12" r="6" cy="12"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="12" cy="12" r="4"/>
+  </symbol>
+
+  <symbol id="menu" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="6" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="6" rx="2" ry="2" y="9"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="6" rx="2" ry="2" y="18"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20" height="2" rx="1" ry="1" x="2" y="2"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20" height="2" rx="1" ry="1" x="2" y="11"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20" height="2" rx="1" ry="1" x="2" y="20"/>
+  </symbol>
+
+  <symbol id="more" viewBox="0 0 24 24">
+    <circle style="fill:rgb(var(--rgb-primary))" cx="3.7" cy="12" r="3.7"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="3.7" cy="12" r="3"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="12" cy="12" r="3.7"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="12" cy="12" r="3"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="20.3" cy="12" r="3.7"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="20.3" cy="12" r="3"/>
+  </symbol>
+
+  <symbol id="close" viewBox="0 0 24 24">
+    <rect style="fill:currentColor" width="29.023211" height="7.2558026" x="2.4589589" y="-3.6279013" rx="2" ry="2" transform="rotate(45)"/>
+    <rect style="fill:currentColor" width="29.023211" height="7.2558026" x="-14.511605" y="13.342663" rx="2" ry="2" transform="rotate(-45)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="3.8784232" height="25.209755" x="15.031369" y="-12.604874" rx="1" ry="1" transform="rotate(45)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="3.8784232" height="25.209755" x="-1.9392078" y="4.3657022" rx="1" ry="1" transform="rotate(-45)"/>
+  </symbol>
+
+  <symbol id="left" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="6" rx="2" ry="2" x="9" y="-10" transform="matrix(0.70711397,0.70709959,0.70711397,-0.70709959,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="6" rx="2" ry="2" x="-8" y="6.8807583" transform="matrix(0.70711397,-0.70709959,0.70711397,0.70709959,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="6" rx="2" ry="2" y="9"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20.5" height="2" rx="1" ry="1" x="1.5" y="11"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="13" height="2" rx="1" ry="1" x="-7" y="9" transform="matrix(0.70711397,-0.70709959,0.70711397,0.70709959,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="13" height="2" rx="1" ry="1" x="10" y="-8" transform="matrix(0.70711397,0.70709959,0.70711397,-0.70709959,0,0)"/>
+  </symbol>
+
+  <symbol id="right" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="6" rx="2" ry="2" x="-7.9703903" y="-26.97039" transform="matrix(-0.70711397,0.70709959,-0.70711397,-0.70709959,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="6" rx="2" ry="2" x="-24.97039" y="-10.089632" transform="matrix(-0.70711397,-0.70709959,-0.70711397,0.70709959,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="6" rx="2" ry="2" y="9" x="-24" transform="scale(-1,1)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20.5" height="2" rx="1" ry="1" x="-22.5" y="11" transform="scale(-1,1)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="13" height="2" rx="1" ry="1" x="-23.97039" y="-7.9703903" transform="matrix(-0.70711397,-0.70709959,-0.70711397,0.70709959,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="13" height="2" rx="1" ry="1" x="-6.9703903" y="-24.97039" transform="matrix(-0.70711397,0.70709959,-0.70711397,-0.70709959,0,0)"/>
+  </symbol>
+
+  <symbol id="top" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="6" rx="2" ry="2" x="9" y="-10" transform="matrix(0.70877052,0.70543912,-0.70877052,0.70543912,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="6" rx="2" ry="2" x="-8" y="6.8" transform="matrix(-0.70877052,0.70543912,0.70877052,0.70543912,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="6" rx="2" ry="2" x="0" y="9" transform="matrix(0,1,1,0,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20.5" height="2" rx="1" ry="1" x="1.5" y="11" transform="matrix(0,1,1,0,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="13" height="2" rx="1" ry="1" x="-7" y="9" transform="matrix(-0.70877052,0.70543912,0.70877052,0.70543912,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="13" height="2" rx="1" ry="1" x="10" y="-8" transform="matrix(0.70877052,0.70543912,-0.70877052,0.70543912,0,0)"/>
+  </symbol>
+
+  <symbol id="down" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="6" rx="2" ry="2" x="-24.9" y="-10.1" transform="matrix(-0.70909165,-0.70511633,0.70909165,-0.70511633,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="16" height="6" rx="2" ry="2" x="-8.1" y="-27.1" transform="matrix(0.70909165,-0.70511633,-0.70909165,-0.70511633,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="6" rx="2" ry="2" x="-24" y="-15" transform="matrix(0,-1,-1,0,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20.5" height="2" rx="1" ry="1" x="-22.5" y="-13" transform="matrix(0,-1,-1,0,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="13" height="2" rx="1" ry="1" x="-7" y="-24.9" transform="matrix(0.70909165,-0.70511633,-0.70909165,-0.70511633,0,0)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="13" height="2" rx="1" ry="1" x="-23.9" y="-8" transform="matrix(-0.70909165,-0.70511633,0.70909165,-0.70511633,0,0)"/>
+  </symbol>
+
+  <symbol id="info" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="12" fill="rgb(var(--rgb-primary))"/>
+    <circle cx="12" cy="12" r="10" fill="rgb(var(--rgb-bg))"/>
+    <circle cx="12" cy="6" r="2" fill="rgb(var(--rgb-primary))"/>
+    <circle cx="12" cy="6" r="1" fill="rgb(var(--rgb-bg))"/>
+    <rect x="10" y="10" width="4" height="10" rx=".6" ry=".8" fill="rgb(var(--rgb-primary))"/>
+    <rect x="11" y="11" width="2" height="8" rx=".6" ry=".6" fill="rgb(var(--rgb-bg))"/>
+  </symbol>
+
+  <symbol id="messages" viewBox="0 0 24 24">
+    <path style="fill:rgb(var(--rgb-primary))" d="m 21.869412,24.30312 2.605065,0.0094 a 0.49918839,0.49918839 60.206195 0 1 0.429613,0.750334 l -1.303607,2.239253 a 382601.92,382601.92 120.20619 0 0 -0.872828,1.499296 l -1.310647,2.251368 a 0.49918839,0.49918839 0.20619486 0 1 -0.864615,-0.0031 l -1.287446,-2.248583 a 382601.92,382601.92 60.206195 0 0 -0.862014,-1.505539 l -1.294419,-2.260737 a 0.49918839,0.49918839 120.20619 0 1 0.435003,-0.747223 l 2.591053,0.0093 a 382601.92,382601.92 0.20619486 0 0 1.734842,0.0062 z" transform="matrix(0.97,1.12,-0.56,1.94,1.38,-60.55)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="18" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20" height="14" x="2" y="2" rx="2" ry="2"/>
+    <path style="fill:rgb(var(--rgb-bg))" d="m 5.2,5 0,8.6 0,6.2 a 1.2,0.6 90 0 0 0.9,1 L 10.4,15.6 13,12.5 a 1.2,0.6 90 0 0 0,-2.1 L 10.4,7.3 8.7,5.2 8.5,5 Z"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="6" cy="9" r="2"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="12" cy="9" r="2"/>
+    <circle style="fill:rgb(var(--rgb-primary))" cx="18" cy="9" r="2"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="6" cy="9" r="1"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="12" cy="9" r="1"/>
+    <circle style="fill:rgb(var(--rgb-bg))" cx="18" cy="9" r="1"/>
+  </symbol>
+
+  <symbol id="microphone" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="9.5" height="2" x="7.25" y="22" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="2" height="6" x="11" y="17"/>
+    <path style="fill:rgb(var(--rgb-primary))" d="M 5,11.1 C 5.2,13.5 6.5,15.8 8.5,17 c 2.2,1.3 4.8,1.3 7,0 2,-1.2 3.3,-3.5 3.5,-5.9 C 19,10.8 18.8,10.6 18.5,10.6 c -1.4,0 0.3,1.8 -2,4.4 C 15.4,16.2 13.8,17 12,17 6.4,17 6.4,11.3 5.5,10.6 c -0.3,0 -0.5,0.2 -0.5,0.5 z" transform="matrix(1.1506607,0,0,1.1438093,-1.8033035,-2.5881874)"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="11" height="15.5" x="6.5" rx="5" ry="5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="7" height="12" x="8.5" y="2" rx="3" ry="3"/>
+  </symbol>
+
+  <symbol id="activity" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" fill="rgb(var(--rgb-primary))" r="11" style="fill:none;stroke:rgb(var(--rgb-primary));stroke-width:2;stroke-opacity:1"/>
+    <path style="fill:none;stroke:rgb(var(--rgb-primary));stroke-width:2;stroke-linecap:round;stroke-linejoin:round;stroke-opacity:1" d="m 6,15 q 1.8,-2.1 3.6,-4.14 0.428571,-0.51 1.268571,0.25 0.788572,0.71 1.774286,1.31 Q 13.457143,12.92 14.4,12.66 15,12.45 15.462857,12 16.714286,10.55 18,9"/>
+  </symbol>
+
+  <symbol id="bank" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="6" y="18" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="20" height="2" x="2" y="20" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="6" height="4" x="2" y="16" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="6" height="4" x="9" y="16" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="6" height="4" x="16" y="16" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="2" height="6" x="4" y="11" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="2" height="6" x="11" y="11" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="2" height="6" x="18" y="11" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="6" height="4" x="2" y="8" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="6" height="4" x="9" y="8" rx="1" ry="1"/>
+    <rect style="fill:rgb(var(--rgb-primary))" width="6" height="4" x="16" y="8" rx="1" ry="1"/>
+    <path style="fill:rgb(var(--rgb-bg));stroke:rgb(var(--rgb-primary));stroke-width:2.31956;stroke-linecap:round;stroke-linejoin:round" d="M 11.466,0.104 0.05665632,5.1748194 A 0.09540324,0.09540324 123.01876 0 0 0,5.262 V 8.2403606 C 0,8.2732985 -5.2351733e-5,8.3267035 4.784e-4,8.3596368 0.01204985,9.0776483 0.23283242,9.63294 0.58602554,9.8719109 0.78424318,10.006025 1.1969947,10 1.44,10 h 21.524229 c 0.01976,0 0.0518,9.1e-5 0.07153,-8.368e-4 0.568979,-0.026761 0.949464,-0.6929202 0.963821,-1.643208 C 24.000046,8.3250546 24,8.2749279 24,8.244 V 5.7694736 A 0.4156833,0.4156833 57.04601 0 0 23.754,5.39 L 11.933764,0.10452875 A 0.57440782,0.57440782 0.06476528 0 0 11.466,0.104 Z" transform="matrix(0.91186292,0,0,0.81531222,1.0572999,0.90120962)"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="4" height="1" x="17" y="10.25" rx="0.5" ry="0.5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="4" height="1" x="10" y="10.25" rx="0.5" ry="0.5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="4" height="1" x="3" y="10.25" rx="0.5" ry="0.5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="4" height="1" x="17" y="16.75" rx="0.5" ry="0.5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="4" height="1" x="10" y="16.75" rx="0.5" ry="0.5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="4" height="1" x="3" y="16.75" rx="0.5" ry="0.5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="1" height="3" x="18.5" y="12.5" rx="0.5" ry="0.5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="1" height="3" x="11.5" y="12.5" rx="0.5" ry="0.5"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="1" height="3" x="4.5" y="12.5" ry="0.5"/>
+    <path d="M 14.73,3.6 14.15,5.85 H 13.81 L 13.34,3.98 12.88,5.85 H 12.55 L 11.95,3.6 h 0.31 l 0.47,1.87 0.47,-1.87 h 0.3 l 0.47,1.89 0.47,-1.89 z" style="font-size:3.0924px;fill:rgb(var(--rgb-primary));stroke-width:0.1;stroke-linecap:round;stroke-linejoin:round;stroke:rgb(var(--rgb-primary))" transform="scale(0.89933282,1.1119354)" aria-label="W"/>
+  </symbol>
+
+  <symbol id="owner" viewBox="0 0 24 24">
+    <rect style="fill:rgb(var(--rgb-primary))" width="24" height="24" rx="2" ry="2"/>
+    <rect style="fill:rgb(var(--rgb-bg))" width="12" height="12" x="6" y="6" rx="1" ry="1"/>
+  </symbol>
+
+  <symbol id="wolium" viewBox="0 0 24 24">
+    <defs>
+      <linearGradient id="gradient" x1="7.4" y1="5.6" x2="7" y2="0.3">
+        <stop style="stop-color:rgb(var(--rgb-primary))" offset="0.6"/>
+        <stop style="stop-color:rgb(var(--rgb-white));stop-opacity:0.8" offset="1"/>
+      </linearGradient>
+      <linearGradient href="#gradient" x1="12" y1="0" x2="12" y2="24" id="linearGradient15" gradientUnits="userSpaceOnUse"/>
+    </defs>
+    <path fill="url(#linearGradient15)" d="m 0,4.5 c 0.5,1.3 1.4,2.5 1.7,3.9 0.4,1.1 0.9,2.2 1.1,3.4 0.2,1.9 1.1,3.5 1.2,5.3 0.3,1.3 0.5,2.7 0.8,4 0.5,1 0,2.7 1.4,2.9 1.1,-0.6 1.3,-2.2 1.8,-3.2 0.3,-1.5 1,-3 1.6,-4.5 1,-1.5 1.1,-3.4 1.8,-5 1.2,-0.5 0.8,1.4 1.2,2.1 0.1,1.7 0.6,3.2 1.1,4.8 0.3,1.2 0.6,2.6 1.5,3.4 0.7,0.8 1.9,0.8 2.5,-0.2 0.8,-1.2 1,-2.8 1.7,-4 0.6,-1.1 1.1,-2.2 1.4,-3.5 0.6,-1.8 1.2,-3.6 1.7,-5.4 0,-1 0.3,-1.9 0.6,-2.9 0,-1.1 0.3,-2.3 0.6,-3.4 0,-0.5 0.6,-2 0,-2.2 -0.7,0.8 -1.8,1.5 -2.2,2.6 -0.3,2 0,4.1 -0.8,6 -0.2,1 -0.7,2 -0.8,3.1 -0.6,1.9 -1.5,3.7 -2.1,5.6 -0.5,0.8 -0.7,2.5 -1.7,2.5 -0.5,-0.9 -0.9,-2 -1,-3 C 15.2,15.7 14.9,14.6 14.5,13.6 14.2,12.4 13.9,11.1 13.3,9.9 13.1,8.3 11.2,8.5 10.8,9.9 9.9,11 9.7,12.5 8.9,13.6 8.4,14.9 8.1,16.2 7.6,17.5 7.3,18.1 7,19.8 6.5,19.7 5.7,18.4 5.6,17 5.6,15.7 5.1,14.3 4.4,12.9 4.3,11.3 4.3,9.7 3.1,8.4 2.5,7 1.8,6 1.3,4.6 0,4.5 Z"/>
+  </symbol>
+
+  <symbol id="wolium-animate" viewBox="0 0 24 24">
+    <defs>
+      <linearGradient id="grad" x1="0" y1="0" x2="0" y2="24" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="rgb(var(--rgb-white))" stop-opacity="0"/>
+        <stop offset="18%" stop-color="rgb(var(--rgb-white))" stop-opacity="1"/>
+        <stop offset="78%" stop-color="rgb(var(--rgb-primary))" stop-opacity="0.9"/>
+        <stop offset="100%" stop-color="rgb(var(--rgb-primary))" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <g transform="translate(0,24) scale(1,-1)">
+      <path d="M 3.8 30.7 C 3.9 25.9 4.3 21.1 5.0 17.3 C 5.7 13.9 6.4 10.8 7.3 7.9 C 7.8 6.0 8.3 4.6 8.9 3.6 C 9.2 2.8 9.4 2.0 9.4 -3.8" fill="none" stroke="url(#grad)" stroke-width="0.95" stroke-linecap="round" stroke-dasharray="35.2 105.6" stroke-dashoffset="35.2">
+        <animate id="s1_in" attributeName="stroke-dashoffset" values="35.2;0" dur="0.45s" begin="0.10s;s1_in.begin+2.5s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1"/>
+        <animate attributeName="stroke-dashoffset" values="0;-35.2" dur="0.45s" begin="s1_in.begin+1.4s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.6 1"/>
+      </path>
+      <path d="M 8.9 -3.8 C 9.1 -0.5 9.6 2.6 10.3 5.5 C 10.9 8.2 11.6 10.5 12.2 12.6 C 12.6 14.0 12.8 15.1 12.9 15.9 C 13.0 17.3 13.0 20.1 12.9 30.7" fill="none" stroke="url(#grad)" stroke-width="0.95" stroke-linecap="round" stroke-dasharray="34.95 104.85" stroke-dashoffset="34.95">
+        <animate id="s2_in" attributeName="stroke-dashoffset" values="34.95;0" dur="0.45s" begin="0.18s;s2_in.begin+2.5s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1"/>
+        <animate attributeName="stroke-dashoffset" values="0;-34.95" dur="0.45s" begin="s2_in.begin+1.4s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.6 1"/>
+      </path>
+      <path d="M 12.9 30.7 C 12.9 26.9 13.1 23.1 13.4 19.7 C 13.8 16.6 14.4 13.8 15.2 11.4 C 15.8 9.0 16.6 7.2 17.4 5.7 C 17.9 4.6 18.2 3.6 18.6 -3.8" fill="none" stroke="url(#grad)" stroke-width="0.95" stroke-linecap="round" stroke-dasharray="35.26 105.78" stroke-dashoffset="35.26">
+        <animate id="s3_in" attributeName="stroke-dashoffset" values="35.26;0" dur="0.45s" begin="0.14s;s3_in.begin+2.5s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1"/>
+        <animate attributeName="stroke-dashoffset" values="0;-35.26" dur="0.45s" begin="s3_in.begin+1.4s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.6 1"/>
+      </path>
+      <path d="M 18.6 -3.8 C 18.8 -0.3 19.2 3.1 19.8 6.5 C 20.4 9.4 20.8 12.6 21.1 15.3 C 21.4 17.4 21.4 19.2 21.5 30.7" fill="none" stroke="url(#grad)" stroke-width="0.95" stroke-linecap="round" stroke-dasharray="34.69 104.07" stroke-dashoffset="34.69">
+        <animate id="s4_in" attributeName="stroke-dashoffset" values="34.69;0" dur="0.45s" begin="0.22s;s4_in.begin+2.5s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1"/>
+        <animate attributeName="stroke-dashoffset" values="0;-34.69" dur="0.45s" begin="s4_in.begin+1.4s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.6 1"/>
+      </path>
+    </g>
+  </symbol>
+</svg>
