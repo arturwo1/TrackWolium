@@ -25,6 +25,7 @@ constexpr int kIdStatus = 106;
 constexpr int kIdLabel = 107;
 constexpr int kIdTitle = 108;
 constexpr int kIdSub = 109;
+constexpr int kIdUninstall = 110;
 constexpr int kIdLang = 200;
 constexpr char kMagic[8] = {'W', 'O', 'L', 'I', 'U', 'M', 'P', 'K'};
 
@@ -38,7 +39,7 @@ using theme::kText;
 #define TW_VERSION_STR "0.0.0"
 #endif
 
-HWND g_main, g_path, g_status, g_install, g_browse, g_lang;
+HWND g_main, g_path, g_status, g_install, g_browse, g_lang, g_uninst;
 bool g_auto = false;
 bool g_desk = true;
 bool g_busy = false;
@@ -62,19 +63,34 @@ void set_status(const std::wstring& text, bool error) {
   InvalidateRect(g_status, nullptr, TRUE);
 }
 
-bool up_to_date() {
+enum class InstallState { None, Update, Same };
+
+std::wstring build_version() {
+  std::wstring v;
+  for (const char* p = TW_VERSION_STR; *p; ++p) v += static_cast<wchar_t>(*p);
+  return v;
+}
+
+std::wstring current_dir() {
   std::wstring dir = read_text(g_path);
   while (dir.size() > 3 && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
-  if (dir.size() < 4 || !inst::looks_installed(dir)) return false;
-  std::wstring v = L"";
-  for (const char* p = TW_VERSION_STR; *p; ++p) v += static_cast<wchar_t>(*p);
-  return inst::installed_version(dir) == v;
+  return dir;
+}
+
+InstallState install_state() {
+  std::wstring dir = current_dir();
+  if (dir.size() < 4 || !inst::looks_installed(dir)) return InstallState::None;
+  return inst::compare_versions(inst::installed_version(dir), build_version()) < 0 ? InstallState::Update : InstallState::Same;
 }
 
 void show_hint() {
-  bool same = up_to_date();
-  set_status(same ? tr(Key::SetupUpToDate) : tr(Key::SetupHint), false);
-  if (!g_done && !g_busy) SetWindowTextW(g_install, same ? tr(Key::Reinstall) : tr(Key::Install));
+  InstallState st = install_state();
+  const wchar_t* text = st == InstallState::Update ? tr(Key::SetupUpdateAvailable) : (st == InstallState::Same ? tr(Key::SetupUpToDate) : tr(Key::SetupHint));
+  set_status(text, false);
+  if (!g_done && !g_busy) {
+    SetWindowTextW(g_install, st == InstallState::Update ? tr(Key::Update) : (st == InstallState::Same ? tr(Key::Reinstall) : tr(Key::Install)));
+    ShowWindow(g_uninst, st == InstallState::None ? SW_HIDE : SW_SHOW);
+  }
 }
 
 void apply_texts() {
@@ -83,6 +99,7 @@ void apply_texts() {
   SetWindowTextW(GetDlgItem(g_main, kIdSub), tr(Key::SetupSubtitle));
   SetWindowTextW(GetDlgItem(g_main, kIdLabel), tr(Key::InstallFolder));
   SetWindowTextW(g_browse, tr(Key::Browse));
+  SetWindowTextW(g_uninst, tr(Key::UninstallBtn));
   SetWindowTextW(GetDlgItem(g_main, kIdAuto), tr(Key::AutoStart));
   SetWindowTextW(GetDlgItem(g_main, kIdDesk), tr(Key::DesktopShortcut));
   if (g_done) SetWindowTextW(g_install, tr(Key::Close));
@@ -190,6 +207,7 @@ void do_install(Job job) {
     std::wstring ver;
     for (const char* p = TW_VERSION_STR; *p; ++p) ver += static_cast<wchar_t>(*p);
     inst::write_version(job.dir, ver);
+    inst::register_uninstall(job.dir, ver);
     inst::set_autostart(job.dir, job.autostart);
     inst::make_link(inst::start_menu_link(), job.dir + L"\\wolium.exe", job.dir);
     if (job.desktop) inst::make_link(inst::desktop_link(), job.dir + L"\\wolium.exe", job.dir);
@@ -258,6 +276,7 @@ void set_busy(bool busy) {
   g_busy = busy;
   EnableWindow(g_install, !busy);
   EnableWindow(g_browse, !busy);
+  EnableWindow(g_uninst, !busy);
   EnableWindow(g_path, !busy);
 }
 
@@ -279,7 +298,8 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 170, 430, 24, hwnd, kIdAuto, font);
       make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 200, 430, 24, hwnd, kIdDesk, font);
       g_status = make(L"STATIC", L"", 0, 24, 240, 430, 40, hwnd, kIdStatus, font);
-      g_install = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 336, 288, 120, 36, hwnd, kIdInstall, font);
+      g_install = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 296, 288, 160, 36, hwnd, kIdInstall, font);
+      g_uninst = make(L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, 24, 288, 190, 36, hwnd, kIdUninstall, font);
       std::wstring def = inst::known_folder(FOLDERID_LocalAppData) + L"\\Programs\\DTSys\\Wolium";
       SetWindowTextW(g_path, def.c_str());
       tw::i18n::load(std::filesystem::path(), GetUserDefaultUILanguage());
@@ -334,6 +354,17 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (!g_error) show_hint();
       } else if (id == kIdPath && HIWORD(wp) == EN_CHANGE) {
         if (!g_error && !g_installing && !g_done) show_hint();
+      } else if (id == kIdUninstall && !g_busy) {
+        std::wstring exe = current_dir() + L"\\uninstall.exe";
+        std::wstring cmd = L"\"" + exe + L"\"";
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (CreateProcessW(exe.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+          CloseHandle(pi.hThread);
+          CloseHandle(pi.hProcess);
+          DestroyWindow(hwnd);
+        }
       } else if (id == kIdInstall && g_done) {
         DestroyWindow(hwnd);
       } else if (id == kIdInstall && !g_busy) {
@@ -357,6 +388,7 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_done = true;
         g_busy = false;
         EnableWindow(g_install, TRUE);
+        ShowWindow(g_uninst, SW_HIDE);
         SetWindowTextW(g_install, tr(Key::Close));
         set_status(tr(Key::InstallDone), false);
       } else {

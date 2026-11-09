@@ -3,6 +3,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <tuple>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,6 +15,7 @@
 namespace tw {
 
 std::string local_day_now();
+int local_slot_now();
 
 class Engine {
 public:
@@ -21,6 +23,7 @@ public:
 
   void add_sink(std::shared_ptr<ISink> sink);
   void set_day_source(std::function<std::string()> day);
+  void set_slot_source(std::function<int()> slot);
   void set_store(std::shared_ptr<IStore> store, Duration flush_every = Duration(180000));
   void step(TimePoint now);
   void run(Duration interval, const std::function<bool()>& stop);
@@ -41,6 +44,8 @@ private:
   std::map<std::pair<std::string, int>, Duration> pending_;
   Duration flush_every_{180000};
   std::string last_focus_;
+  std::function<int()> slot_fn_;
+  std::map<std::tuple<int, std::string, int>, long long> pending_slots_;
   std::set<std::string> known_;
   std::vector<std::pair<std::string, std::string>> new_names_;
   TimePoint last_flush_{};

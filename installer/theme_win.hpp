@@ -113,6 +113,36 @@ inline void paint_check(HDC dc, RECT r, const std::wstring& label, bool on, bool
   DrawTextW(dc, label.c_str(), -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 }
 
+inline void paint_radio(HDC dc, RECT r, const std::wstring& label, bool on, bool disabled) {
+  FillRect(dc, &r, res().bg);
+  int top = r.top + (r.bottom - r.top - 18) / 2;
+  HPEN pen = CreatePen(PS_SOLID, 1, on ? kText : kBorder);
+  HBRUSH br = CreateSolidBrush(kPanel);
+  HGDIOBJ op = SelectObject(dc, pen);
+  HGDIOBJ ob = SelectObject(dc, br);
+  Ellipse(dc, r.left + 1, top, r.left + 19, top + 18);
+  if (on) {
+    HBRUSH dot = CreateSolidBrush(kText);
+    HPEN none = CreatePen(PS_SOLID, 1, kText);
+    SelectObject(dc, dot);
+    SelectObject(dc, none);
+    Ellipse(dc, r.left + 5, top + 4, r.left + 15, top + 14);
+    SelectObject(dc, br);
+    SelectObject(dc, pen);
+    DeleteObject(dot);
+    DeleteObject(none);
+  }
+  SelectObject(dc, op);
+  SelectObject(dc, ob);
+  DeleteObject(pen);
+  DeleteObject(br);
+  SetBkMode(dc, TRANSPARENT);
+  SelectObject(dc, res().font);
+  SetTextColor(dc, disabled ? kMuted : kText);
+  RECT t{r.left + 28, r.top, r.right, r.bottom};
+  DrawTextW(dc, label.c_str(), -1, &t, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+}
+
 struct PopupState {
   std::vector<std::wstring> items;
   int selected = -1;

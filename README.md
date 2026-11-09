@@ -99,3 +99,6 @@ Tray states: Active, Paused, Updating, Error (a colored dot on the icon).
 
 Tray death watch: the core watches the tray process. If it exits without the clean-exit event (crash, End task), the core shows its own tray icon and a notification; clicking restores the tray.
 Installer: knows the installed version (`version.txt`) and offers Reinstall when the same version is already installed.
+
+Activity graph: the core also stores a 5-minute timeline (`timeline` table, visible states only). The UI draws focus time per 15 minutes as a smooth spline with a tooltip; clicking an app row filters the graph to that app.
+Windows integration: the installer registers `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DTSys.Wolium` (removed by `uninstall.exe`). Setup has three states: Install, Update (installed version older), Reinstall (same version), plus an Uninstall button when installed.

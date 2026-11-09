@@ -17,8 +17,23 @@ std::string local_day_now() {
   return buf;
 }
 
+int local_slot_now() {
+  std::time_t t = std::time(nullptr);
+  std::tm tm{};
+#ifdef _WIN32
+  localtime_s(&tm, &t);
+#else
+  localtime_r(&t, &tm);
+#endif
+  return (tm.tm_hour * 60 + tm.tm_min) / 5;
+}
+
 Engine::Engine(std::shared_ptr<IProbe> probe, Duration max_gap)
-    : probe_(std::move(probe)), max_gap_(max_gap), tracker_(max_gap), day_fn_(local_day_now) {}
+    : probe_(std::move(probe)), max_gap_(max_gap), tracker_(max_gap), day_fn_(local_day_now), slot_fn_(local_slot_now) {}
+
+void Engine::set_slot_source(std::function<int()> slot) {
+  slot_fn_ = std::move(slot);
+}
 
 void Engine::add_sink(std::shared_ptr<ISink> sink) {
   sinks_.push_back(std::move(sink));
@@ -49,6 +64,12 @@ void Engine::flush_pending() {
     batch.push_back({kv.first.first, static_cast<State>(kv.first.second), kv.second});
   }
   if (!new_names_.empty() && store_->set_names(new_names_)) new_names_.clear();
+  if (!pending_slots_.empty()) {
+    std::vector<SlotEntry> slots;
+    slots.reserve(pending_slots_.size());
+    for (const auto& kv : pending_slots_) slots.push_back({std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first), kv.second});
+    if (store_->add_timeline(day_, slots)) pending_slots_.clear();
+  }
   if (store_->add(day_, batch)) pending_.clear();
 }
 
@@ -84,6 +105,7 @@ void Engine::step(TimePoint now) {
   if (store_) {
     for (const auto& iv : intervals) {
       pending_[{iv.app, static_cast<int>(iv.state)}] += iv.ms;
+      if (iv.state != State::Background) pending_slots_[{slot_fn_(), iv.app, static_cast<int>(iv.state)}] += iv.ms.count();
     }
     bool focus_changed = flush_started_ && focus != last_focus_;
     last_focus_ = focus;

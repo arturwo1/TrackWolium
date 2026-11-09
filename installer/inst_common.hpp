@@ -128,6 +128,47 @@ inline void apply_language(const std::wstring& dir) {
   tw::i18n::load(std::filesystem::path(lang_file(dir)), GetUserDefaultUILanguage());
 }
 
+constexpr wchar_t kUninstallKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DTSys.Wolium";
+
+inline void reg_set(HKEY key, const wchar_t* name, const std::wstring& v) {
+  RegSetValueExW(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(v.c_str()), static_cast<DWORD>((v.size() + 1) * sizeof(wchar_t)));
+}
+
+inline void register_uninstall(const std::wstring& dir, const std::wstring& version) {
+  HKEY key;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kUninstallKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) return;
+  reg_set(key, L"DisplayName", L"Wolium");
+  reg_set(key, L"DisplayIcon", dir + L"\\wolium.exe");
+  reg_set(key, L"Publisher", L"DTSys");
+  reg_set(key, L"DisplayVersion", version);
+  reg_set(key, L"InstallLocation", dir);
+  reg_set(key, L"UninstallString", L"\"" + dir + L"\\uninstall.exe\"");
+  DWORD one = 1;
+  RegSetValueExW(key, L"NoModify", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&one), sizeof(one));
+  RegSetValueExW(key, L"NoRepair", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&one), sizeof(one));
+  RegCloseKey(key);
+}
+
+inline void unregister_uninstall() { RegDeleteKeyW(HKEY_CURRENT_USER, kUninstallKey); }
+
+inline int compare_versions(const std::wstring& a, const std::wstring& b) {
+  auto next = [](const std::wstring& s, std::size_t& i) {
+    long v = 0;
+    while (i < s.size() && s[i] != L'.') {
+      if (s[i] >= L'0' && s[i] <= L'9') v = v * 10 + (s[i] - L'0');
+      ++i;
+    }
+    if (i < s.size()) ++i;
+    return v;
+  };
+  std::size_t i = 0, j = 0;
+  while (i < a.size() || j < b.size()) {
+    long x = next(a, i), y = next(b, j);
+    if (x != y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
 inline bool looks_installed(const std::wstring& dir) {
   std::error_code ec;
   return std::filesystem::exists(dir + L"\\trackwolium.exe", ec) && std::filesystem::exists(dir + L"\\uninstall.exe", ec);

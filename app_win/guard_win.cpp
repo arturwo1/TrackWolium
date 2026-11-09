@@ -225,7 +225,14 @@ void toggle_pause() {
   }
 }
 
+void sync_pause_state() {
+  if (g->state == State::Error) return;
+  State want = app::paused() ? State::Paused : State::Running;
+  if (g->state != want) set_state(want);
+}
+
 void show_menu() {
+  sync_pause_state();
   reload_language();
   HMENU menu = CreatePopupMenu();
   AppendMenuW(menu, MF_STRING, kCmdOpen, tr(Key::TrayOpen));
@@ -255,6 +262,7 @@ void on_timer() {
     DestroyWindow(g->hwnd);
     return;
   }
+  sync_pause_state();
   if (g->state == State::Error) return;
   if (!g->core) {
     on_core_died();

@@ -218,6 +218,11 @@ void test_native_probe_smoke() {
 struct FakeStore : tw::IStore {
   std::map<std::string, std::map<std::pair<std::string, int>, long long>> data;
   int adds = 0;
+  std::map<std::pair<int, std::string>, long long> slots;
+  bool add_timeline(const std::string&, const std::vector<tw::SlotEntry>& v) override {
+    for (const auto& e : v) slots[{e.slot, e.app}] += e.ms;
+    return true;
+  }
   bool add(const std::string& day, const std::vector<tw::Interval>& v) override {
     ++adds;
     for (const auto& iv : v) data[day][{iv.app, static_cast<int>(iv.state)}] += iv.ms.count();
@@ -292,6 +297,25 @@ void test_engine_flush_on_focus_change() {
   CHECK(store->adds == 1);
   e.step(at(8000));
   CHECK(store->adds == 1);
+}
+
+void test_engine_timeline_slots() {
+  auto probe = std::make_shared<tw::PushProbe>();
+  auto store = std::make_shared<FakeStore>();
+  int slot = 10;
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_slot_source([&] { return slot; });
+  e.set_store(store, Duration(1000000));
+  probe->push({{"a.exe", State::Focused}, {"bg.exe", State::Background}});
+  e.step(at(0));
+  e.step(at(3000));
+  slot = 11;
+  e.step(at(5000));
+  e.finish();
+  CHECK((store->slots[{10, "a.exe"}] == 3000));
+  CHECK((store->slots[{11, "a.exe"}] == 2000));
+  CHECK((store->slots.count({10, "bg.exe"}) == 0));
 }
 
 void test_engine_seeds_from_store() {
@@ -415,6 +439,7 @@ int main() {
   test_serialize_roundtrip();
   test_engine_store_flush_and_finish();
   test_engine_flush_on_focus_change();
+  test_engine_timeline_slots();
   test_engine_seeds_from_store();
   test_engine_day_rollover();
   test_sqlite_store();

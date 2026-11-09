@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'chart.dart';
 import 'data.dart';
 import 'l10n.dart';
 import 'mark.dart';
@@ -172,6 +173,10 @@ class _ShellState extends State<Shell> {
   int ticks = 0;
   bool isPaused = false;
   bool liveMode = false;
+  List<Slot> slots = [];
+  String? slotsFor;
+  String? only;
+  Map<String, String> names = {};
 
   @override
   void initState() {
@@ -213,6 +218,11 @@ class _ShellState extends State<Shell> {
       isPaused = usage.paused;
       liveMode = l != null;
       rows = l ?? usage.day(selected!);
+      if (slotsFor != selected || ticks % 5 == 0) {
+        slots = usage.timeline(selected!);
+        names = usage.names();
+        slotsFor = selected;
+      }
     });
   }
 
@@ -311,6 +321,42 @@ class _ShellState extends State<Shell> {
     );
   }
 
+  String titleOf(String app) {
+    final n = names[app];
+    return n != null && n.isNotEmpty ? n : prettyApp(app);
+  }
+
+  void toggleOnly(String app) {
+    setState(() => only = only == app ? null : app);
+  }
+
+  Widget chartPanel(bool narrow) {
+    return Panel(
+      padding: EdgeInsets.all(narrow ? 12 : 16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          Text(tr('chartTitle'), style: const TextStyle(fontWeight: FontWeight.w800)),
+          if (only != null)
+            InkWell(
+              onTap: () => setState(() => only = null),
+              borderRadius: BorderRadius.circular(rSm),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(color: cSoft, borderRadius: BorderRadius.circular(rSm), border: Border.fromBorderSide(line)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(titleOf(only!), style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.close, size: 14, color: cPrimary),
+                ]),
+              ),
+            ),
+        ]),
+        const SizedBox(height: 10),
+        ActivityChart(slots: slots, only: only, title: titleOf, height: narrow ? 180 : 230),
+      ]),
+    );
+  }
+
   Widget dateRow(TextStyle head) {
     return Row(children: [
       Text(tr('date'), style: head),
@@ -348,7 +394,14 @@ class _ShellState extends State<Shell> {
           TableRow(
             decoration: const BoxDecoration(border: Border(top: BorderSide(color: cBorder))),
             children: [
-              cell(r.title, style: const TextStyle(fontWeight: FontWeight.w700), ellipsis: true),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => toggleOnly(r.app),
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: cell(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null), ellipsis: true),
+                ),
+              ),
               if (liveMode) nowCell(r),
               for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i])),
               cell(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w800)),
@@ -368,13 +421,15 @@ class _ShellState extends State<Shell> {
         );
     return Column(children: [
       for (final r in rows)
-        Container(
+        GestureDetector(
+          onTap: () => toggleOnly(r.app),
+          child: Container(
           width: double.infinity,
           margin: const EdgeInsets.only(top: 8),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(rMd),
-            border: Border.fromBorderSide(line),
+            border: Border.all(color: only == r.app ? cPrimary : cBorder),
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
@@ -393,20 +448,27 @@ class _ShellState extends State<Shell> {
             ]),
           ]),
         ),
+        ),
     ]);
   }
 
   Widget activity(bool narrow) {
-    if (rows.isEmpty) return Panel(child: Text(tr('noData')));
     const head = TextStyle(color: cMuted, fontWeight: FontWeight.w800);
-    return Panel(
-      padding: EdgeInsets.all(narrow ? 12 : 16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        dateRow(head),
-        const SizedBox(height: 8),
-        narrow ? compactList(head) : wideTable(head),
-      ]),
-    );
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      chartPanel(narrow),
+      const SizedBox(height: 12),
+      if (rows.isEmpty)
+        Panel(child: Text(tr('noData')))
+      else
+        Panel(
+          padding: EdgeInsets.all(narrow ? 12 : 16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            dateRow(head),
+            const SizedBox(height: 8),
+            narrow ? compactList(head) : wideTable(head),
+          ]),
+        ),
+    ]);
   }
 
   Widget topbar(bool narrow) {

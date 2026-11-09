@@ -71,6 +71,15 @@ void saveLanguage(String code) {
   } catch (_) {}
 }
 
+class Slot {
+  Slot(this.slot, this.app, this.state, this.ms);
+
+  final int slot;
+  final String app;
+  final int state;
+  final int ms;
+}
+
 class Usage {
   Database? _db;
 
@@ -125,6 +134,19 @@ class Usage {
       return c != 0 ? c : b.total.compareTo(a.total);
     });
     return list;
+  }
+
+  List<Slot> timeline(String day) {
+    final db = _open();
+    if (db == null) return [];
+    try {
+      return db
+          .select('SELECT slot, app, state, ms FROM timeline WHERE day = ?', [day])
+          .map((r) => Slot(r['slot'] as int, r['app'] as String, r['state'] as int, r['ms'] as int))
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   Map<String, String> names() {
