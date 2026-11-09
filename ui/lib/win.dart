@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
 const _fileMapRead = 4;
@@ -86,5 +88,31 @@ void focusExistingWindow() {
   } finally {
     calloc.free(title);
     calloc.free(cls);
+  }
+}
+
+String? readLive() {
+  if (_openMapping == null) return null;
+  final name = r'Local\TrackWolium.Live'.toNativeUtf16();
+  try {
+    final map = _openMapping!(_fileMapRead, 0, name);
+    if (map == 0) return null;
+    try {
+      final view = _mapView!(map, _fileMapRead, 0, 0, 0);
+      if (view == nullptr) return null;
+      try {
+        final len = view.cast<Int32>().value;
+        if (len <= 0 || len > 256 * 1024 - 8) return null;
+        final bytes = Uint8List.fromList(view.cast<Uint8>().elementAt(8).asTypedList(len));
+        if (view.cast<Int32>().value != len) return null;
+        return utf8.decode(bytes, allowMalformed: true);
+      } finally {
+        _unmapView!(view);
+      }
+    } finally {
+      _closeHandle!(map);
+    }
+  } finally {
+    calloc.free(name);
   }
 }

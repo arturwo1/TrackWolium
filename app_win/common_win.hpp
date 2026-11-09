@@ -1,5 +1,6 @@
 #pragma once
 #include "tw/win_util.hpp"
+#include <cstring>
 #include <filesystem>
 #include <string>
 
@@ -11,6 +12,8 @@ constexpr wchar_t kCoreStopEvent[] = L"Local\\TrackWolium.CoreStop";
 constexpr wchar_t kCoreFlushEvent[] = L"Local\\TrackWolium.CoreFlush";
 constexpr wchar_t kHeartbeatMap[] = L"Local\\TrackWolium.Heartbeat";
 constexpr wchar_t kGuardCleanEvent[] = L"Local\\TrackWolium.GuardClean";
+constexpr wchar_t kLiveMap[] = L"Local\\TrackWolium.Live";
+constexpr DWORD kLiveSize = 256 * 1024;
 constexpr wchar_t kGuardClass[] = L"WoliumGuardWindow";
 constexpr UINT kMsgEnsure = WM_APP + 2;
 constexpr UINT kMsgOpenUi = WM_APP + 3;
@@ -102,6 +105,43 @@ private:
 
   HANDLE map_ = nullptr;
   volatile ULONGLONG* ptr_ = nullptr;
+};
+
+class LiveShare {
+public:
+  ~LiveShare() {
+    if (ptr_) UnmapViewOfFile(ptr_);
+    if (map_) CloseHandle(map_);
+  }
+
+  bool create() {
+    map_ = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, kLiveSize, kLiveMap);
+    if (!map_) return false;
+    ptr_ = static_cast<char*>(MapViewOfFile(map_, FILE_MAP_WRITE, 0, 0, kLiveSize));
+    return ptr_ != nullptr;
+  }
+
+  void write(const std::string& text) {
+    if (!ptr_) return;
+    std::size_t n = text.size();
+    if (n > kLiveSize - 8) {
+      n = text.rfind('\n', kLiveSize - 9);
+      if (n == std::string::npos) return;
+      ++n;
+    }
+    volatile LONG* len = reinterpret_cast<volatile LONG*>(ptr_);
+    InterlockedExchange(len, 0);
+    std::memcpy(ptr_ + 8, text.data(), n);
+    InterlockedExchange(len, static_cast<LONG>(n));
+  }
+
+  void clear() {
+    if (ptr_) InterlockedExchange(reinterpret_cast<volatile LONG*>(ptr_), 0);
+  }
+
+private:
+  HANDLE map_ = nullptr;
+  char* ptr_ = nullptr;
 };
 
 }

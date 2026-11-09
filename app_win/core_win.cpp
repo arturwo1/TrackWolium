@@ -135,13 +135,13 @@ void watch_guard(Orphan& o, HINSTANCE inst, HANDLE stop) {
   else if (o.shown && GetTickCount64() - o.last_balloon > 120000) orphan_balloon();
 }
 
-class PipeSink : public tw::ISink {
+class LiveSink : public tw::ISink {
 public:
-  explicit PipeSink(tw::ReportServer& server) : server_(server) {}
-  void render(const tw::Report& report) override { server_.publish(tw::serialize(report)); }
+  explicit LiveSink(app::LiveShare& live) : live_(live) {}
+  void render(const tw::Report& report) override { live_.write(tw::serialize(report)); }
 
 private:
-  tw::ReportServer& server_;
+  app::LiveShare& live_;
 };
 
 struct Options {
@@ -191,8 +191,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 
   write_text(app::userdata(L"core.pid"), std::to_string(GetCurrentProcessId()));
 
-  tw::ReportServer server;
-  server.start(tw::default_pipe_name());
+  app::LiveShare live;
+  live.create();
 
   tw::ProbeOptions po;
   std::shared_ptr<tw::IProbe> probe = tw::make_native_probe(po);
@@ -203,7 +203,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     auto store = tw::SqliteStore::open(path, &err);
     if (store) engine.set_store(std::shared_ptr<tw::IStore>(std::move(store)), tw::Duration(180000));
   }
-  engine.add_sink(std::make_shared<PipeSink>(server));
+  engine.add_sink(std::make_shared<LiveSink>(live));
 
   Orphan orphan;
   g_orphan = &orphan;
@@ -235,7 +235,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 
   orphan_hide();
   engine.finish();
-  server.stop();
+  live.clear();
   CloseHandle(stop);
   CloseHandle(flush);
   CloseHandle(mutex);

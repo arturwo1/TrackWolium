@@ -8,6 +8,7 @@ class AppUsage {
 
   final String app;
   String name;
+  int? now;
 
   String get title => name.isNotEmpty ? name : prettyApp(app);
   final List<int> ms = [0, 0, 0, 0];
@@ -124,6 +125,55 @@ class Usage {
       return c != 0 ? c : b.total.compareTo(a.total);
     });
     return list;
+  }
+
+  Map<String, String> names() {
+    final db = _open();
+    final out = <String, String>{};
+    if (db == null) return out;
+    try {
+      for (final r in db.select('SELECT app, name FROM apps')) {
+        out[r['app'] as String] = r['name'] as String;
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  List<AppUsage>? live() {
+    final text = readLive();
+    if (text == null) return null;
+    final names = this.names();
+    final list = <AppUsage>[];
+    for (final line in text.split('\n')) {
+      if (!line.startsWith('A ')) continue;
+      final p = line.split(' ');
+      if (p.length < 8) continue;
+      final u = AppUsage(p.sublist(7).join(' '), '');
+      u.name = names[u.app] ?? '';
+      if (p[1] == '1') u.now = int.tryParse(p[2]);
+      for (var i = 0; i < 4; i++) {
+        u.ms[i] = int.tryParse(p[3 + i]) ?? 0;
+      }
+      if (u.visible > 0) list.add(u);
+    }
+    list.sort((a, b) {
+      final c = b.visible.compareTo(a.visible);
+      return c != 0 ? c : b.total.compareTo(a.total);
+    });
+    return list;
+  }
+
+  bool get paused => File('${dataDir()}${Platform.pathSeparator}paused').existsSync();
+
+  void setPaused(bool v) {
+    final f = File('${dataDir()}${Platform.pathSeparator}paused');
+    try {
+      if (v) {
+        f.writeAsStringSync('1');
+      } else if (f.existsSync()) {
+        f.deleteSync();
+      }
+    } catch (_) {}
   }
 
   Duration? sinceHeartbeat() {

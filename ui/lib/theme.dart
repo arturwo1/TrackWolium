@@ -8,6 +8,9 @@ const cBorder = Color(0xFF2B3137);
 const cPanel = Color(0xEB23272A);
 const cSoft = Color(0x1F80E0F5);
 const cDanger = Color(0xFFF23F43);
+const cWarn = Color(0xFFF0B232);
+const cOk = Color(0xFF3BA55D);
+const cOpen = Color(0xFF80E0F5);
 
 const rLg = 18.0;
 const rMd = 14.0;

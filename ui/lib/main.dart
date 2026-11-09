@@ -170,6 +170,8 @@ class _ShellState extends State<Shell> {
   bool hasDb = false;
   DateTime? startedAt = DateTime.now();
   int ticks = 0;
+  bool isPaused = false;
+  bool liveMode = false;
 
   @override
   void initState() {
@@ -189,15 +191,28 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
+  String todayKey() {
+    final n = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${n.year}-${two(n.month)}-${two(n.day)}';
+  }
+
   void refresh() {
     final d = usage.days();
-    final selected = day != null && d.contains(day) ? day : (d.isEmpty ? null : d.first);
+    final today = todayKey();
+    if (!d.contains(today)) d.insert(0, today);
+    final selected = day != null && d.contains(day) ? day : d.first;
+    final b = usage.sinceHeartbeat();
+    final up = b != null && b <= const Duration(seconds: staleSeconds);
+    final l = up && selected == today ? usage.live() : null;
     setState(() {
       hasDb = usage.available;
       days = d;
       day = selected;
-      rows = selected == null ? [] : usage.day(selected);
-      beat = usage.sinceHeartbeat();
+      beat = b;
+      isPaused = usage.paused;
+      liveMode = l != null;
+      rows = l ?? usage.day(selected!);
     });
   }
 
@@ -222,6 +237,76 @@ class _ShellState extends State<Shell> {
           },
           child: Text(tr('restart')),
         ),
+      ]),
+    );
+  }
+
+  Widget pausedBanner() {
+    return Container(
+      width: double.infinity,
+      color: cWarn.withValues(alpha: 0.16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text(tr('pausedBanner'), style: const TextStyle(color: cWarn, fontWeight: FontWeight.w700)),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: cWarn, foregroundColor: cBg, minimumSize: const Size(0, 34)),
+          onPressed: () {
+            usage.setPaused(false);
+            refresh();
+          },
+          child: Text(tr('resume')),
+        ),
+      ]),
+    );
+  }
+
+  Widget statusChip() {
+    final down = serviceDown;
+    final color = down ? cDanger : (isPaused ? cWarn : cOk);
+    final text = down ? tr('statusOff') : (isPaused ? tr('statusPaused') : tr('statusOn'));
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+      const SizedBox(width: 8),
+      Text(text, style: TextStyle(color: color, fontWeight: FontWeight.w800)),
+    ]);
+  }
+
+  Color stateColor(int? s) {
+    switch (s) {
+      case 0:
+        return cOk;
+      case 1:
+        return cOpen;
+      case 2:
+        return cWarn;
+      default:
+        return cMuted;
+    }
+  }
+
+  String stateText(int? s) {
+    switch (s) {
+      case 0:
+        return tr('focused');
+      case 1:
+        return tr('open');
+      case 2:
+        return tr('minimized');
+      case 3:
+        return tr('background');
+      default:
+        return tr('idle');
+    }
+  }
+
+  Widget nowCell(AppUsage r) {
+    final c = r.now == null ? cMuted.withValues(alpha: 0.6) : stateColor(r.now);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+        const SizedBox(width: 6),
+        Flexible(child: Text(r.now == null ? '-' : stateText(r.now), style: TextStyle(color: c, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
       ]),
     );
   }
@@ -252,6 +337,7 @@ class _ShellState extends State<Shell> {
       children: [
         TableRow(children: [
           cell(tr('app'), style: head),
+          if (liveMode) cell(tr('now'), style: head),
           cell(tr('focused'), style: head),
           cell(tr('open'), style: head),
           cell(tr('minimized'), style: head),
@@ -263,6 +349,7 @@ class _ShellState extends State<Shell> {
             decoration: const BoxDecoration(border: Border(top: BorderSide(color: cBorder))),
             children: [
               cell(r.title, style: const TextStyle(fontWeight: FontWeight.w700), ellipsis: true),
+              if (liveMode) nowCell(r),
               for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i])),
               cell(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w800)),
             ],
@@ -291,6 +378,10 @@ class _ShellState extends State<Shell> {
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
+              if (liveMode) ...[
+                Container(width: 8, height: 8, decoration: BoxDecoration(color: r.now == null ? cMuted : stateColor(r.now), shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+              ],
               Expanded(child: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
               Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
             ]),
@@ -306,7 +397,7 @@ class _ShellState extends State<Shell> {
   }
 
   Widget activity(bool narrow) {
-    if (!hasDb || rows.isEmpty) return Panel(child: Text(tr('noData')));
+    if (rows.isEmpty) return Panel(child: Text(tr('noData')));
     const head = TextStyle(color: cMuted, fontWeight: FontWeight.w800);
     return Panel(
       padding: EdgeInsets.all(narrow ? 12 : 16),
@@ -386,10 +477,13 @@ class _ShellState extends State<Shell> {
               if (!narrow) sidebar(),
               Expanded(
                 child: Column(children: [
-                  if (serviceDown) banner(),
+                  if (serviceDown) banner() else if (isPaused) pausedBanner(),
                   Expanded(
                     child: ListView(padding: EdgeInsets.fromLTRB(pad, pad, pad, 28), children: [
-                      Text(title, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
+                      Wrap(spacing: 16, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                        Text(title, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
+                        if (tab == 0) statusChip(),
+                      ]),
                       const SizedBox(height: 14),
                       tab == 0 ? activity(narrow) : SettingsPage(onWithdraw: widget.onWithdraw),
                     ]),
