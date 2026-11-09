@@ -1,5 +1,6 @@
 #pragma once
 #include <mutex>
+#include <string>
 #include <vector>
 #include "tw/types.hpp"
 
@@ -10,6 +11,7 @@ public:
   virtual ~IProbe() = default;
   virtual std::vector<AppSample> sample() = 0;
   virtual bool reports_windows() const { return true; }
+  virtual std::string display_name(const std::string&) { return {}; }
 };
 
 class PushProbe : public IProbe {

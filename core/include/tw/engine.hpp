@@ -2,6 +2,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,10 +21,11 @@ public:
 
   void add_sink(std::shared_ptr<ISink> sink);
   void set_day_source(std::function<std::string()> day);
-  void set_store(std::shared_ptr<IStore> store, Duration flush_every = Duration(10000));
+  void set_store(std::shared_ptr<IStore> store, Duration flush_every = Duration(180000));
   void step(TimePoint now);
   void run(Duration interval, const std::function<bool()>& stop);
   void finish();
+  void flush();
   Report report() const;
 
 private:
@@ -37,7 +39,10 @@ private:
   std::function<std::string()> day_fn_;
   std::string day_;
   std::map<std::pair<std::string, int>, Duration> pending_;
-  Duration flush_every_{10000};
+  Duration flush_every_{180000};
+  std::string last_focus_;
+  std::set<std::string> known_;
+  std::vector<std::pair<std::string, std::string>> new_names_;
   TimePoint last_flush_{};
   bool flush_started_ = false;
 };

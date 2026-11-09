@@ -276,6 +276,24 @@ void test_engine_store_flush_and_finish() {
   CHECK(store->data["2026-01-01"][{"a.exe", 0}] == 12000);
 }
 
+void test_engine_flush_on_focus_change() {
+  auto probe = std::make_shared<tw::PushProbe>();
+  auto store = std::make_shared<FakeStore>();
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_store(store, Duration(180000));
+  probe->push({{"a.exe", State::Focused}, {"b.exe", State::Open}});
+  e.step(at(0));
+  e.step(at(2000));
+  e.step(at(4000));
+  CHECK(store->adds == 0);
+  probe->push({{"a.exe", State::Open}, {"b.exe", State::Focused}});
+  e.step(at(6000));
+  CHECK(store->adds == 1);
+  e.step(at(8000));
+  CHECK(store->adds == 1);
+}
+
 void test_engine_seeds_from_store() {
   auto probe = std::make_shared<tw::PushProbe>();
   auto store = std::make_shared<FakeStore>();
@@ -396,6 +414,7 @@ int main() {
   test_i18n_complete();
   test_serialize_roundtrip();
   test_engine_store_flush_and_finish();
+  test_engine_flush_on_focus_change();
   test_engine_seeds_from_store();
   test_engine_day_rollover();
   test_sqlite_store();

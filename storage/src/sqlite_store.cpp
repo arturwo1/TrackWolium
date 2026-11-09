@@ -46,7 +46,8 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
       "app TEXT NOT NULL,"
       "state INTEGER NOT NULL,"
       "ms INTEGER NOT NULL,"
-      "PRIMARY KEY(day, app, state)) WITHOUT ROWID;";
+      "PRIMARY KEY(day, app, state)) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL) WITHOUT ROWID;";
   if (!exec(db, schema, error)) {
     sqlite3_close(db);
     return nullptr;
@@ -89,6 +90,26 @@ bool SqliteStore::add(const std::string& day, const std::vector<Interval>& inter
     exec(db_, "ROLLBACK", nullptr);
     return false;
   }
+  return exec(db_, "COMMIT", &last_error_);
+}
+
+bool SqliteStore::set_names(const std::vector<std::pair<std::string, std::string>>& names) {
+  if (names.empty()) return true;
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
+  sqlite3_stmt* st = nullptr;
+  if (sqlite3_prepare_v2(db_, "INSERT INTO apps(app, name) VALUES(?1, ?2) ON CONFLICT(app) DO UPDATE SET name = excluded.name", -1, &st, nullptr) != SQLITE_OK) {
+    last_error_ = sqlite3_errmsg(db_);
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  for (const auto& kv : names) {
+    sqlite3_bind_text(st, 1, kv.first.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, kv.second.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(st);
+    sqlite3_reset(st);
+  }
+  sqlite3_finalize(st);
   return exec(db_, "COMMIT", &last_error_);
 }
 

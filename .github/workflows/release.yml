@@ -17,8 +17,11 @@ jobs:
         with:
           channel: stable
       - name: native
+        shell: pwsh
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          if ($v -notmatch '^\d') { $v = '0.0.0' }
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DTW_VERSION=$v"
           cmake --build build --config Release --target trackwolium_guard trackwolium_core wolium_setup wolium_uninstall tw_tests
           ctest --test-dir build -C Release --output-on-failure
       - name: ui

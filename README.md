@@ -17,17 +17,17 @@ Users download a single `WoliumSetup.exe` from a GitHub Release. The installer l
     <folder>\wolium.exe        Flutter UI (plus Flutter dlls and data)
     <folder>\uninstall.exe     uninstaller
     <folder>\manifest.txt      list of installed files
-    <folder>\userdata\         usage.db, ui.json, lang (never touched by install or update)
+    %LOCALAPPDATA%\DTSys\Wolium\   usage.db, lang, consent (outside the install folder, never touched by install or update)
 
-Installing into a folder with existing files replaces the files from the package and keeps everything else, including `userdata`.
+Installing into a folder with existing files replaces the files from the package and keeps everything else, and the data folder.
 
-What lives outside the folder: the Start menu and desktop shortcuts and, if autostart is enabled, a `HKCU\...\Run` value. Deleting the folder by hand removes the program and its data, but leaves those shortcuts and the autostart value (harmless, they just point to nothing). `uninstall.exe` removes them too. It asks whether to remove the data as well or keep `userdata` (Yes: remove everything, No: remove the app and keep my data). It deletes only files listed in `manifest.txt`, so files of your own in the folder survive.
+What lives outside the folder: the Start menu and desktop shortcuts and, if autostart is enabled, a `HKCU\...\Run` value. Deleting the folder by hand removes the program and its data, but leaves those shortcuts and the autostart value (harmless, they just point to nothing). `uninstall.exe` removes them too. It asks whether to remove the data folder as well (Yes: remove everything, No: remove the app and keep my data). It deletes only files listed in `manifest.txt`, so files of your own in the folder survive.
 
-The service writes history to `userdata\usage.db` every 3 seconds, the UI reads it read-only. If the file has not been updated for 30 seconds, the UI shows a warning. Service flags: `--background`, `--db PATH`, `--no-db`, `--interval MS`.
+The service keeps counters in RAM and writes them to `usage.db` (WAL) every 3 minutes, on focus change, on exit, and when the UI asks. The heartbeat lives in shared memory, not on disk, and the UI reads it from there. Service flags: `--background`, `--db PATH`, `--no-db`, `--interval MS`.
 
 ## Localization
 
-No user-facing text is hardcoded in code. C++ strings live in `i18n/include/tw/lang/<code>.def` (one file per language, `en.def` is the reference and the fallback), Flutter strings in `ui/lib/l10n.dart`. The chosen language is stored in `userdata\lang` and shared by the installer, uninstaller, tray menu and UI. A test checks that every language has every key. To add a language: add `<code>.def`, one line in `i18n.hpp` and one map in `l10n.dart`.
+No user-facing text is hardcoded in code. C++ strings live in `i18n/include/tw/lang/<code>.def` (one file per language, `en.def` is the reference and the fallback), Flutter strings in `ui/lib/l10n.dart`. The chosen language is stored in `%LOCALAPPDATA%\DTSys\Wolium\lang` and shared by the installer, uninstaller, tray menu and UI. A test checks that every language has every key. To add a language: add `<code>.def`, one line in `i18n.hpp` and one map in `l10n.dart`.
 
 ## Icon
 
@@ -87,12 +87,15 @@ Installed by default to `%LOCALAPPDATA%\Programs\DTSys\Wolium` (any folder can b
 | `trackwolium-core.exe` | Collector. Runs only after consent. |
 | `wolium.exe` | Flutter UI. Starts the service if it is not running. |
 | `uninstall.exe` | Uninstaller (optionally keeps `userdata`). |
-| `userdata\` | `consent`, `lang`, `paused`, `heartbeat`, `usage.db`. |
+| `%LOCALAPPDATA%\DTSys\Wolium\` | `consent`, `lang`, `paused`, `usage.db`. |
 
 Privacy: nothing is recorded and no tray is started until the consent file exists
 (created by accepting the policy in the UI/installer, removed by withdrawing it in Settings).
 
 Language: the installer and apps pick the system UI language (Russian or English fallback);
-the choice is stored in `userdata\lang`. Add a language with a new `i18n/include/tw/lang/<code>.def`.
+the choice is stored in `%LOCALAPPDATA%\DTSys\Wolium\lang`. Add a language with a new `i18n/include/tw/lang/<code>.def`.
 
 Tray states: Active, Paused, Updating, Error (a colored dot on the icon).
+
+Tray death watch: the core watches the tray process. If it exits without the clean-exit event (crash, End task), the core shows its own tray icon and a notification; clicking restores the tray.
+Installer: knows the installed version (`version.txt`) and offers Reinstall when the same version is already installed.

@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'data.dart';
 import 'l10n.dart';
 import 'mark.dart';
 import 'theme.dart';
+import 'win.dart';
 
 const appName = 'Wolium';
 const siteUrl = 'https://wolium.netlify.app/';
@@ -14,6 +17,8 @@ const narrowWidth = 760.0;
 const staleSeconds = 7;
 
 void main() {
+  if (!claimSingleInstance()) exit(0);
+  migrateLegacyData();
   loadLanguage();
   runApp(const WoliumApp());
 }
@@ -118,7 +123,7 @@ class Brand extends StatelessWidget {
         child: const WoliumMark(size: 30),
       ),
       const SizedBox(width: 10),
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text(appName, style: TextStyle(fontWeight: FontWeight.w800, height: 1.1)),
         Text(tr('brandSub'), style: const TextStyle(fontSize: 12, color: cMuted, height: 1.1)),
       ]),
@@ -164,12 +169,17 @@ class _ShellState extends State<Shell> {
   Duration? beat;
   bool hasDb = false;
   DateTime? startedAt = DateTime.now();
+  int ticks = 0;
 
   @override
   void initState() {
     super.initState();
+    requestFlush();
     refresh();
-    timer = Timer.periodic(const Duration(seconds: 1), (_) => refresh());
+    timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (++ticks % 20 == 0) requestFlush();
+      refresh();
+    });
   }
 
   @override
@@ -225,6 +235,7 @@ class _ShellState extends State<Shell> {
         items: [for (final d in days) DropdownMenuItem(value: d, child: Text(d))],
         onChanged: (v) {
           day = v;
+          requestFlush();
           refresh();
         },
       ),
@@ -251,7 +262,7 @@ class _ShellState extends State<Shell> {
           TableRow(
             decoration: const BoxDecoration(border: Border(top: BorderSide(color: cBorder))),
             children: [
-              cell(r.app, style: const TextStyle(fontWeight: FontWeight.w700), ellipsis: true),
+              cell(r.title, style: const TextStyle(fontWeight: FontWeight.w700), ellipsis: true),
               for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i])),
               cell(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w800)),
             ],
@@ -280,7 +291,7 @@ class _ShellState extends State<Shell> {
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              Expanded(child: Text(r.app, style: const TextStyle(fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
+              Expanded(child: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
               Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
             ]),
             Wrap(children: [
@@ -432,14 +443,26 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ]),
         const Divider(height: 28),
-        Wrap(alignment: WrapAlignment.spaceBetween, crossAxisAlignment: WrapCrossAlignment.center, runSpacing: 8, children: [
-          Text(tr('language'), style: const TextStyle(fontWeight: FontWeight.w700)),
+        Row(children: [
+          Expanded(child: Text(tr('language'), style: const TextStyle(fontWeight: FontWeight.w700))),
           LanguagePicker(onChanged: () => setState(() {})),
         ]),
         const Divider(height: 28),
         Text(tr('dataFolder'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
-        Text(dataDir()),
+        Row(children: [
+          Expanded(child: SelectableText(dataDir())),
+          IconButton(
+            tooltip: tr('copy'),
+            icon: const Icon(Icons.copy, size: 18),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: dataDir()));
+              ScaffoldMessenger.of(context)
+                ..clearSnackBars()
+                ..showSnackBar(SnackBar(content: Text(tr('copied')), duration: const Duration(seconds: 2)));
+            },
+          ),
+        ]),
         const Divider(height: 28),
         Wrap(spacing: 8, children: [
           TextButton(onPressed: () => open(privacyUrl), child: Text(tr('privacy'))),

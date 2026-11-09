@@ -92,8 +92,10 @@ int finish(const std::wstring& dir, bool keep_data) {
   for (const auto& d : dirs) RemoveDirectoryW((dir + L"\\" + d).c_str());
 
   if (!keep_data) {
-    if (!remove_tree_retry(dir + L"\\userdata")) ok = false;
+    if (!remove_tree_retry(inst::data_dir())) ok = false;
+    RemoveDirectoryW(inst::dir_of(inst::data_dir()).c_str());
   }
+  DeleteFileW(inst::version_file(dir).c_str());
   if (RemoveDirectoryW(dir.c_str())) {
     std::wstring parent = inst::dir_of(dir);
     std::wstring leaf = parent.substr(parent.find_last_of(L"\\/") == std::wstring::npos ? 0 : parent.find_last_of(L"\\/") + 1);

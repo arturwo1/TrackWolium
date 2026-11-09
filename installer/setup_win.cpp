@@ -34,6 +34,10 @@ using theme::kMuted;
 using theme::kPanel;
 using theme::kText;
 
+#ifndef TW_VERSION_STR
+#define TW_VERSION_STR "0.0.0"
+#endif
+
 HWND g_main, g_path, g_status, g_install, g_browse, g_lang;
 bool g_auto = false;
 bool g_desk = true;
@@ -58,8 +62,19 @@ void set_status(const std::wstring& text, bool error) {
   InvalidateRect(g_status, nullptr, TRUE);
 }
 
+bool up_to_date() {
+  std::wstring dir = read_text(g_path);
+  while (dir.size() > 3 && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
+  if (dir.size() < 4 || !inst::looks_installed(dir)) return false;
+  std::wstring v = L"";
+  for (const char* p = TW_VERSION_STR; *p; ++p) v += static_cast<wchar_t>(*p);
+  return inst::installed_version(dir) == v;
+}
+
 void show_hint() {
-  set_status(tr(Key::SetupHint), false);
+  bool same = up_to_date();
+  set_status(same ? tr(Key::SetupUpToDate) : tr(Key::SetupHint), false);
+  if (!g_done && !g_busy) SetWindowTextW(g_install, same ? tr(Key::Reinstall) : tr(Key::Install));
 }
 
 void apply_texts() {
@@ -70,7 +85,7 @@ void apply_texts() {
   SetWindowTextW(g_browse, tr(Key::Browse));
   SetWindowTextW(GetDlgItem(g_main, kIdAuto), tr(Key::AutoStart));
   SetWindowTextW(GetDlgItem(g_main, kIdDesk), tr(Key::DesktopShortcut));
-  SetWindowTextW(g_install, g_done ? tr(Key::Close) : tr(Key::Install));
+  if (g_done) SetWindowTextW(g_install, tr(Key::Close));
   if (g_done) set_status(tr(Key::InstallDone), false);
   if (!g_error && !g_installing && !g_done) show_hint();
   SetWindowTextW(g_lang, tw::i18n::name(tw::i18n::current()));
@@ -169,7 +184,12 @@ void do_install(Job job) {
     std::filesystem::remove(zip, ec);
   }
   if (ok) {
+    std::error_code ec2;
+    std::filesystem::create_directories(inst::data_dir(), ec2);
     tw::i18n::write_code(std::filesystem::path(inst::lang_file(job.dir)), tw::i18n::code(job.lang));
+    std::wstring ver;
+    for (const char* p = TW_VERSION_STR; *p; ++p) ver += static_cast<wchar_t>(*p);
+    inst::write_version(job.dir, ver);
     inst::set_autostart(job.dir, job.autostart);
     inst::make_link(inst::start_menu_link(), job.dir + L"\\wolium.exe", job.dir);
     if (job.desktop) inst::make_link(inst::desktop_link(), job.dir + L"\\wolium.exe", job.dir);
@@ -311,6 +331,9 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       } else if (id == kIdBrowse) {
         std::wstring p = browse(hwnd);
         if (!p.empty()) SetWindowTextW(g_path, p.c_str());
+        if (!g_error) show_hint();
+      } else if (id == kIdPath && HIWORD(wp) == EN_CHANGE) {
+        if (!g_error && !g_installing && !g_done) show_hint();
       } else if (id == kIdInstall && g_done) {
         DestroyWindow(hwnd);
       } else if (id == kIdInstall && !g_busy) {

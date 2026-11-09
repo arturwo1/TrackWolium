@@ -1,8 +1,10 @@
 #include "tw/platform.hpp"
 #include "tw/win_util.hpp"
 #include <dwmapi.h>
+#include <winver.h>
 #include <tlhelp32.h>
 #include <cwctype>
+#include <map>
 #include <string>
 
 #ifndef DWMWA_CLOAKED
@@ -44,6 +46,31 @@ bool is_app_window(HWND h) {
   return true;
 }
 
+std::map<std::string, std::wstring>& path_cache() {
+  static std::map<std::string, std::wstring> cache;
+  return cache;
+}
+
+std::wstring version_string(const std::wstring& path, const wchar_t* key) {
+  DWORD handle = 0;
+  DWORD size = GetFileVersionInfoSizeW(path.c_str(), &handle);
+  if (!size) return {};
+  std::vector<char> data(size);
+  if (!GetFileVersionInfoW(path.c_str(), 0, size, data.data())) return {};
+  struct Lang {
+    WORD lang;
+    WORD page;
+  }* tr = nullptr;
+  UINT len = 0;
+  if (!VerQueryValueW(data.data(), L"\\VarFileInfo\\Translation", reinterpret_cast<LPVOID*>(&tr), &len) || len < sizeof(Lang)) return {};
+  wchar_t sub[96];
+  swprintf(sub, 96, L"\\StringFileInfo\\%04x%04x\\%ls", tr->lang, tr->page, key);
+  wchar_t* val = nullptr;
+  UINT vlen = 0;
+  if (!VerQueryValueW(data.data(), sub, reinterpret_cast<LPVOID*>(&val), &vlen) || !val || !vlen) return {};
+  return std::wstring(val);
+}
+
 struct EnumContext {
   HWND foreground;
   std::vector<AppSample>* out;
@@ -62,7 +89,9 @@ BOOL CALLBACK enum_windows(HWND h, LPARAM lparam) {
   if (h == ctx->foreground) state = State::Focused;
   else if (IsIconic(h)) state = State::Minimized;
 
-  ctx->out->push_back({to_utf8(lower(base_name(path))), state});
+  std::string key = to_utf8(lower(base_name(path)));
+  path_cache().emplace(key, path);
+  ctx->out->push_back({key, state});
   return TRUE;
 }
 
@@ -92,12 +121,23 @@ public:
           if (path.empty()) continue;
           std::wstring low = lower(path);
           if (!include_system_ && !windows_dir_.empty() && low.compare(0, windows_dir_.size(), windows_dir_) == 0) continue;
-          out.push_back({to_utf8(base_name(low)), State::Background});
+          std::string key = to_utf8(base_name(low));
+          path_cache().emplace(key, path);
+          out.push_back({key, State::Background});
         } while (Process32NextW(snap, &pe));
       }
       CloseHandle(snap);
     }
     return out;
+  }
+
+  std::string display_name(const std::string& app) override {
+    auto it = path_cache().find(app);
+    if (it == path_cache().end()) return {};
+    std::wstring name = version_string(it->second, L"FileDescription");
+    if (name.empty()) name = version_string(it->second, L"ProductName");
+    while (!name.empty() && std::iswspace(name.back())) name.pop_back();
+    return to_utf8(name);
   }
 
 private:

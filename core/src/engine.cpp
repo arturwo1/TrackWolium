@@ -38,12 +38,17 @@ void Engine::set_store(std::shared_ptr<IStore> store, Duration flush_every) {
 }
 
 void Engine::flush_pending() {
-  if (!store_ || pending_.empty()) return;
+  if (!store_) return;
+  if (pending_.empty()) {
+    if (!new_names_.empty() && store_->set_names(new_names_)) new_names_.clear();
+    return;
+  }
   std::vector<Interval> batch;
   batch.reserve(pending_.size());
   for (const auto& kv : pending_) {
     batch.push_back({kv.first.first, static_cast<State>(kv.first.second), kv.second});
   }
+  if (!new_names_.empty() && store_->set_names(new_names_)) new_names_.clear();
   if (store_->add(day_, batch)) pending_.clear();
 }
 
@@ -58,16 +63,34 @@ void Engine::step(TimePoint now) {
     }
   }
 
-  auto intervals = tracker_.tick(probe_->sample(), now);
+  auto samples = probe_->sample();
+  std::string focus;
+  for (const auto& sm : samples) {
+    if (sm.state == State::Focused) {
+      focus = sm.app;
+      break;
+    }
+  }
+  if (store_) {
+    for (const auto& sm : samples) {
+      if (known_.insert(sm.app).second) {
+        std::string n = probe_->display_name(sm.app);
+        if (!n.empty()) new_names_.emplace_back(sm.app, n);
+      }
+    }
+  }
+  auto intervals = tracker_.tick(samples, now);
 
   if (store_) {
     for (const auto& iv : intervals) {
       pending_[{iv.app, static_cast<int>(iv.state)}] += iv.ms;
     }
+    bool focus_changed = flush_started_ && focus != last_focus_;
+    last_focus_ = focus;
     if (!flush_started_) {
       last_flush_ = now;
       flush_started_ = true;
-    } else if (now - last_flush_ >= flush_every_) {
+    } else if (focus_changed || now - last_flush_ >= flush_every_) {
       flush_pending();
       last_flush_ = now;
     }
@@ -92,6 +115,11 @@ void Engine::run(Duration interval, const std::function<bool()>& stop) {
 
 void Engine::finish() {
   flush_pending();
+}
+
+void Engine::flush() {
+  flush_pending();
+  last_flush_ = Clock::now();
 }
 
 Report Engine::report() const {

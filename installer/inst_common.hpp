@@ -96,7 +96,33 @@ inline bool make_link(const std::wstring& link, const std::wstring& target, cons
   return ok;
 }
 
-inline std::wstring lang_file(const std::wstring& dir) { return dir + L"\\userdata\\lang"; }
+inline std::wstring data_dir() { return known_folder(FOLDERID_LocalAppData) + L"\\DTSys\\Wolium"; }
+
+inline std::wstring lang_file(const std::wstring&) { return data_dir() + L"\\lang"; }
+
+inline std::wstring version_file(const std::wstring& dir) { return dir + L"\\version.txt"; }
+
+inline std::wstring installed_version(const std::wstring& dir) {
+  std::wstring out;
+  HANDLE h = CreateFileW(version_file(dir).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return out;
+  char buf[64] = {};
+  DWORD n = 0;
+  ReadFile(h, buf, sizeof(buf) - 1, &n, nullptr);
+  CloseHandle(h);
+  for (DWORD i = 0; i < n && buf[i] > ' '; ++i) out += static_cast<wchar_t>(buf[i]);
+  return out;
+}
+
+inline void write_version(const std::wstring& dir, const std::wstring& v) {
+  HANDLE h = CreateFileW(version_file(dir).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return;
+  std::string a;
+  for (wchar_t c : v) a += static_cast<char>(c);
+  DWORD n = 0;
+  WriteFile(h, a.data(), static_cast<DWORD>(a.size()), &n, nullptr);
+  CloseHandle(h);
+}
 
 inline void apply_language(const std::wstring& dir) {
   tw::i18n::load(std::filesystem::path(lang_file(dir)), GetUserDefaultUILanguage());

@@ -39,13 +39,18 @@ struct Guard {
   ULONGLONG core_started = 0;
   std::vector<ULONGLONG> crashes;
   HANDLE viewer = nullptr;
-  bool expect_notice_restart = false;
+  HANDLE clean = nullptr;
+  app::Heartbeat beat;
 };
 
 Guard* g = nullptr;
 
+void mark_clean() {
+  if (g && g->clean) SetEvent(g->clean);
+}
+
 void reload_language() {
-  tw::i18n::load(std::filesystem::path(app::exe_dir() + L"\\userdata\\lang"), GetUserDefaultUILanguage());
+  tw::i18n::load(std::filesystem::path(app::data_dir() + L"\\lang"), GetUserDefaultUILanguage());
 }
 
 void load_icons(HINSTANCE inst) {
@@ -130,7 +135,7 @@ bool start_core() {
 }
 
 void attach_or_start_core() {
-  std::ifstream in(std::filesystem::path(app::exe_dir() + L"\\userdata\\core.pid"));
+  std::ifstream in(std::filesystem::path(app::data_dir() + L"\\core.pid"));
   DWORD pid = 0;
   if (in >> pid && pid != 0) {
     HANDLE h = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
@@ -238,11 +243,15 @@ void show_menu() {
   if (cmd == kCmdOpen) launch_viewer();
   else if (cmd == kCmdPause) toggle_pause();
   else if (cmd == kCmdRestart) restart_from_error();
-  else if (cmd == kCmdExit) DestroyWindow(g->hwnd);
+  else if (cmd == kCmdExit) {
+    mark_clean();
+    DestroyWindow(g->hwnd);
+  }
 }
 
 void on_timer() {
   if (!app::consent_given()) {
+    mark_clean();
     DestroyWindow(g->hwnd);
     return;
   }
@@ -256,7 +265,7 @@ void on_timer() {
     return;
   }
   if (GetTickCount64() - g->core_started > kStartGraceMs) {
-    long long age = app::file_age_ms(app::exe_dir() + L"\\userdata\\heartbeat");
+    long long age = g->beat.age_ms();
     if (age < 0 || age > kHangMs) {
       kill_core();
       on_core_died();
@@ -301,7 +310,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_QUERYENDSESSION:
       return TRUE;
     case WM_ENDSESSION:
-      if (wp && g) stop_core();
+      if (wp && g) {
+        mark_clean();
+        stop_core();
+      }
       return 0;
     case WM_DESTROY:
       PostQuitMessage(0);
@@ -323,6 +335,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   }
   if (argv) LocalFree(argv);
 
+  app::migrate_legacy_data();
   if (!app::consent_given()) return 0;
 
   HANDLE mutex = CreateMutexW(nullptr, TRUE, app::kGuardMutex);
@@ -337,6 +350,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     return 0;
   }
 
+  guard.clean = CreateEventW(nullptr, TRUE, FALSE, app::kGuardCleanEvent);
+  if (guard.clean) ResetEvent(guard.clean);
   reload_language();
   WNDCLASSW wc{};
   wc.lpfnWndProc = wnd_proc;
@@ -364,6 +379,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   tray_remove();
   stop_core();
   if (guard.viewer) CloseHandle(guard.viewer);
+  if (guard.clean) CloseHandle(guard.clean);
   CloseHandle(mutex);
   return 0;
 }

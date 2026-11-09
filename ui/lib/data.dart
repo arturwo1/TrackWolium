@@ -1,11 +1,15 @@
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import 'l10n.dart';
+import 'win.dart';
 
 class AppUsage {
-  AppUsage(this.app);
+  AppUsage(this.app, [this.name = '']);
 
   final String app;
+  String name;
+
+  String get title => name.isNotEmpty ? name : prettyApp(app);
   final List<int> ms = [0, 0, 0, 0];
 
   int get visible => ms[0] + ms[1] + ms[2];
@@ -14,7 +18,26 @@ class AppUsage {
 
 String installDir() => File(Platform.resolvedExecutable).parent.path;
 
-String dataDir() => '${installDir()}${Platform.pathSeparator}userdata';
+String dataDir() {
+  final base = Platform.environment['LOCALAPPDATA'] ?? installDir();
+  return '$base${Platform.pathSeparator}DTSys${Platform.pathSeparator}Wolium';
+}
+
+void migrateLegacyData() {
+  try {
+    final legacy = Directory('${installDir()}${Platform.pathSeparator}userdata');
+    final now = Directory(dataDir());
+    if (!legacy.existsSync() || now.existsSync()) return;
+    now.parent.createSync(recursive: true);
+    legacy.renameSync(now.path);
+  } catch (_) {}
+}
+
+String prettyApp(String exe) {
+  var n = exe.toLowerCase().endsWith('.exe') ? exe.substring(0, exe.length - 4) : exe;
+  if (n.isEmpty) return exe;
+  return n[0].toUpperCase() + n.substring(1);
+}
 
 String dbPath() => '${dataDir()}${Platform.pathSeparator}usage.db';
 
@@ -80,11 +103,17 @@ class Usage {
     final db = _open();
     if (db == null) return [];
     final map = <String, AppUsage>{};
+    final names = <String, String>{};
+    try {
+      for (final r in db.select('SELECT app, name FROM apps')) {
+        names[r['app'] as String] = r['name'] as String;
+      }
+    } catch (_) {}
     try {
       for (final r in db.select('SELECT app, state, ms FROM usage WHERE day = ?', [day])) {
         final state = r['state'] as int;
         if (state < 0 || state > 3) continue;
-        map.putIfAbsent(r['app'] as String, () => AppUsage(r['app'] as String)).ms[state] += r['ms'] as int;
+        map.putIfAbsent(r['app'] as String, () => AppUsage(r['app'] as String, names[r['app'] as String] ?? '')).ms[state] += r['ms'] as int;
       }
     } catch (_) {
       return [];
@@ -98,9 +127,8 @@ class Usage {
   }
 
   Duration? sinceHeartbeat() {
-    final f = File('${dataDir()}${Platform.pathSeparator}heartbeat');
-    if (!f.existsSync()) return null;
-    return DateTime.now().difference(f.lastModifiedSync());
+    final ms = heartbeatAgeMs();
+    return ms == null ? null : Duration(milliseconds: ms < 0 ? 0 : ms);
   }
 
   void close() {
