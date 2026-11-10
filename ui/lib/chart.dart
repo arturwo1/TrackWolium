@@ -85,17 +85,21 @@ List<Session> sessionsOf(List<Slot> slots, String app, Metric metric) {
 }
 
 class _Tip {
-  const _Tip({required this.visible, required this.bucket, required this.anchor, this.detail});
+  const _Tip({required this.visible, required this.bucket, required this.anchor, required this.interactive, required this.follow, this.detail});
 
   final bool visible;
   final int bucket;
   final Offset anchor;
+  final bool interactive;
+  final bool follow;
   final String? detail;
 
-  _Tip copyWith({bool? visible, int? bucket, Offset? anchor, String? detail, bool clearDetail = false}) => _Tip(
+  _Tip copyWith({bool? visible, int? bucket, Offset? anchor, bool? interactive, bool? follow, String? detail, bool clearDetail = false}) => _Tip(
         visible: visible ?? this.visible,
         bucket: bucket ?? this.bucket,
         anchor: anchor ?? this.anchor,
+        interactive: interactive ?? this.interactive,
+        follow: follow ?? this.follow,
         detail: clearDetail ? null : (detail ?? this.detail),
       );
 }
@@ -132,9 +136,9 @@ class _ActivityChartState extends State<ActivityChart> {
 
   double vx0 = 0;
   double vx1 = _daySlots.toDouble();
-  double yBottom = 0;
-  double yZoom = 1;
   double lastScale = 1;
+  bool touch = false;
+  bool dragging = false;
 
   List<Bucket> buckets = [];
   int group = 3;
@@ -143,7 +147,6 @@ class _ActivityChartState extends State<ActivityChart> {
   double plotH = 1;
 
   double get span => vx1 - vx0;
-  double get ySpan => top / yZoom;
 
   @override
   void dispose() {
@@ -178,15 +181,23 @@ class _ActivityChartState extends State<ActivityChart> {
     }
     buckets = list;
     top = peak < 60000 ? 60000 : peak;
-    final maxBottom = math.max(0.0, top - ySpan);
-    if (yBottom > maxBottom) yBottom = maxBottom;
   }
 
   double slotCenter(int i) => i * group + (group - 1) / 2.0;
 
   double xOf(double slot) => _left + (slot - vx0) / span * plotW;
 
-  double yOf(double value) => _top + plotH * (1 - (value - yBottom) / ySpan);
+  double yOf(double value) => _top + plotH * (1 - value / top);
+
+  double lineY(double x) {
+    final slot = vx0 + (x - _left) / plotW * span;
+    final f = (slot - (group - 1) / 2.0) / group;
+    final i0 = f.floor().clamp(0, buckets.length - 1).toInt();
+    final i1 = (i0 + 1).clamp(0, buckets.length - 1).toInt();
+    final t = (f - i0).clamp(0.0, 1.0).toDouble();
+    final v = buckets[i0].value * (1 - t) + buckets[i1].value * t;
+    return yOf(v);
+  }
 
   void clampView() {
     final s = span.clamp(_minSpan, _daySlots.toDouble()).toDouble();
@@ -195,8 +206,6 @@ class _ActivityChartState extends State<ActivityChart> {
     if (a + s > _daySlots) a = _daySlots - s;
     vx0 = a;
     vx1 = a + s;
-    final maxBottom = math.max(0.0, top - top / yZoom);
-    yBottom = yBottom.clamp(0.0, maxBottom).toDouble();
   }
 
   void zoomX(double factor, double focalSlot) {
@@ -207,42 +216,64 @@ class _ActivityChartState extends State<ActivityChart> {
     clampView();
   }
 
-  int? bucketAt(double dx) {
-    if (buckets.isEmpty) return null;
+  void resetView() {
+    setState(() {
+      vx0 = 0;
+      vx1 = _daySlots.toDouble();
+    });
+    hideNow();
+  }
+
+  int bucketAt(double dx) {
     final slot = vx0 + (dx - _left) / plotW * span;
     final i = ((slot - (group - 1) / 2.0) / group).round();
     return i.clamp(0, buckets.length - 1).toInt();
   }
 
-  void show(double dx) {
-    final i = bucketAt(dx);
-    if (i == null) return;
+  void show(Offset local, {required bool touchMode, bool pin = false}) {
+    if (buckets.isEmpty) return;
     hideTimer?.cancel();
     removeTimer?.cancel();
     final box = key.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) return;
-    final p = box.localToGlobal(Offset(xOf(slotCenter(i)), yOf(buckets[i].value.toDouble()).clamp(_top, _top + plotH).toDouble()));
-    final overlay = Overlay.of(context);
+    final i = bucketAt(local.dx);
+    final Offset anchor;
+    if (touchMode) {
+      final y = yOf(buckets[i].value.toDouble()).clamp(_top, _top + plotH).toDouble();
+      anchor = box.localToGlobal(Offset(xOf(slotCenter(i)), y));
+    } else {
+      anchor = box.localToGlobal(local);
+    }
     if (entry == null) {
       entry = OverlayEntry(builder: buildOverlay);
-      overlay.insert(entry!);
+      Overlay.of(context).insert(entry!);
     }
-    final current = tip.value;
-    tip.value = (current ?? _Tip(visible: true, bucket: i, anchor: p)).copyWith(visible: true, bucket: i, anchor: p);
+    final cur = tip.value;
+    final base = cur ?? _Tip(visible: true, bucket: i, anchor: anchor, interactive: touchMode, follow: !touchMode);
+    tip.value = base.copyWith(
+      visible: true,
+      bucket: i,
+      anchor: (cur != null && cur.interactive && !touchMode) ? cur.anchor : anchor,
+      interactive: touchMode || pin || (cur?.interactive ?? false),
+      follow: !touchMode && !(pin || (cur?.interactive ?? false)),
+    );
   }
 
-  void scheduleHide() {
+  void scheduleHide([int ms = 90]) {
     hideTimer?.cancel();
-    hideTimer = Timer(const Duration(milliseconds: 220), () {
-      final t = tip.value;
-      if (t == null) return;
-      tip.value = t.copyWith(visible: false, clearDetail: true);
-      removeTimer?.cancel();
-      removeTimer = Timer(const Duration(milliseconds: 260), () {
-        entry?.remove();
-        entry = null;
-        tip.value = null;
-      });
+    hideTimer = Timer(Duration(milliseconds: ms), hideNow);
+  }
+
+  void hideNow() {
+    hideTimer?.cancel();
+    final t = tip.value;
+    if (t == null) return;
+    tip.value = t.copyWith(visible: false, interactive: false, clearDetail: true);
+    removeTimer?.cancel();
+    removeTimer = Timer(const Duration(milliseconds: 260), () {
+      entry?.remove();
+      entry = null;
+      tip.value = null;
     });
   }
 
@@ -255,26 +286,47 @@ class _ActivityChartState extends State<ActivityChart> {
 
   void onSignal(PointerSignalEvent e) {
     if (e is! PointerScrollEvent) return;
-    final kb = HardwareKeyboard.instance;
-    final horizontal = e.scrollDelta.dx != 0 || kb.isShiftPressed;
-    if (!kb.isControlPressed && !kb.isAltPressed && !horizontal) return;
     GestureBinding.instance.pointerSignalResolver.register(e, (_) {
       final focal = vx0 + (e.localPosition.dx - _left) / plotW * span;
-      setState(() {
-        if (kb.isControlPressed) {
-          zoomX(e.scrollDelta.dy < 0 ? 1.2 : 1 / 1.2, focal);
-        } else if (kb.isAltPressed) {
-          yZoom = (yZoom * (e.scrollDelta.dy < 0 ? 1.25 : 0.8)).clamp(1.0, 20.0).toDouble();
-          clampView();
-        } else {
-          final d = e.scrollDelta.dx != 0 ? e.scrollDelta.dx : e.scrollDelta.dy;
-          vx0 += d / plotW * span;
-          vx1 = vx0 + span;
-          clampView();
-        }
-      });
-      show(e.localPosition.dx);
+      setState(() => zoomX(e.scrollDelta.dy < 0 ? 1.15 : 1 / 1.15, focal));
+      hideNow();
     });
+  }
+
+  void onHover(PointerHoverEvent e) {
+    if (e.kind != PointerDeviceKind.mouse || dragging) return;
+    final t = tip.value;
+    if (t != null && t.interactive) return;
+    final p = e.localPosition;
+    if (p.dx < _left || p.dx > _left + plotW || buckets.isEmpty) {
+      scheduleHide();
+      return;
+    }
+    if ((p.dy - lineY(p.dx)).abs() <= 16) {
+      show(p, touchMode: false);
+    } else {
+      scheduleHide(60);
+    }
+  }
+
+  void onTapUp(TapUpDetails d) {
+    final p = d.localPosition;
+    if (touch) {
+      final t = tip.value;
+      final i = bucketAt(p.dx);
+      if (t != null && t.visible && t.bucket == i) {
+        hideNow();
+      } else {
+        show(p, touchMode: true);
+      }
+      return;
+    }
+    final t = tip.value;
+    if (t != null && t.interactive) {
+      hideNow();
+    } else if (t != null && t.visible) {
+      show(p, touchMode: false, pin: true);
+    }
   }
 
   @override
@@ -284,21 +336,29 @@ class _ActivityChartState extends State<ActivityChart> {
       plotH = math.max(1.0, widget.height - _top - _bottom);
       rebuildData();
       return Listener(
+        onPointerDown: (e) {
+          touch = e.kind != PointerDeviceKind.mouse;
+          if (e.kind == PointerDeviceKind.mouse && e.buttons == kMiddleMouseButton) resetView();
+        },
         onPointerSignal: onSignal,
         child: MouseRegion(
-          onHover: (e) => show(e.localPosition.dx),
-          onExit: (_) => scheduleHide(),
+          cursor: dragging ? SystemMouseCursors.grabbing : SystemMouseCursors.basic,
+          onHover: onHover,
+          onExit: (_) {
+            final t = tip.value;
+            scheduleHide(t != null && t.interactive ? 900 : 60);
+          },
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: (d) => show(d.localPosition.dx),
-            onDoubleTap: () => setState(() {
-              vx0 = 0;
-              vx1 = _daySlots.toDouble();
-              yZoom = 1;
-              yBottom = 0;
-            }),
-            onScaleStart: (_) => lastScale = 1,
+            onTapUp: onTapUp,
+            onDoubleTap: resetView,
+            onScaleStart: (_) {
+              lastScale = 1;
+              dragging = true;
+            },
+            onScaleEnd: (_) => setState(() => dragging = false),
             onScaleUpdate: (d) {
+              final moved = d.focalPointDelta.dx != 0 || d.scale != 1;
               setState(() {
                 if (d.scale != 1) {
                   zoomX(d.scale / lastScale, vx0 + (d.localFocalPoint.dx - _left) / plotW * span);
@@ -306,10 +366,9 @@ class _ActivityChartState extends State<ActivityChart> {
                 }
                 vx0 -= d.focalPointDelta.dx / plotW * span;
                 vx1 = vx0 + span;
-                yBottom += d.focalPointDelta.dy / plotH * ySpan;
                 clampView();
               });
-              show(d.localFocalPoint.dx);
+              if (moved) hideNow();
             },
             child: SizedBox(
               key: key,
@@ -324,8 +383,8 @@ class _ActivityChartState extends State<ActivityChart> {
                       group: group,
                       vx0: vx0,
                       vx1: vx1,
-                      yBottom: yBottom,
-                      ySpan: ySpan,
+                      yBottom: 0,
+                      ySpan: top.toDouble(),
                       hover: t != null && t.visible ? t.bucket : null,
                     ),
                   ),
@@ -345,20 +404,37 @@ class _ActivityChartState extends State<ActivityChart> {
         if (t == null || t.bucket >= buckets.length) return const SizedBox.shrink();
         final screen = MediaQuery.of(context).size;
         final b = buckets[t.bucket];
-        final rows = b.apps.entries.where((e) => metricOf(e.value, widget.metric) > 0).toList()
+        final rows = b.apps.entries
+            .where((e) => metricOf(e.value, widget.metric) > 0 && (widget.only == null || e.key == widget.only))
+            .toList()
           ..sort((a, c) => metricOf(c.value, widget.metric).compareTo(metricOf(a.value, widget.metric)));
         final visibleRows = math.min(rows.length, 6);
         final height = 70.0 + math.max(1, visibleRows) * 40.0;
-        double left = t.anchor.dx - _tipWidth / 2;
+        double left;
+        double topPos;
+        if (t.follow) {
+          left = t.anchor.dx + 18;
+          if (left + _tipWidth > screen.width - 8) left = t.anchor.dx - _tipWidth - 18;
+          topPos = t.anchor.dy - height - 12;
+          if (topPos < 8) topPos = t.anchor.dy + 22;
+        } else if (t.interactive && !touch) {
+          left = t.anchor.dx + 18;
+          if (left + _tipWidth > screen.width - 8) left = t.anchor.dx - _tipWidth - 18;
+          topPos = t.anchor.dy - height - 12;
+          if (topPos < 8) topPos = t.anchor.dy + 22;
+        } else {
+          left = t.anchor.dx - _tipWidth / 2;
+          topPos = t.anchor.dy - height - 14;
+          if (topPos < 8) topPos = t.anchor.dy + 18;
+        }
         left = left.clamp(8.0, math.max(8.0, screen.width - _tipWidth - 8)).toDouble();
-        double topPos = t.anchor.dy - height - 14;
-        if (topPos < 8) topPos = t.anchor.dy + 18;
         topPos = topPos.clamp(8.0, math.max(8.0, screen.height - height - 8)).toDouble();
         var detailLeft = left + _tipWidth + 8;
         if (detailLeft + _detailWidth > screen.width - 8) detailLeft = left - _detailWidth - 8;
         if (detailLeft < 8) detailLeft = 8;
         if (t.detail != null) lastDetail = t.detail;
         final shownDetail = lastDetail;
+        final move = t.follow ? const Duration(milliseconds: 90) : const Duration(milliseconds: 200);
 
         Widget animated(Widget child, bool on) => TweenAnimationBuilder<double>(
               tween: Tween<double>(begin: 0, end: on ? 1 : 0),
@@ -376,28 +452,34 @@ class _ActivityChartState extends State<ActivityChart> {
 
         return Stack(children: [
           AnimatedPositioned(
-            duration: const Duration(milliseconds: 200),
+            duration: move,
             curve: Curves.easeOutCubic,
             left: left,
             top: topPos,
             width: _tipWidth,
-            child: MouseRegion(
-              onEnter: (_) => cancelHide(),
-              onExit: (_) => scheduleHide(),
-              child: animated(_mainTip(b, t, rows), t.visible),
+            child: IgnorePointer(
+              ignoring: !t.interactive,
+              child: MouseRegion(
+                onEnter: (_) => cancelHide(),
+                onExit: (_) => scheduleHide(900),
+                child: animated(_mainTip(b, t, rows), t.visible),
+              ),
             ),
           ),
           if (shownDetail != null)
             AnimatedPositioned(
-              duration: const Duration(milliseconds: 200),
+              duration: move,
               curve: Curves.easeOutCubic,
               left: detailLeft,
               top: topPos,
               width: _detailWidth,
-              child: MouseRegion(
-                onEnter: (_) => cancelHide(),
-                onExit: (_) => scheduleHide(),
-                child: IgnorePointer(ignoring: t.detail == null, child: animated(_detailTip(shownDetail), t.visible && t.detail != null)),
+              child: IgnorePointer(
+                ignoring: !t.interactive || t.detail == null,
+                child: MouseRegion(
+                  onEnter: (_) => cancelHide(),
+                  onExit: (_) => scheduleHide(900),
+                  child: animated(_detailTip(shownDetail), t.visible && t.detail != null),
+                ),
               ),
             ),
         ]);
@@ -449,7 +531,8 @@ class _ActivityChartState extends State<ActivityChart> {
                         child: Row(children: [
                           widget.icon(e.key, 20),
                           const SizedBox(width: 8),
-                          Expanded(child: Text(widget.title(e.key), overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                          Expanded(child: EllipsisText(widget.title(e.key), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                          const SizedBox(width: 6),
                           Text(formatMs(metricOf(e.value, widget.metric)), style: const TextStyle(fontSize: 12, color: cMuted)),
                         ]),
                       ),
@@ -457,6 +540,8 @@ class _ActivityChartState extends State<ActivityChart> {
                 ],
               ),
             ),
+          if (!t.interactive && rows.isNotEmpty)
+            Padding(padding: const EdgeInsets.only(top: 4), child: Text(tr('clickToPin'), style: const TextStyle(color: cMuted, fontSize: 11))),
         ]),
       ),
     );
@@ -474,7 +559,7 @@ class _ActivityChartState extends State<ActivityChart> {
           Row(children: [
             widget.icon(app, 22),
             const SizedBox(width: 8),
-            Expanded(child: Text(widget.title(app), overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800))),
+            Expanded(child: EllipsisText(widget.title(app), style: const TextStyle(fontWeight: FontWeight.w800))),
           ]),
           const SizedBox(height: 4),
           Text('${metricLabel(widget.metric)}: ${formatMs(total)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800, fontSize: 13)),

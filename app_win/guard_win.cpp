@@ -332,7 +332,19 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 }
 
+void enable_dark_menus() {
+  HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+  if (!ux) return;
+  using SetMode = int(WINAPI*)(int);
+  using Flush = void(WINAPI*)();
+  auto set = reinterpret_cast<SetMode>(reinterpret_cast<void*>(GetProcAddress(ux, MAKEINTRESOURCEA(135))));
+  auto flush = reinterpret_cast<Flush>(reinterpret_cast<void*>(GetProcAddress(ux, MAKEINTRESOURCEA(136))));
+  if (set) set(1);
+  if (flush) flush();
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
+  enable_dark_menus();
   Guard guard;
   g = &guard;
 

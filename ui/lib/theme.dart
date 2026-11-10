@@ -166,3 +166,22 @@ class SelectBox<T> extends StatelessWidget {
     );
   }
 }
+
+class EllipsisText extends StatelessWidget {
+  const EllipsisText(this.text, {super.key, this.style});
+
+  final String text;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      final effective = DefaultTextStyle.of(context).style.merge(style);
+      final tp = TextPainter(text: TextSpan(text: text, style: effective), maxLines: 1, textDirection: TextDirection.ltr)
+        ..layout(maxWidth: c.maxWidth.isFinite ? c.maxWidth : double.infinity);
+      final w = Text(text, style: style, maxLines: 1, overflow: TextOverflow.ellipsis);
+      if (!tp.didExceedMaxLines) return w;
+      return Tooltip(message: text, waitDuration: const Duration(milliseconds: 250), child: w);
+    });
+  }
+}

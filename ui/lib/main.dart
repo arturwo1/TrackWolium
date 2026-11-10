@@ -345,6 +345,33 @@ class _ShellState extends State<Shell> {
     setState(() => only = only == app ? null : app);
   }
 
+  List<String> appChoices() {
+    final set = <String>{for (final r in rows) r.app, for (final sl in slots) sl.app};
+    if (only != null) set.add(only!);
+    final list = set.toList()..sort((a, b) => titleOf(a).toLowerCase().compareTo(titleOf(b).toLowerCase()));
+    return list;
+  }
+
+  void showChartHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: cPanel,
+        title: Text(tr('helpTitle')),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(tr('helpWhat')),
+            const SizedBox(height: 12),
+            Text(tr('helpMouse'), style: const TextStyle(color: cMuted)),
+            const SizedBox(height: 8),
+            Text(tr('helpTouch'), style: const TextStyle(color: cMuted)),
+          ]),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(tr('ok')))],
+      ),
+    );
+  }
+
   Widget chartPanel(bool narrow) {
     return Panel(
       padding: EdgeInsets.all(narrow ? 12 : 16),
@@ -356,20 +383,31 @@ class _ShellState extends State<Shell> {
             items: [for (final m in Metric.values) DropdownMenuItem(value: m, child: Text(metricLabel(m)))],
             onChanged: (v) => setState(() => metric = v ?? metric),
           ),
-          if (only != null)
-            InkWell(
-              onTap: () => setState(() => only = null),
-              borderRadius: BorderRadius.circular(rSm),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(color: cSoft, borderRadius: BorderRadius.circular(rSm), border: Border.fromBorderSide(line)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text(titleOf(only!), style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 6),
-                  const Icon(Icons.close, size: 14, color: cPrimary),
-                ]),
-              ),
-            ),
+          SelectBox<String?>(
+            value: only,
+            items: [
+              DropdownMenuItem<String?>(value: null, child: Text(tr('allApps'))),
+              for (final app in appChoices())
+                DropdownMenuItem<String?>(
+                  value: app,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 220),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      iconOf(app, 20),
+                      const SizedBox(width: 8),
+                      Flexible(child: EllipsisText(titleOf(app))),
+                    ]),
+                  ),
+                ),
+            ],
+            onChanged: (v) => setState(() => only = v),
+          ),
+          IconButton(
+            tooltip: tr('helpTitle'),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.help_outline, size: 20, color: cMuted),
+            onPressed: showChartHelp,
+          ),
         ]),
         const SizedBox(height: 10),
         ActivityChart(slots: slots, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240),
@@ -396,7 +434,7 @@ class _ShellState extends State<Shell> {
   Widget wideTable(TextStyle head) {
     Widget cell(String t, {TextStyle? style, bool ellipsis = false}) => Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
-          child: Text(t, style: style, overflow: ellipsis ? TextOverflow.ellipsis : null),
+          child: EllipsisText(t, style: style),
         );
     return Table(
       columnWidths: const {0: FlexColumnWidth(3)},
@@ -412,7 +450,9 @@ class _ShellState extends State<Shell> {
         ]),
         for (final r in sortedRows())
           TableRow(
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: cBorder))),
+            decoration: only == r.app
+                ? BoxDecoration(color: cSoft.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(8), border: Border.all(color: cPrimary))
+                : const BoxDecoration(border: Border(top: BorderSide(color: cBorder))),
             children: [
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -424,7 +464,7 @@ class _ShellState extends State<Shell> {
                     child: Row(children: [
                       AppIcon(title: r.title, path: r.path, size: 22),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null), overflow: TextOverflow.ellipsis)),
+                      Expanded(child: EllipsisText(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null))),
                     ]),
                   ),
                 ),
@@ -466,7 +506,7 @@ class _ShellState extends State<Shell> {
               ],
               AppIcon(title: r.title, path: r.path, size: 22),
               const SizedBox(width: 8),
-              Expanded(child: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
+              Expanded(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
               Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
             ]),
             Wrap(children: [

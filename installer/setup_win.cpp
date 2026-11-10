@@ -85,8 +85,12 @@ InstallState install_state() {
 
 void show_hint() {
   InstallState st = install_state();
-  const wchar_t* text = st == InstallState::Update ? tr(Key::SetupUpdateAvailable) : (st == InstallState::Same ? tr(Key::SetupUpToDate) : tr(Key::SetupHint));
-  set_status(text, false);
+  std::wstring text = st == InstallState::Update ? tr(Key::SetupUpdateAvailable) : (st == InstallState::Same ? tr(Key::SetupUpToDate) : tr(Key::SetupHint));
+  if (st == InstallState::Update) {
+    std::wstring old = inst::installed_version(current_dir());
+    text += L" " + (old.empty() ? std::wstring(L"?") : old) + L" \u2192 " + build_version();
+  }
+  set_status(text.c_str(), false);
   if (!g_done && !g_busy) {
     SetWindowTextW(g_install, st == InstallState::Update ? tr(Key::Update) : (st == InstallState::Same ? tr(Key::Reinstall) : tr(Key::Install)));
     ShowWindow(g_uninst, st == InstallState::None ? SW_HIDE : SW_SHOW);
