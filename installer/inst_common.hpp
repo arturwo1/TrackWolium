@@ -70,6 +70,14 @@ inline void set_autostart(const std::wstring& dir, bool on) {
   RegCloseKey(key);
 }
 
+inline bool autostart_enabled() {
+  HKEY key;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return false;
+  bool has = RegQueryValueExW(key, kRunValue, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS;
+  RegCloseKey(key);
+  return has;
+}
+
 inline std::wstring known_folder(REFKNOWNFOLDERID id) {
   PWSTR p = nullptr;
   std::wstring out;

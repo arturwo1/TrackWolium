@@ -105,3 +105,7 @@ Windows integration: the installer registers `HKCU\Software\Microsoft\Windows\Cu
 
 Graph interaction: wheel zooms time, left-drag pans, middle click or double click resets, hover the line for a cursor-attached tooltip, click to pin it (then rows are clickable and open the session list). On touch: tap shows an anchored tooltip, pinch zooms, one finger pans, double tap resets. App icons come from the exe path stored in the `apps` table.
 Versions: CI builds as `<tag>.<run number>`, so every build is newer than the previous one and the installer offers Update.
+
+Date range: presets (day, week, month, year) and From/To pickers filter both the table and the graph. Long ranges load the timeline pre-aggregated (15 min for 8-31 days, 1 hour above 31 days).
+
+Auto-update: the UI checks the latest GitHub release (assets `version.txt` and `WoliumSetup.exe`) at start and every 6 hours when enabled in Settings (`noupdates` file in the data folder disables it). The banner downloads the installer and runs it with `--silent <install dir>`, which keeps autostart, desktop shortcut and language, then restarts the tray and UI. Release builds must be created from a tag so `version.txt` is uploaded.

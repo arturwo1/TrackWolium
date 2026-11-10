@@ -10,6 +10,7 @@ import 'icons.dart';
 import 'l10n.dart';
 import 'mark.dart';
 import 'theme.dart';
+import 'updater.dart';
 import 'win.dart';
 
 const appName = 'Wolium';
@@ -166,7 +167,9 @@ class _ShellState extends State<Shell> {
   Timer? timer;
   int tab = 0;
   List<String> days = [];
-  String? day;
+  late DateTime from;
+  late DateTime to;
+  String preset = 'day';
   List<AppUsage> rows = [];
   Duration? beat;
   bool hasDb = false;
@@ -175,18 +178,27 @@ class _ShellState extends State<Shell> {
   bool isPaused = false;
   bool liveMode = false;
   List<Slot> slots = [];
-  String? slotsFor;
+  String? rangeKey;
   String? only;
   Map<String, AppMeta> names = {};
   Metric metric = Metric.focused;
+  UpdateInfo? update;
+  bool updating = false;
+  double updateProgress = 0;
+  bool updateFailed = false;
+  final settings = Settings.load();
 
   @override
   void initState() {
     super.initState();
+    to = dateOnly(DateTime.now());
+    from = to;
     requestFlush();
+    checkForUpdate();
     refresh();
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (++ticks % 20 == 0) requestFlush();
+      if (ticks % 21600 == 0) checkForUpdate();
       refresh();
     });
   }
@@ -198,34 +210,180 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
-  String todayKey() {
-    final n = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${n.year}-${two(n.month)}-${two(n.day)}';
+  Future<void> checkForUpdate() async {
+    if (!settings.autoUpdate || updating) return;
+    final info = await checkUpdate();
+    if (mounted && info != null) setState(() => update = info);
+  }
+
+  Future<void> runUpdate() async {
+    final info = update;
+    if (info == null || updating) return;
+    setState(() {
+      updating = true;
+      updateFailed = false;
+      updateProgress = 0;
+    });
+    final ok = await downloadAndInstall(info, (v) {
+      if (mounted) setState(() => updateProgress = v);
+    });
+    if (ok) exit(0);
+    if (mounted) {
+      setState(() {
+        updating = false;
+        updateFailed = true;
+      });
+    }
+  }
+
+  Widget updateBanner() {
+    final info = update!;
+    return Container(
+      width: double.infinity,
+      color: cPrimary.withValues(alpha: 0.14),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text('${tr('updateAvailable')}: ${info.current} \u2192 ${info.latest}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w700)),
+        if (updating)
+          SizedBox(width: 160, child: LinearProgressIndicator(value: updateProgress > 0 ? updateProgress : null, color: cPrimary, backgroundColor: cBorder))
+        else
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 34)),
+            onPressed: runUpdate,
+            child: Text(tr('updateAction')),
+          ),
+        if (updating) Text(tr('updating'), style: const TextStyle(color: cMuted)),
+        if (updateFailed) Text(tr('updateFailed'), style: const TextStyle(color: cDanger)),
+      ]),
+    );
+  }
+
+  DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  String keyOf(DateTime d) => '${d.year}-${two(d.month)}-${two(d.day)}';
+
+  String shown(DateTime d) => '${two(d.day)}.${two(d.month)}.${d.year}';
+
+  void applyPreset(String p) {
+    final today = dateOnly(DateTime.now());
+    final span = {'day': 0, 'week': 6, 'month': 29, 'year': 364}[p] ?? 0;
+    preset = p;
+    to = today;
+    from = today.subtract(Duration(days: span));
   }
 
   void refresh() {
-    final d = usage.days();
-    final today = todayKey();
-    if (!d.contains(today)) d.insert(0, today);
-    final selected = day != null && d.contains(day) ? day : d.first;
+    if (preset != 'custom') applyPreset(preset);
+    final today = dateOnly(DateTime.now());
+    final fk = keyOf(from);
+    final tk = keyOf(to);
     final b = usage.sinceHeartbeat();
     final up = b != null && b <= const Duration(seconds: staleSeconds);
-    final l = up && selected == today ? usage.live() : null;
+    final l = up && from == to && to == today ? usage.live() : null;
+    final rk = '$fk|$tk';
     setState(() {
       hasDb = usage.available;
-      days = d;
-      day = selected;
+      days = usage.days();
       beat = b;
       isPaused = usage.paused;
       liveMode = l != null;
-      rows = l ?? usage.day(selected!);
-      if (slotsFor != selected || ticks % 5 == 0) {
-        slots = usage.timeline(selected!);
+      rows = l ?? usage.range(fk, tk);
+      final spanDays = to.difference(from).inDays + 1;
+      final every = spanDays > 1 ? 30 : 5;
+      if (rangeKey != rk || ticks % every == 0) {
+        slots = usage.timeline(fk, tk, spanDays > 31 ? 12 : (spanDays > 7 ? 3 : 1));
         names = usage.names();
-        slotsFor = selected;
+        rangeKey = rk;
       }
     });
+  }
+
+  Future<void> pick(bool isFrom) async {
+    final today = dateOnly(DateTime.now());
+    var first = DateTime(2020);
+    if (days.isNotEmpty) {
+      final parsed = DateTime.tryParse(days.last);
+      if (parsed != null) first = dateOnly(parsed);
+    }
+    final initial = isFrom ? from : to;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial.isAfter(today) ? today : initial,
+      firstDate: first.isAfter(initial) ? initial : first,
+      lastDate: today,
+    );
+    if (picked == null) return;
+    final d = dateOnly(picked);
+    setState(() {
+      preset = 'custom';
+      if (isFrom) {
+        from = d;
+        if (to.isBefore(from)) to = from;
+      } else {
+        to = d;
+        if (from.isAfter(to)) from = to;
+      }
+    });
+    requestFlush();
+    refresh();
+  }
+
+  Widget presetChip(String id, String label) {
+    final on = preset == id;
+    return HoverBox(
+      onTap: () {
+        setState(() => applyPreset(id));
+        requestFlush();
+        refresh();
+      },
+      builder: (hovered) => Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: on ? cSoft : (hovered ? cSoft.withValues(alpha: 0.5) : Colors.transparent),
+          borderRadius: BorderRadius.circular(rSm),
+          border: Border.all(color: on ? cPrimary : cBorder),
+        ),
+        child: Text(label, style: TextStyle(fontWeight: FontWeight.w700, color: on ? cPrimary : null)),
+      ),
+    );
+  }
+
+  Widget dateButton(String label, DateTime d, bool isFrom) {
+    return HoverBox(
+      onTap: () => pick(isFrom),
+      builder: (hovered) => Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: hovered ? cSoft.withValues(alpha: 0.5) : Colors.transparent,
+          borderRadius: BorderRadius.circular(rSm),
+          border: Border.fromBorderSide(line),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('$label ', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
+          Text(shown(d), style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(width: 8),
+          const Icon(Icons.calendar_today, size: 14, color: cMuted),
+        ]),
+      ),
+    );
+  }
+
+  Widget rangeBar() {
+    return Panel(
+      padding: const EdgeInsets.all(12),
+      child: Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        presetChip('day', tr('presetDay')),
+        presetChip('week', tr('presetWeek')),
+        presetChip('month', tr('presetMonth')),
+        presetChip('year', tr('presetYear')),
+        const SizedBox(width: 8),
+        dateButton(tr('dateFrom'), from, true),
+        dateButton(tr('dateTo'), to, false),
+      ]),
+    );
   }
 
   bool get serviceDown {
@@ -410,25 +568,9 @@ class _ShellState extends State<Shell> {
           ),
         ]),
         const SizedBox(height: 10),
-        ActivityChart(slots: slots, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240),
+        ActivityChart(minGroup: to.difference(from).inDays + 1 > 31 ? 12 : (to.difference(from).inDays + 1 > 7 ? 3 : 1), first: from, total: (to.difference(from).inDays + 1) * 288, slots: slots, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240),
       ]),
     );
-  }
-
-  Widget dateRow(TextStyle head) {
-    return Row(children: [
-      Text(tr('date'), style: head),
-      const SizedBox(width: 12),
-      SelectBox<String>(
-        value: day,
-        items: [for (final d in days) DropdownMenuItem(value: d, child: Text(d))],
-        onChanged: (v) {
-          day = v;
-          requestFlush();
-          refresh();
-        },
-      ),
-    ]);
   }
 
   Widget wideTable(TextStyle head) {
@@ -524,6 +666,8 @@ class _ShellState extends State<Shell> {
   Widget activity(bool narrow) {
     const head = TextStyle(color: cMuted, fontWeight: FontWeight.w800);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      rangeBar(),
+      const SizedBox(height: 12),
       chartPanel(narrow),
       const SizedBox(height: 12),
       if (rows.isEmpty)
@@ -532,8 +676,6 @@ class _ShellState extends State<Shell> {
         Panel(
           padding: EdgeInsets.all(narrow ? 12 : 16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            dateRow(head),
-            const SizedBox(height: 8),
             narrow ? compactList(head) : wideTable(head),
           ]),
         ),
@@ -608,6 +750,7 @@ class _ShellState extends State<Shell> {
               if (!narrow) sidebar(),
               Expanded(
                 child: Column(children: [
+                  if (update != null) updateBanner(),
                   if (serviceDown) banner() else if (isPaused) pausedBanner(),
                   Expanded(
                     child: ListView(padding: EdgeInsets.fromLTRB(pad, pad, pad, 28), children: [
@@ -616,7 +759,14 @@ class _ShellState extends State<Shell> {
                         if (tab == 0) statusChip(),
                       ]),
                       const SizedBox(height: 14),
-                      tab == 0 ? activity(narrow) : SettingsPage(onWithdraw: widget.onWithdraw),
+                      tab == 0 ? activity(narrow) : SettingsPage(
+                        onWithdraw: widget.onWithdraw,
+                        onCheck: () async {
+                          final info = await checkUpdate();
+                          if (mounted) setState(() => update = info);
+                          return info;
+                        },
+                      ),
                     ]),
                   ),
                 ]),
@@ -631,9 +781,10 @@ class _ShellState extends State<Shell> {
 }
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, required this.onWithdraw});
+  const SettingsPage({super.key, required this.onWithdraw, required this.onCheck});
 
   final VoidCallback onWithdraw;
+  final Future<UpdateInfo?> Function() onCheck;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -641,6 +792,10 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool? auto;
+  final prefs = Settings.load();
+  late bool autoUpdate = prefs.autoUpdate;
+  String? checkText;
+  bool checking = false;
 
   @override
   void initState() {
@@ -666,6 +821,38 @@ class _SettingsPageState extends State<SettingsPage> {
                     if (mounted) setState(() => auto = now);
                   },
           ),
+        ]),
+        const Divider(height: 28),
+        Row(children: [
+          Expanded(child: Text(tr('autoUpdate'), style: const TextStyle(fontWeight: FontWeight.w700))),
+          Switch(
+            value: autoUpdate,
+            onChanged: (v) {
+              prefs.autoUpdate = v;
+              setState(() => autoUpdate = v);
+            },
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          OutlinedButton(
+            onPressed: checking
+                ? null
+                : () async {
+                    setState(() {
+                      checking = true;
+                      checkText = tr('checking');
+                    });
+                    final info = await widget.onCheck();
+                    if (!mounted) return;
+                    setState(() {
+                      checking = false;
+                      checkText = info == null ? tr('upToDate') : '${tr('updateAvailable')}: ${info.current} \u2192 ${info.latest}';
+                    });
+                  },
+            child: Text(tr('checkNow')),
+          ),
+          if (checkText != null) Text(checkText!, style: const TextStyle(color: cMuted)),
         ]),
         const Divider(height: 28),
         Row(children: [

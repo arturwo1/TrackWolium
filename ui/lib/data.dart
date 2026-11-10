@@ -117,13 +117,15 @@ class Usage {
     }
   }
 
-  List<AppUsage> day(String day) {
+  List<AppUsage> day(String day) => range(day, day);
+
+  List<AppUsage> range(String from, String to) {
     final db = _open();
     if (db == null) return [];
     final map = <String, AppUsage>{};
     final names = this.names();
     try {
-      for (final r in db.select('SELECT app, state, ms FROM usage WHERE day = ?', [day])) {
+      for (final r in db.select('SELECT app, state, ms FROM usage WHERE day BETWEEN ? AND ?', [from, to])) {
         final state = r['state'] as int;
         if (state < 0 || state > 3) continue;
         map.putIfAbsent(r['app'] as String, () {
@@ -142,14 +144,15 @@ class Usage {
     return list;
   }
 
-  List<Slot> timeline(String day) {
+  List<Slot> timeline(String from, String to, [int bin = 1]) {
     final db = _open();
     if (db == null) return [];
     try {
-      return db
-          .select('SELECT slot, app, state, ms FROM timeline WHERE day = ?', [day])
-          .map((r) => Slot(r['slot'] as int, r['app'] as String, r['state'] as int, r['ms'] as int))
-          .toList();
+      final base = DateTime.parse(from);
+      return db.select('SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM timeline WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, state', [from, to, bin]).map((r) {
+        final d = DateTime.parse(r['day'] as String).difference(base).inDays;
+        return Slot(d * 288 + (r['bslot'] as int), r['app'] as String, r['state'] as int, r['ms'] as int);
+      }).toList();
     } catch (_) {
       return [];
     }
@@ -230,6 +233,21 @@ class Settings {
   String get _consent => '${dataDir()}${Platform.pathSeparator}consent';
 
   bool get accepted => File(_consent).existsSync();
+
+  String get _noUpdates => '${dataDir()}${Platform.pathSeparator}noupdates';
+
+  bool get autoUpdate => !File(_noUpdates).existsSync();
+
+  set autoUpdate(bool v) {
+    try {
+      Directory(dataDir()).createSync(recursive: true);
+      if (v) {
+        if (File(_noUpdates).existsSync()) File(_noUpdates).deleteSync();
+      } else {
+        File(_noUpdates).writeAsStringSync('1');
+      }
+    } catch (_) {}
+  }
 
   set accepted(bool v) {
     try {

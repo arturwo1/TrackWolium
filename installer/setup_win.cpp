@@ -182,7 +182,7 @@ struct Job {
   HWND hwnd;
 };
 
-void do_install(Job job) {
+bool do_install(Job job) {
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   Key err = Key::ErrExtract;
   bool ok = false;
@@ -207,7 +207,7 @@ void do_install(Job job) {
   if (ok) {
     std::error_code ec2;
     std::filesystem::create_directories(inst::data_dir(), ec2);
-    tw::i18n::write_code(std::filesystem::path(inst::lang_file(job.dir)), tw::i18n::code(job.lang));
+    if (job.lang >= 0) tw::i18n::write_code(std::filesystem::path(inst::lang_file(job.dir)), tw::i18n::code(job.lang));
     std::wstring ver;
     for (const char* p = TW_VERSION_STR; *p; ++p) ver += static_cast<wchar_t>(*p);
     inst::write_version(job.dir, ver);
@@ -218,6 +218,14 @@ void do_install(Job job) {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
+    if (job.lang < 0) {
+      std::wstring guard = job.dir + L"\\trackwolium.exe";
+      std::wstring gcmd = L"\"" + guard + L"\" --background";
+      if (CreateProcessW(guard.c_str(), &gcmd[0], nullptr, nullptr, FALSE, 0, nullptr, job.dir.c_str(), &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+      }
+    }
     std::wstring exe = job.dir + L"\\wolium.exe";
     std::wstring cmd = L"\"" + exe + L"\"";
     if (CreateProcessW(exe.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, job.dir.c_str(), &si, &pi)) {
@@ -226,7 +234,8 @@ void do_install(Job job) {
     }
   }
   CoUninitialize();
-  PostMessageW(job.hwnd, kDone, ok ? 1 : 0, static_cast<LPARAM>(err));
+  if (job.hwnd) PostMessageW(job.hwnd, kDone, ok ? 1 : 0, static_cast<LPARAM>(err));
+  return ok;
 }
 
 std::wstring browse(HWND owner) {
@@ -411,6 +420,15 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  int argc = 0;
+  LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+  if (argv && argc >= 3 && std::wstring(argv[1]) == L"--silent") {
+    Job job{argv[2], inst::autostart_enabled(), std::filesystem::exists(inst::desktop_link()), -1, nullptr};
+    LocalFree(argv);
+    bool ok = do_install(job);
+    return ok ? 0 : 1;
+  }
+  if (argv) LocalFree(argv);
   WNDCLASSW wc{};
   wc.lpfnWndProc = proc;
   wc.hInstance = inst;
