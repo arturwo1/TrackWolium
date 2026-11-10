@@ -102,3 +102,6 @@ Installer: knows the installed version (`version.txt`) and offers Reinstall when
 
 Activity graph: the core also stores a 5-minute timeline (`timeline` table, visible states only). The UI draws focus time per 15 minutes as a smooth spline with a tooltip; clicking an app row filters the graph to that app.
 Windows integration: the installer registers `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DTSys.Wolium` (removed by `uninstall.exe`). Setup has three states: Install, Update (installed version older), Reinstall (same version), plus an Uninstall button when installed.
+
+Graph interaction: drag to pan, double-click to reset, Ctrl+wheel zooms time, Alt+wheel zooms the value axis, horizontal wheel/Shift+wheel pans. Tooltips live in an overlay, stay open under the pointer, and clicking an app opens its session list (5-minute resolution). App icons are read from the exe path stored in the `apps` table.
+Versions: CI builds as `<tag>.<run number>`, so every build is newer than the previous one and the installer offers Update.

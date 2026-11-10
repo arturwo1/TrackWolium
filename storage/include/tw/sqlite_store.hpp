@@ -18,7 +18,7 @@ public:
   std::vector<Interval> load_day(const std::string& day) override;
   std::vector<std::string> days(int limit) override;
   bool add_timeline(const std::string& day, const std::vector<SlotEntry>& entries) override;
-  bool set_names(const std::vector<std::pair<std::string, std::string>>& names) override;
+  bool set_names(const std::vector<AppMeta>& names) override;
   std::string last_error() const;
 
 private:

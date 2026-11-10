@@ -48,11 +48,12 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
       "ms INTEGER NOT NULL,"
       "PRIMARY KEY(day, app, state)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app, state)) WITHOUT ROWID;"
-      "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL) WITHOUT ROWID;";
+      "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;";
   if (!exec(db, schema, error)) {
     sqlite3_close(db);
     return nullptr;
   }
+  sqlite3_exec(db, "ALTER TABLE apps ADD COLUMN path TEXT NOT NULL DEFAULT ''", nullptr, nullptr, nullptr);
   return std::unique_ptr<SqliteStore>(new SqliteStore(db));
 }
 
@@ -129,19 +130,23 @@ bool SqliteStore::add_timeline(const std::string& day, const std::vector<SlotEnt
   return exec(db_, "COMMIT", &last_error_);
 }
 
-bool SqliteStore::set_names(const std::vector<std::pair<std::string, std::string>>& names) {
+bool SqliteStore::set_names(const std::vector<AppMeta>& names) {
   if (names.empty()) return true;
   std::lock_guard<std::mutex> lock(mtx_);
   if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
   sqlite3_stmt* st = nullptr;
-  if (sqlite3_prepare_v2(db_, "INSERT INTO apps(app, name) VALUES(?1, ?2) ON CONFLICT(app) DO UPDATE SET name = excluded.name", -1, &st, nullptr) != SQLITE_OK) {
+  const char* sql =
+      "INSERT INTO apps(app, name, path) VALUES(?1, ?2, ?3) "
+      "ON CONFLICT(app) DO UPDATE SET name = excluded.name, path = excluded.path";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
     last_error_ = sqlite3_errmsg(db_);
     exec(db_, "ROLLBACK", nullptr);
     return false;
   }
-  for (const auto& kv : names) {
-    sqlite3_bind_text(st, 1, kv.first.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 2, kv.second.c_str(), -1, SQLITE_TRANSIENT);
+  for (const auto& m : names) {
+    sqlite3_bind_text(st, 1, m.app.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, m.name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, m.path.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(st);
     sqlite3_reset(st);
   }

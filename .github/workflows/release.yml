@@ -20,7 +20,8 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}".TrimStart('v')
-          if ($v -notmatch '^\d') { $v = '0.0.0' }
+          if ($v -notmatch '^\d') { $v = '0.1.0' }
+          $v = "$v.${{ github.run_number }}"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DTW_VERSION=$v"
           cmake --build build --config Release --target trackwolium_guard trackwolium_core wolium_setup wolium_uninstall tw_tests
           ctest --test-dir build -C Release --output-on-failure

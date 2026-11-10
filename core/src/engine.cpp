@@ -96,7 +96,8 @@ void Engine::step(TimePoint now) {
     for (const auto& sm : samples) {
       if (known_.insert(sm.app).second) {
         std::string n = probe_->display_name(sm.app);
-        if (!n.empty()) new_names_.emplace_back(sm.app, n);
+        std::string path = probe_->exe_path(sm.app);
+        if (!n.empty() || !path.empty()) new_names_.push_back({sm.app, n, path});
       }
     }
   }

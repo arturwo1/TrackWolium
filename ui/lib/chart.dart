@@ -1,45 +1,121 @@
+import 'dart:async';
+import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'data.dart';
 import 'l10n.dart';
 import 'theme.dart';
 
-const _bucketSlots = 3;
-const _bucketCount = 288 ~/ _bucketSlots;
-const _bucketMs = _bucketSlots * 5 * 60 * 1000;
+enum Metric { focused, open, minimized, visible }
+
+String metricLabel(Metric m) {
+  switch (m) {
+    case Metric.focused:
+      return tr('focused');
+    case Metric.open:
+      return tr('open');
+    case Metric.minimized:
+      return tr('minimized');
+    case Metric.visible:
+      return tr('visibleAll');
+  }
+}
+
+int metricOf(List<int> v, Metric m) {
+  switch (m) {
+    case Metric.focused:
+      return v[0];
+    case Metric.open:
+      return v[1];
+    case Metric.minimized:
+      return v[2];
+    case Metric.visible:
+      return v[0] + v[1] + v[2];
+  }
+}
+
+const _daySlots = 288;
+const _minSpan = 12.0;
+const _left = 42.0;
+const _right = 10.0;
+const _top = 8.0;
+const _bottom = 22.0;
+const _tipWidth = 250.0;
+const _detailWidth = 236.0;
 
 class Bucket {
   final Map<String, List<int>> apps = {};
   int value = 0;
 }
 
-List<Bucket> buildBuckets(List<Slot> slots, String? only) {
-  final list = List.generate(_bucketCount, (_) => Bucket());
-  for (final s in slots) {
-    final i = (s.slot ~/ _bucketSlots).clamp(0, _bucketCount - 1);
-    list[i].apps.putIfAbsent(s.app, () => [0, 0, 0])[s.state.clamp(0, 2)] += s.ms;
-  }
-  for (final b in list) {
-    if (only != null) {
-      b.value = b.apps[only]?[0] ?? 0;
-    } else {
-      b.value = b.apps.values.fold(0, (a, v) => a + v[0]);
-    }
-  }
-  return list;
+class Session {
+  Session(this.start, this.end, this.ms);
+
+  final int start;
+  final int end;
+  final int ms;
 }
 
-String _hm(int bucket) {
-  final m = bucket * _bucketSlots * 5;
+String clock(int slot) {
+  final m = slot * 5;
   String two(int v) => v.toString().padLeft(2, '0');
   return '${two(m ~/ 60 % 24)}:${two(m % 60)}';
 }
 
+List<Session> sessionsOf(List<Slot> slots, String app, Metric metric) {
+  final per = <int, List<int>>{};
+  for (final s in slots) {
+    if (s.app != app) continue;
+    per.putIfAbsent(s.slot, () => [0, 0, 0])[s.state.clamp(0, 2).toInt()] += s.ms;
+  }
+  final keys = per.keys.toList()..sort();
+  final out = <Session>[];
+  for (final k in keys) {
+    final v = metricOf(per[k]!, metric);
+    if (v <= 0) continue;
+    if (out.isNotEmpty && out.last.end == k - 1) {
+      final prev = out.last;
+      out[out.length - 1] = Session(prev.start, k, prev.ms + v);
+    } else {
+      out.add(Session(k, k, v));
+    }
+  }
+  return out;
+}
+
+class _Tip {
+  const _Tip({required this.visible, required this.bucket, required this.anchor, this.detail});
+
+  final bool visible;
+  final int bucket;
+  final Offset anchor;
+  final String? detail;
+
+  _Tip copyWith({bool? visible, int? bucket, Offset? anchor, String? detail, bool clearDetail = false}) => _Tip(
+        visible: visible ?? this.visible,
+        bucket: bucket ?? this.bucket,
+        anchor: anchor ?? this.anchor,
+        detail: clearDetail ? null : (detail ?? this.detail),
+      );
+}
+
 class ActivityChart extends StatefulWidget {
-  const ActivityChart({super.key, required this.slots, required this.only, required this.title, required this.height});
+  const ActivityChart({
+    super.key,
+    required this.slots,
+    required this.only,
+    required this.metric,
+    required this.title,
+    required this.icon,
+    required this.height,
+  });
 
   final List<Slot> slots;
   final String? only;
+  final Metric metric;
   final String Function(String app) title;
+  final Widget Function(String app, double size) icon;
   final double height;
 
   @override
@@ -47,174 +123,492 @@ class ActivityChart extends StatefulWidget {
 }
 
 class _ActivityChartState extends State<ActivityChart> {
-  int? hover;
+  final key = GlobalKey();
+  final tip = ValueNotifier<_Tip?>(null);
+  OverlayEntry? entry;
+  Timer? hideTimer;
+  Timer? removeTimer;
+  String? lastDetail;
 
-  void pick(double dx, double width) {
-    final i = ((dx / width) * (_bucketCount - 1)).round().clamp(0, _bucketCount - 1);
-    if (i != hover) setState(() => hover = i);
+  double vx0 = 0;
+  double vx1 = _daySlots.toDouble();
+  double yBottom = 0;
+  double yZoom = 1;
+  double lastScale = 1;
+
+  List<Bucket> buckets = [];
+  int group = 3;
+  int top = 60000;
+  double plotW = 1;
+  double plotH = 1;
+
+  double get span => vx1 - vx0;
+  double get ySpan => top / yZoom;
+
+  @override
+  void dispose() {
+    hideTimer?.cancel();
+    removeTimer?.cancel();
+    entry?.remove();
+    entry = null;
+    tip.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant ActivityChart old) {
+    super.didUpdateWidget(old);
+    entry?.markNeedsBuild();
+  }
+
+  void rebuildData() {
+    group = span > 144 ? 3 : 1;
+    final count = (_daySlots / group).ceil();
+    final list = List.generate(count, (_) => Bucket());
+    for (final s in widget.slots) {
+      final i = (s.slot ~/ group).clamp(0, count - 1).toInt();
+      list[i].apps.putIfAbsent(s.app, () => [0, 0, 0])[s.state.clamp(0, 2).toInt()] += s.ms;
+    }
+    var peak = 0;
+    for (final b in list) {
+      b.value = widget.only != null
+          ? (b.apps[widget.only] == null ? 0 : metricOf(b.apps[widget.only]!, widget.metric))
+          : b.apps.values.fold(0, (a, v) => a + metricOf(v, widget.metric));
+      if (b.value > peak) peak = b.value;
+    }
+    buckets = list;
+    top = peak < 60000 ? 60000 : peak;
+    final maxBottom = math.max(0.0, top - ySpan);
+    if (yBottom > maxBottom) yBottom = maxBottom;
+  }
+
+  double slotCenter(int i) => i * group + (group - 1) / 2.0;
+
+  double xOf(double slot) => _left + (slot - vx0) / span * plotW;
+
+  double yOf(double value) => _top + plotH * (1 - (value - yBottom) / ySpan);
+
+  void clampView() {
+    final s = span.clamp(_minSpan, _daySlots.toDouble()).toDouble();
+    var a = vx0;
+    if (a < 0) a = 0;
+    if (a + s > _daySlots) a = _daySlots - s;
+    vx0 = a;
+    vx1 = a + s;
+    final maxBottom = math.max(0.0, top - top / yZoom);
+    yBottom = yBottom.clamp(0.0, maxBottom).toDouble();
+  }
+
+  void zoomX(double factor, double focalSlot) {
+    final s = (span / factor).clamp(_minSpan, _daySlots.toDouble()).toDouble();
+    final ratio = (focalSlot - vx0) / span;
+    vx0 = focalSlot - ratio * s;
+    vx1 = vx0 + s;
+    clampView();
+  }
+
+  int? bucketAt(double dx) {
+    if (buckets.isEmpty) return null;
+    final slot = vx0 + (dx - _left) / plotW * span;
+    final i = ((slot - (group - 1) / 2.0) / group).round();
+    return i.clamp(0, buckets.length - 1).toInt();
+  }
+
+  void show(double dx) {
+    final i = bucketAt(dx);
+    if (i == null) return;
+    hideTimer?.cancel();
+    removeTimer?.cancel();
+    final box = key.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final p = box.localToGlobal(Offset(xOf(slotCenter(i)), yOf(buckets[i].value.toDouble()).clamp(_top, _top + plotH).toDouble()));
+    final overlay = Overlay.of(context);
+    if (entry == null) {
+      entry = OverlayEntry(builder: buildOverlay);
+      overlay.insert(entry!);
+    }
+    final current = tip.value;
+    tip.value = (current ?? _Tip(visible: true, bucket: i, anchor: p)).copyWith(visible: true, bucket: i, anchor: p);
+  }
+
+  void scheduleHide() {
+    hideTimer?.cancel();
+    hideTimer = Timer(const Duration(milliseconds: 220), () {
+      final t = tip.value;
+      if (t == null) return;
+      tip.value = t.copyWith(visible: false, clearDetail: true);
+      removeTimer?.cancel();
+      removeTimer = Timer(const Duration(milliseconds: 260), () {
+        entry?.remove();
+        entry = null;
+        tip.value = null;
+      });
+    });
+  }
+
+  void cancelHide() {
+    hideTimer?.cancel();
+    removeTimer?.cancel();
+    final t = tip.value;
+    if (t != null && !t.visible) tip.value = t.copyWith(visible: true);
+  }
+
+  void onSignal(PointerSignalEvent e) {
+    if (e is! PointerScrollEvent) return;
+    final kb = HardwareKeyboard.instance;
+    final horizontal = e.scrollDelta.dx != 0 || kb.isShiftPressed;
+    if (!kb.isControlPressed && !kb.isAltPressed && !horizontal) return;
+    GestureBinding.instance.pointerSignalResolver.register(e, (_) {
+      final focal = vx0 + (e.localPosition.dx - _left) / plotW * span;
+      setState(() {
+        if (kb.isControlPressed) {
+          zoomX(e.scrollDelta.dy < 0 ? 1.2 : 1 / 1.2, focal);
+        } else if (kb.isAltPressed) {
+          yZoom = (yZoom * (e.scrollDelta.dy < 0 ? 1.25 : 0.8)).clamp(1.0, 20.0).toDouble();
+          clampView();
+        } else {
+          final d = e.scrollDelta.dx != 0 ? e.scrollDelta.dx : e.scrollDelta.dy;
+          vx0 += d / plotW * span;
+          vx1 = vx0 + span;
+          clampView();
+        }
+      });
+      show(e.localPosition.dx);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final buckets = buildBuckets(widget.slots, widget.only);
-    final peak = buckets.fold<int>(0, (a, b) => b.value > a ? b.value : a);
-    final top = peak < 60000 ? 60000 : peak;
     return LayoutBuilder(builder: (context, c) {
-      const left = 38.0;
-      const bottom = 22.0;
-      final plotW = c.maxWidth - left;
-      return SizedBox(
-        height: widget.height,
-        width: c.maxWidth,
+      plotW = math.max(1.0, c.maxWidth - _left - _right);
+      plotH = math.max(1.0, widget.height - _top - _bottom);
+      rebuildData();
+      return Listener(
+        onPointerSignal: onSignal,
         child: MouseRegion(
-          onExit: (_) => setState(() => hover = null),
-          onHover: (e) => pick(e.localPosition.dx - left, plotW),
+          onHover: (e) => show(e.localPosition.dx),
+          onExit: (_) => scheduleHide(),
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: (d) => pick(d.localPosition.dx - left, plotW),
-            onHorizontalDragUpdate: (d) => pick(d.localPosition.dx - left, plotW),
-            child: Stack(clipBehavior: Clip.none, children: [
-              Positioned.fill(child: CustomPaint(painter: _ChartPainter(buckets, top, hover, left, bottom))),
-              if (hover != null) _tooltip(buckets[hover!], hover!, c.maxWidth, plotW, left, bottom, top),
-            ]),
+            onTapDown: (d) => show(d.localPosition.dx),
+            onDoubleTap: () => setState(() {
+              vx0 = 0;
+              vx1 = _daySlots.toDouble();
+              yZoom = 1;
+              yBottom = 0;
+            }),
+            onScaleStart: (_) => lastScale = 1,
+            onScaleUpdate: (d) {
+              setState(() {
+                if (d.scale != 1) {
+                  zoomX(d.scale / lastScale, vx0 + (d.localFocalPoint.dx - _left) / plotW * span);
+                  lastScale = d.scale;
+                }
+                vx0 -= d.focalPointDelta.dx / plotW * span;
+                vx1 = vx0 + span;
+                yBottom += d.focalPointDelta.dy / plotH * ySpan;
+                clampView();
+              });
+              show(d.localFocalPoint.dx);
+            },
+            child: SizedBox(
+              key: key,
+              width: c.maxWidth,
+              height: widget.height,
+              child: ClipRect(
+                child: ValueListenableBuilder<_Tip?>(
+                  valueListenable: tip,
+                  builder: (context, t, _) => CustomPaint(
+                    painter: _ChartPainter(
+                      buckets: buckets,
+                      group: group,
+                      vx0: vx0,
+                      vx1: vx1,
+                      yBottom: yBottom,
+                      ySpan: ySpan,
+                      hover: t != null && t.visible ? t.bucket : null,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       );
     });
   }
 
-  Widget _tooltip(Bucket b, int i, double width, double plotW, double left, double bottom, int top) {
-    final x = left + plotW * i / (_bucketCount - 1);
-    final plotH = widget.height - bottom - 8;
-    final y = 8 + plotH * (1 - b.value / top);
-    final entries = b.apps.entries.toList()..sort((a, c) => c.value[0].compareTo(a.value[0]) != 0 ? c.value[0].compareTo(a.value[0]) : (c.value[1] + c.value[2]).compareTo(a.value[1] + a.value[2]));
-    const boxW = 220.0;
-    var dx = x - boxW / 2;
-    if (dx < 0) dx = 0;
-    if (dx + boxW > width) dx = width - boxW;
-    final rows = entries.take(5).toList();
-    final h = 56.0 + rows.length * 36;
-    var dy = y - h - 10;
-    if (dy < 0) dy = y + 14;
-    return Positioned(
-      left: dx,
-      top: dy,
-      width: boxW,
-      child: IgnorePointer(
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: cBg,
-            borderRadius: BorderRadius.circular(rSm),
-            border: Border.fromBorderSide(line),
-            boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 12)],
-          ),
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('${_hm(i)} - ${_hm(i + 1)}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 2),
-            Text(formatMs(b.value), style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w900, fontSize: 16)),
-            if (rows.isEmpty)
-              Padding(padding: const EdgeInsets.only(top: 4), child: Text(tr('noData'), style: const TextStyle(color: cMuted, fontSize: 12))),
-            for (final e in rows)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(widget.title(e.key), overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                  Text(
-                    [
-                      if (e.value[0] > 0) '${tr('focused')} ${formatMs(e.value[0])}',
-                      if (e.value[1] > 0) '${tr('open')} ${formatMs(e.value[1])}',
-                      if (e.value[2] > 0) '${tr('minimized')} ${formatMs(e.value[2])}',
-                    ].join(' · '),
-                    style: const TextStyle(fontSize: 11, color: cMuted),
-                  ),
-                ]),
+  Widget buildOverlay(BuildContext overlayContext) {
+    return ValueListenableBuilder<_Tip?>(
+      valueListenable: tip,
+      builder: (context, t, _) {
+        if (t == null || t.bucket >= buckets.length) return const SizedBox.shrink();
+        final screen = MediaQuery.of(context).size;
+        final b = buckets[t.bucket];
+        final rows = b.apps.entries.where((e) => metricOf(e.value, widget.metric) > 0).toList()
+          ..sort((a, c) => metricOf(c.value, widget.metric).compareTo(metricOf(a.value, widget.metric)));
+        final visibleRows = math.min(rows.length, 6);
+        final height = 70.0 + math.max(1, visibleRows) * 40.0;
+        double left = t.anchor.dx - _tipWidth / 2;
+        left = left.clamp(8.0, math.max(8.0, screen.width - _tipWidth - 8)).toDouble();
+        double topPos = t.anchor.dy - height - 14;
+        if (topPos < 8) topPos = t.anchor.dy + 18;
+        topPos = topPos.clamp(8.0, math.max(8.0, screen.height - height - 8)).toDouble();
+        var detailLeft = left + _tipWidth + 8;
+        if (detailLeft + _detailWidth > screen.width - 8) detailLeft = left - _detailWidth - 8;
+        if (detailLeft < 8) detailLeft = 8;
+        if (t.detail != null) lastDetail = t.detail;
+        final shownDetail = lastDetail;
+
+        Widget animated(Widget child, bool on) => TweenAnimationBuilder<double>(
+              tween: Tween<double>(begin: 0, end: on ? 1 : 0),
+              duration: const Duration(milliseconds: 170),
+              curve: Curves.easeOutCubic,
+              builder: (context, v, child) => Opacity(
+                opacity: v,
+                child: Transform.translate(
+                  offset: Offset(0, (1 - v) * 6),
+                  child: Transform.scale(scale: 0.97 + 0.03 * v, alignment: Alignment.bottomCenter, child: child),
+                ),
               ),
+              child: child,
+            );
+
+        return Stack(children: [
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            left: left,
+            top: topPos,
+            width: _tipWidth,
+            child: MouseRegion(
+              onEnter: (_) => cancelHide(),
+              onExit: (_) => scheduleHide(),
+              child: animated(_mainTip(b, t, rows), t.visible),
+            ),
+          ),
+          if (shownDetail != null)
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              left: detailLeft,
+              top: topPos,
+              width: _detailWidth,
+              child: MouseRegion(
+                onEnter: (_) => cancelHide(),
+                onExit: (_) => scheduleHide(),
+                child: IgnorePointer(ignoring: t.detail == null, child: animated(_detailTip(shownDetail), t.visible && t.detail != null)),
+              ),
+            ),
+        ]);
+      },
+    );
+  }
+
+  BoxDecoration get _tipDecoration => BoxDecoration(
+        color: cBg,
+        borderRadius: BorderRadius.circular(rSm),
+        border: Border.fromBorderSide(line),
+        boxShadow: const [BoxShadow(color: Color(0x80000000), blurRadius: 16, offset: Offset(0, 4))],
+      );
+
+  Widget _mainTip(Bucket b, _Tip t, List<MapEntry<String, List<int>>> rows) {
+    return Material(
+      type: MaterialType.transparency,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: _tipDecoration,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${clock(t.bucket * group)} - ${clock((t.bucket + 1) * group)}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 2),
+          Text('${metricLabel(widget.metric)}: ${formatMs(b.value)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w900, fontSize: 15)),
+          const SizedBox(height: 6),
+          if (rows.isEmpty)
+            Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(tr('noData'), style: const TextStyle(color: cMuted, fontSize: 12)))
+          else
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240),
+              child: ListView(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final e in rows)
+                    HoverBox(
+                      onTap: () {
+                        final cur = tip.value;
+                        if (cur != null) tip.value = cur.detail == e.key ? cur.copyWith(clearDetail: true) : cur.copyWith(detail: e.key);
+                      },
+                      builder: (hovered) => Container(
+                        height: 36,
+                        margin: const EdgeInsets.only(bottom: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        decoration: BoxDecoration(
+                          color: t.detail == e.key ? cSoft : (hovered ? cSoft.withValues(alpha: 0.5) : Colors.transparent),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(children: [
+                          widget.icon(e.key, 20),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(widget.title(e.key), overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                          Text(formatMs(metricOf(e.value, widget.metric)), style: const TextStyle(fontSize: 12, color: cMuted)),
+                        ]),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _detailTip(String app) {
+    final sessions = sessionsOf(widget.slots, app, widget.metric);
+    final total = sessions.fold<int>(0, (a, s) => a + s.ms);
+    return Material(
+      type: MaterialType.transparency,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: _tipDecoration,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            widget.icon(app, 22),
+            const SizedBox(width: 8),
+            Expanded(child: Text(widget.title(app), overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800))),
           ]),
-        ),
+          const SizedBox(height: 4),
+          Text('${metricLabel(widget.metric)}: ${formatMs(total)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800, fontSize: 13)),
+          const SizedBox(height: 6),
+          Text(tr('sessions'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 220),
+            child: ListView(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              children: [
+                for (final s in sessions)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(children: [
+                      Expanded(child: Text('${clock(s.start)} - ${clock(s.end + 1)}', style: const TextStyle(fontSize: 13))),
+                      Text(formatMs(s.ms), style: const TextStyle(fontSize: 12, color: cMuted)),
+                    ]),
+                  ),
+              ],
+            ),
+          ),
+        ]),
       ),
     );
   }
 }
 
 class _ChartPainter extends CustomPainter {
-  _ChartPainter(this.buckets, this.top, this.hover, this.left, this.bottom);
+  _ChartPainter({required this.buckets, required this.group, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover});
 
   final List<Bucket> buckets;
-  final int top;
+  final int group;
+  final double vx0;
+  final double vx1;
+  final double yBottom;
+  final double ySpan;
   final int? hover;
-  final double left;
-  final double bottom;
-
-  Offset point(int i, Size size) {
-    final w = size.width - left;
-    final h = size.height - bottom - 8;
-    return Offset(left + w * i / (_bucketCount - 1), 8 + h * (1 - buckets[i].value / top));
-  }
 
   @override
   void paint(Canvas canvas, Size size) {
+    final plotW = size.width - _left - _right;
+    final plotH = size.height - _top - _bottom;
+    final span = vx1 - vx0;
+    double xOf(double slot) => _left + (slot - vx0) / span * plotW;
+    double yOf(double v) => _top + plotH * (1 - (v - yBottom) / ySpan);
+    double center(int i) => i * group + (group - 1) / 2.0;
+
     final grid = Paint()
       ..color = cBorder
       ..strokeWidth = 1;
-    final label = TextStyle(color: cMuted, fontSize: 11);
-    final h = size.height - bottom - 8;
+    const label = TextStyle(color: cMuted, fontSize: 11);
     for (var k = 0; k <= 2; k++) {
-      final y = 8 + h * k / 2;
-      canvas.drawLine(Offset(left, y), Offset(size.width, y), grid);
-      final tp = TextPainter(text: TextSpan(text: formatMs((top * (2 - k) / 2).round()), style: label), textDirection: TextDirection.ltr)..layout();
-      tp.paint(canvas, Offset(left - tp.width - 6, y - tp.height / 2));
+      final y = _top + plotH * k / 2;
+      canvas.drawLine(Offset(_left, y), Offset(size.width - _right, y), grid);
+      final v = yBottom + ySpan * (2 - k) / 2;
+      final tp = TextPainter(text: TextSpan(text: formatMs(v.round()), style: label), textDirection: TextDirection.ltr)..layout();
+      tp.paint(canvas, Offset(_left - tp.width - 6, y - tp.height / 2));
     }
-    for (final hour in [0, 6, 12, 18, 24]) {
-      final x = left + (size.width - left) * hour / 24;
-      final tp = TextPainter(text: TextSpan(text: '${hour.toString().padLeft(2, '0')}:00', style: label), textDirection: TextDirection.ltr)..layout();
+    final step = span > 144 ? 72 : (span > 72 ? 36 : (span > 36 ? 12 : 6));
+    final first = (vx0 / step).ceil() * step;
+    for (var s = first; s <= vx1; s += step) {
+      final x = xOf(s.toDouble());
+      canvas.drawLine(Offset(x, _top), Offset(x, _top + plotH), grid..color = cBorder.withValues(alpha: 0.5));
+      final tp = TextPainter(text: TextSpan(text: s >= _daySlots ? '24:00' : clock(s), style: label), textDirection: TextDirection.ltr)..layout();
       var dx = x - tp.width / 2;
       if (dx + tp.width > size.width) dx = size.width - tp.width;
-      if (dx < left - 10) dx = left - 10;
+      if (dx < _left - 10) dx = _left - 10;
       tp.paint(canvas, Offset(dx, size.height - tp.height));
     }
+    if (buckets.isEmpty) return;
 
-    final pts = [for (var i = 0; i < buckets.length; i++) point(i, size)];
-    final baseY = 8 + h;
-    final path = Path()..moveTo(pts.first.dx, pts.first.dy);
-    for (var i = 0; i < pts.length - 1; i++) {
-      final p0 = i == 0 ? pts[i] : pts[i - 1];
-      final p1 = pts[i];
-      final p2 = pts[i + 1];
-      final p3 = i + 2 < pts.length ? pts[i + 2] : p2;
-      double clampY(double y) => y.clamp(8.0, baseY);
-      path.cubicTo(
-        p1.dx + (p2.dx - p0.dx) / 6,
-        clampY(p1.dy + (p2.dy - p0.dy) / 6),
-        p2.dx - (p3.dx - p1.dx) / 6,
-        clampY(p2.dy - (p3.dy - p1.dy) / 6),
-        p2.dx,
-        p2.dy,
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(_left, 0, plotW, _top + plotH + 1));
+    var lo = 0;
+    var hi = buckets.length - 1;
+    for (var i = 0; i < buckets.length; i++) {
+      if (xOf(center(i)) < _left) lo = i;
+    }
+    for (var i = buckets.length - 1; i >= 0; i--) {
+      if (xOf(center(i)) > _left + plotW) hi = i;
+    }
+    final pts = [for (var i = lo; i <= hi; i++) Offset(xOf(center(i)), yOf(buckets[i].value.toDouble()))];
+    final baseY = yOf(0);
+    if (pts.length >= 2) {
+      final path = Path()..moveTo(pts.first.dx, pts.first.dy);
+      final minY = _top;
+      final maxY = math.max(baseY, _top + plotH);
+      for (var i = 0; i < pts.length - 1; i++) {
+        final p0 = i == 0 ? pts[i] : pts[i - 1];
+        final p1 = pts[i];
+        final p2 = pts[i + 1];
+        final p3 = i + 2 < pts.length ? pts[i + 2] : p2;
+        double cy(double y) => y.clamp(minY - 200, maxY).toDouble();
+        final lowest = math.max(p1.dy, p2.dy);
+        final highest = math.min(p1.dy, p2.dy);
+        double bound(double y) => y.clamp(highest, lowest).toDouble();
+        path.cubicTo(
+          p1.dx + (p2.dx - p0.dx) / 6,
+          bound(cy(p1.dy + (p2.dy - p0.dy) / 6)),
+          p2.dx - (p3.dx - p1.dx) / 6,
+          bound(cy(p2.dy - (p3.dy - p1.dy) / 6)),
+          p2.dx,
+          p2.dy,
+        );
+      }
+      final fill = Path.from(path)
+        ..lineTo(pts.last.dx, baseY)
+        ..lineTo(pts.first.dx, baseY)
+        ..close();
+      canvas.drawPath(
+        fill,
+        Paint()
+          ..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [cPrimary.withValues(alpha: 0.28), cPrimary.withValues(alpha: 0)])
+              .createShader(Rect.fromLTWH(_left, _top, plotW, plotH)),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2
+          ..strokeJoin = StrokeJoin.round
+          ..color = cPrimary,
       );
     }
-    final fill = Path.from(path)
-      ..lineTo(pts.last.dx, baseY)
-      ..lineTo(pts.first.dx, baseY)
-      ..close();
-    canvas.drawPath(
-      fill,
-      Paint()
-        ..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [cPrimary.withValues(alpha: 0.28), cPrimary.withValues(alpha: 0)])
-            .createShader(Rect.fromLTWH(left, 8, size.width - left, h)),
-    );
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.2
-        ..strokeJoin = StrokeJoin.round
-        ..color = cPrimary,
-    );
-    if (hover != null) {
-      final p = pts[hover!];
-      canvas.drawLine(Offset(p.dx, 8), Offset(p.dx, baseY), Paint()
-        ..color = cPrimary.withValues(alpha: 0.35)
-        ..strokeWidth = 1);
+    if (hover != null && hover! < buckets.length) {
+      final p = Offset(xOf(center(hover!)), yOf(buckets[hover!].value.toDouble()));
+      canvas.drawLine(
+          Offset(p.dx, _top),
+          Offset(p.dx, _top + plotH),
+          Paint()
+            ..color = cPrimary.withValues(alpha: 0.35)
+            ..strokeWidth = 1);
       canvas.drawCircle(p, 5, Paint()..color = cBg);
       canvas.drawCircle(
           p,
@@ -224,6 +618,7 @@ class _ChartPainter extends CustomPainter {
             ..strokeWidth = 2.2
             ..color = cPrimary);
     }
+    canvas.restore();
   }
 
   @override

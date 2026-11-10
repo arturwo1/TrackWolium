@@ -47,7 +47,7 @@ private:
   std::function<int()> slot_fn_;
   std::map<std::tuple<int, std::string, int>, long long> pending_slots_;
   std::set<std::string> known_;
-  std::vector<std::pair<std::string, std::string>> new_names_;
+  std::vector<AppMeta> new_names_;
   TimePoint last_flush_{};
   bool flush_started_ = false;
 };

@@ -8,6 +8,7 @@ class AppUsage {
 
   final String app;
   String name;
+  String path = '';
   int? now;
 
   String get title => name.isNotEmpty ? name : prettyApp(app);
@@ -71,6 +72,13 @@ void saveLanguage(String code) {
   } catch (_) {}
 }
 
+class AppMeta {
+  AppMeta(this.name, this.path);
+
+  final String name;
+  final String path;
+}
+
 class Slot {
   Slot(this.slot, this.app, this.state, this.ms);
 
@@ -113,17 +121,15 @@ class Usage {
     final db = _open();
     if (db == null) return [];
     final map = <String, AppUsage>{};
-    final names = <String, String>{};
-    try {
-      for (final r in db.select('SELECT app, name FROM apps')) {
-        names[r['app'] as String] = r['name'] as String;
-      }
-    } catch (_) {}
+    final names = this.names();
     try {
       for (final r in db.select('SELECT app, state, ms FROM usage WHERE day = ?', [day])) {
         final state = r['state'] as int;
         if (state < 0 || state > 3) continue;
-        map.putIfAbsent(r['app'] as String, () => AppUsage(r['app'] as String, names[r['app'] as String] ?? '')).ms[state] += r['ms'] as int;
+        map.putIfAbsent(r['app'] as String, () {
+          final m = names[r['app'] as String];
+          return AppUsage(r['app'] as String, m?.name ?? '')..path = m?.path ?? '';
+        }).ms[state] += r['ms'] as int;
       }
     } catch (_) {
       return [];
@@ -149,15 +155,21 @@ class Usage {
     }
   }
 
-  Map<String, String> names() {
+  Map<String, AppMeta> names() {
     final db = _open();
-    final out = <String, String>{};
+    final out = <String, AppMeta>{};
     if (db == null) return out;
     try {
-      for (final r in db.select('SELECT app, name FROM apps')) {
-        out[r['app'] as String] = r['name'] as String;
+      for (final r in db.select('SELECT app, name, path FROM apps')) {
+        out[r['app'] as String] = AppMeta(r['name'] as String, r['path'] as String);
       }
-    } catch (_) {}
+    } catch (_) {
+      try {
+        for (final r in db.select('SELECT app, name FROM apps')) {
+          out[r['app'] as String] = AppMeta(r['name'] as String, '');
+        }
+      } catch (_) {}
+    }
     return out;
   }
 
@@ -171,7 +183,8 @@ class Usage {
       final p = line.split(' ');
       if (p.length < 8) continue;
       final u = AppUsage(p.sublist(7).join(' '), '');
-      u.name = names[u.app] ?? '';
+      u.name = names[u.app]?.name ?? '';
+      u.path = names[u.app]?.path ?? '';
       if (p[1] == '1') u.now = int.tryParse(p[2]);
       for (var i = 0; i < 4; i++) {
         u.ms[i] = int.tryParse(p[3 + i]) ?? 0;

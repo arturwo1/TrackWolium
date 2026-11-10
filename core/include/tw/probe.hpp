@@ -12,6 +12,7 @@ public:
   virtual std::vector<AppSample> sample() = 0;
   virtual bool reports_windows() const { return true; }
   virtual std::string display_name(const std::string&) { return {}; }
+  virtual std::string exe_path(const std::string&) { return {}; }
 };
 
 class PushProbe : public IProbe {

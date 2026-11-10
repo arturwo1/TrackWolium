@@ -6,6 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'chart.dart';
 import 'data.dart';
+import 'icons.dart';
 import 'l10n.dart';
 import 'mark.dart';
 import 'theme.dart';
@@ -176,7 +177,8 @@ class _ShellState extends State<Shell> {
   List<Slot> slots = [];
   String? slotsFor;
   String? only;
-  Map<String, String> names = {};
+  Map<String, AppMeta> names = {};
+  Metric metric = Metric.focused;
 
   @override
   void initState() {
@@ -322,8 +324,21 @@ class _ShellState extends State<Shell> {
   }
 
   String titleOf(String app) {
-    final n = names[app];
+    final n = names[app]?.name;
     return n != null && n.isNotEmpty ? n : prettyApp(app);
+  }
+
+  Widget iconOf(String app, double size) => AppIcon(title: titleOf(app), path: names[app]?.path ?? '', size: size);
+
+  int metricValue(AppUsage r) => metricOf(r.ms, metric);
+
+  List<AppUsage> sortedRows() {
+    final list = List<AppUsage>.from(rows);
+    list.sort((a, b) {
+      final c = metricValue(b).compareTo(metricValue(a));
+      return c != 0 ? c : b.total.compareTo(a.total);
+    });
+    return list;
   }
 
   void toggleOnly(String app) {
@@ -336,6 +351,11 @@ class _ShellState extends State<Shell> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text(tr('chartTitle'), style: const TextStyle(fontWeight: FontWeight.w800)),
+          SelectBox<Metric>(
+            value: metric,
+            items: [for (final m in Metric.values) DropdownMenuItem(value: m, child: Text(metricLabel(m)))],
+            onChanged: (v) => setState(() => metric = v ?? metric),
+          ),
           if (only != null)
             InkWell(
               onTap: () => setState(() => only = null),
@@ -352,7 +372,7 @@ class _ShellState extends State<Shell> {
             ),
         ]),
         const SizedBox(height: 10),
-        ActivityChart(slots: slots, only: only, title: titleOf, height: narrow ? 180 : 230),
+        ActivityChart(slots: slots, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240),
       ]),
     );
   }
@@ -390,7 +410,7 @@ class _ShellState extends State<Shell> {
           cell(tr('background'), style: head),
           cell(tr('total'), style: head),
         ]),
-        for (final r in rows)
+        for (final r in sortedRows())
           TableRow(
             decoration: const BoxDecoration(border: Border(top: BorderSide(color: cBorder))),
             children: [
@@ -399,7 +419,14 @@ class _ShellState extends State<Shell> {
                 onTap: () => toggleOnly(r.app),
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
-                  child: cell(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null), ellipsis: true),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                    child: Row(children: [
+                      AppIcon(title: r.title, path: r.path, size: 22),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null), overflow: TextOverflow.ellipsis)),
+                    ]),
+                  ),
                 ),
               ),
               if (liveMode) nowCell(r),
@@ -420,7 +447,7 @@ class _ShellState extends State<Shell> {
           ]),
         );
     return Column(children: [
-      for (final r in rows)
+      for (final r in sortedRows())
         GestureDetector(
           onTap: () => toggleOnly(r.app),
           child: Container(
@@ -437,6 +464,8 @@ class _ShellState extends State<Shell> {
                 Container(width: 8, height: 8, decoration: BoxDecoration(color: r.now == null ? cMuted : stateColor(r.now), shape: BoxShape.circle)),
                 const SizedBox(width: 8),
               ],
+              AppIcon(title: r.title, path: r.path, size: 22),
+              const SizedBox(width: 8),
               Expanded(child: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
               Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
             ]),

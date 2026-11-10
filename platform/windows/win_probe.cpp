@@ -140,6 +140,11 @@ public:
     return to_utf8(name);
   }
 
+  std::string exe_path(const std::string& app) override {
+    auto it = path_cache().find(app);
+    return it == path_cache().end() ? std::string() : to_utf8(it->second);
+  }
+
 private:
   bool include_system_;
   std::wstring windows_dir_;
