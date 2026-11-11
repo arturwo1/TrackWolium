@@ -181,7 +181,7 @@ class EllipsisText extends StatelessWidget {
         ..layout(maxWidth: c.maxWidth.isFinite ? c.maxWidth : double.infinity);
       final w = Text(text, style: style, maxLines: 1, overflow: TextOverflow.ellipsis);
       if (!tp.didExceedMaxLines) return w;
-      return Tooltip(message: text, waitDuration: const Duration(milliseconds: 250), child: w);
+      return Tooltip(message: text, triggerMode: TooltipTriggerMode.tap, showDuration: const Duration(seconds: 4), waitDuration: const Duration(milliseconds: 250), child: w);
     });
   }
 }

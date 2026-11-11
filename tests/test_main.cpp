@@ -13,6 +13,8 @@
 #include "tw/i18n.hpp"
 #include "tw/ipc.hpp"
 #include "tw/platform.hpp"
+#include "tw/localapi.hpp"
+#include "tw/rpc.hpp"
 #include "tw/serialize.hpp"
 #include "tw/sqlite_store.hpp"
 
@@ -421,6 +423,61 @@ void test_i18n_complete() {
   tw::i18n::set(0);
 }
 
+std::string rpc_frame(std::uint32_t op, const std::string& json) {
+  std::string f(8, '\0');
+  for (int i = 0; i < 4; ++i) {
+    f[i] = static_cast<char>((op >> (8 * i)) & 0xFF);
+    f[4 + i] = static_cast<char>((json.size() >> (8 * i)) & 0xFF);
+  }
+  return f + json;
+}
+
+void test_rpc_parser() {
+  std::string hs = rpc_frame(0, "{\"v\":1,\"client_id\":\"123\"}");
+  std::string act = rpc_frame(1, "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":5,\"activity\":{\"details\":\"Song \\\"X\\\"\",\"state\":\"by Y\",\"timestamps\":{\"start\":1700000000}}}}");
+  std::string all = hs + act;
+  tw::RpcFrameParser parser;
+  auto a = parser.feed(all.data(), 10);
+  CHECK(a.empty());
+  auto b = parser.feed(all.data() + 10, all.size() - 10);
+  CHECK(b.size() == 2);
+  std::string id;
+  CHECK(tw::extract_client_id(b[0], id) && id == "123");
+  tw::Presence p;
+  CHECK(tw::extract_presence(b[1], p));
+  CHECK(p.details == "Song \"X\"");
+  CHECK(p.state == "by Y");
+  CHECK(p.started == 1700000000);
+  tw::RpcFrame other{1, "{\"cmd\":\"SUBSCRIBE\"}"};
+  CHECK(!tw::extract_presence(other, p));
+}
+
+void test_local_api() {
+  std::string path;
+  CHECK(tw::parse_api_request("GET /v1/current HTTP/1.1\r\nHost: 127.0.0.1:9095\r\n\r\n", 9095, path));
+  CHECK(path == "/v1/current");
+  CHECK(!tw::parse_api_request("GET /v1/current HTTP/1.1\r\nHost: evil.com:9095\r\n\r\n", 9095, path));
+  CHECK(!tw::parse_api_request("POST /v1/current HTTP/1.1\r\nHost: 127.0.0.1:9095\r\n\r\n", 9095, path));
+  tw::Report r;
+  tw::AppRow row;
+  row.app = "a\"b";
+  r.rows.push_back(row);
+  std::string j = tw::current_json(r);
+  CHECK(j.find("\"app\":\"a\\\"b\"") != std::string::npos);
+  CHECK(tw::http_response(200, j).find("Content-Length: " + std::to_string(j.size())) != std::string::npos);
+}
+
+void test_presence_store() {
+  std::string err;
+  auto store = tw::SqliteStore::open(":memory:", &err);
+  CHECK(store != nullptr);
+  if (!store) return;
+  tw::Presence p{"1", "Game", "d", "s", 5};
+  CHECK(store->add_presence(100, {p}));
+  auto got = store->load_presence(0, 200);
+  CHECK(got.size() == 1 && got[0].name == "Game" && got[0].started == 5);
+}
+
 int main() {
   test_accumulates_per_state();
   test_gap_is_ignored();
@@ -443,6 +500,9 @@ int main() {
   test_engine_seeds_from_store();
   test_engine_day_rollover();
   test_sqlite_store();
+  test_rpc_parser();
+  test_local_api();
+  test_presence_store();
 #ifdef _WIN32
   test_ipc_roundtrip();
 #endif

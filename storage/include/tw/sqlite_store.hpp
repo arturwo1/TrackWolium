@@ -3,6 +3,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "tw/rpc.hpp"
 #include "tw/store.hpp"
 
 struct sqlite3;
@@ -19,6 +20,8 @@ public:
   std::vector<std::string> days(int limit) override;
   bool add_timeline(const std::string& day, const std::vector<SlotEntry>& entries) override;
   bool set_names(const std::vector<AppMeta>& names) override;
+  bool add_presence(std::int64_t ts, const std::vector<Presence>& items);
+  std::vector<Presence> load_presence(std::int64_t from_ts, std::int64_t to_ts);
   std::string last_error() const;
 
 private:

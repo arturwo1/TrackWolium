@@ -13,4 +13,4 @@ tw_win_app(trackwolium_guard trackwolium guard_win.cpp guard.rc)
 target_link_libraries(trackwolium_guard PRIVATE tw_platform tw_i18n shell32 user32 gdi32 advapi32)
 
 tw_win_app(trackwolium_core trackwolium-core core_win.cpp core.rc)
-target_link_libraries(trackwolium_core PRIVATE tw_core tw_platform tw_storage tw_ipc tw_i18n shell32 user32 gdi32 advapi32)
+target_link_libraries(trackwolium_core PRIVATE tw_core tw_platform tw_storage tw_ipc tw_i18n shell32 user32 gdi32 advapi32 ws2_32)

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -37,6 +38,9 @@ class WoliumApp extends StatelessWidget {
         title: appName,
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
+        locale: Locale(language.value),
+        supportedLocales: const [Locale('en'), Locale('ru')],
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
         home: const Root(),
       ),
     );
@@ -170,6 +174,8 @@ class _ShellState extends State<Shell> {
   late DateTime from;
   late DateTime to;
   String preset = 'day';
+  String query = '';
+  final searchCtl = TextEditingController();
   List<AppUsage> rows = [];
   Duration? beat;
   bool hasDb = false;
@@ -298,90 +304,93 @@ class _ShellState extends State<Shell> {
     });
   }
 
-  Future<void> pick(bool isFrom) async {
+  Future<void> pickRange() async {
     final today = dateOnly(DateTime.now());
     var first = DateTime(2020);
     if (days.isNotEmpty) {
       final parsed = DateTime.tryParse(days.last);
       if (parsed != null) first = dateOnly(parsed);
     }
-    final initial = isFrom ? from : to;
-    final picked = await showDatePicker(
+    final picked = await showDateRangePicker(
       context: context,
-      initialDate: initial.isAfter(today) ? today : initial,
-      firstDate: first.isAfter(initial) ? initial : first,
+      firstDate: first.isAfter(from) ? from : first,
       lastDate: today,
+      initialDateRange: DateTimeRange(start: from, end: to.isAfter(today) ? today : to),
     );
     if (picked == null) return;
-    final d = dateOnly(picked);
     setState(() {
       preset = 'custom';
-      if (isFrom) {
-        from = d;
-        if (to.isBefore(from)) to = from;
-      } else {
-        to = d;
-        if (from.isAfter(to)) from = to;
-      }
+      from = dateOnly(picked.start);
+      to = dateOnly(picked.end);
     });
     requestFlush();
     refresh();
   }
 
-  Widget presetChip(String id, String label) {
-    final on = preset == id;
-    return HoverBox(
-      onTap: () {
-        setState(() => applyPreset(id));
+  Widget rangeSelect() {
+    return SelectBox<String>(
+      value: preset,
+      items: [
+        DropdownMenuItem(value: 'day', child: Text(tr('presetDay'))),
+        DropdownMenuItem(value: 'week', child: Text(tr('presetWeek'))),
+        DropdownMenuItem(value: 'month', child: Text(tr('presetMonth'))),
+        DropdownMenuItem(value: 'year', child: Text(tr('presetYear'))),
+        DropdownMenuItem(value: 'custom', child: Text(preset == 'custom' ? '${shown(from)} - ${shown(to)}' : tr('presetCustom'))),
+      ],
+      onChanged: (v) {
+        if (v == null) return;
+        if (v == 'custom') {
+          pickRange();
+          return;
+        }
+        setState(() => applyPreset(v));
         requestFlush();
         refresh();
       },
-      builder: (hovered) => Container(
-        height: 40,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: on ? cSoft : (hovered ? cSoft.withValues(alpha: 0.5) : Colors.transparent),
-          borderRadius: BorderRadius.circular(rSm),
-          border: Border.all(color: on ? cPrimary : cBorder),
-        ),
-        child: Text(label, style: TextStyle(fontWeight: FontWeight.w700, color: on ? cPrimary : null)),
-      ),
     );
   }
 
-  Widget dateButton(String label, DateTime d, bool isFrom) {
-    return HoverBox(
-      onTap: () => pick(isFrom),
-      builder: (hovered) => Container(
-        height: 40,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: hovered ? cSoft.withValues(alpha: 0.5) : Colors.transparent,
-          borderRadius: BorderRadius.circular(rSm),
-          border: Border.fromBorderSide(line),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Text('$label ', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
-          Text(shown(d), style: const TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(width: 8),
-          const Icon(Icons.calendar_today, size: 14, color: cMuted),
-        ]),
-      ),
-    );
+  Future<String> exportCsv() async {
+    final fk = keyOf(from);
+    final tk = keyOf(to);
+    final data = usage.range(fk, tk);
+    String q(String v) => '"${v.replaceAll('"', '""')}"';
+    final b = StringBuffer('\uFEFF');
+    b.writeln('${tr('app')},${tr('focused')} (s),${tr('open')} (s),${tr('minimized')} (s),${tr('background')} (s),${tr('total')} (s)');
+    for (final r in data) {
+      b.writeln('${q(r.title)},${r.ms[0] ~/ 1000},${r.ms[1] ~/ 1000},${r.ms[2] ~/ 1000},${r.ms[3] ~/ 1000},${r.total ~/ 1000}');
+    }
+    final dir = Directory('${dataDir()}${Platform.pathSeparator}exports');
+    dir.createSync(recursive: true);
+    final f = File('${dir.path}${Platform.pathSeparator}wolium_${fk}_$tk.csv');
+    f.writeAsStringSync(b.toString());
+    return f.path;
   }
 
-  Widget rangeBar() {
-    return Panel(
-      padding: const EdgeInsets.all(12),
-      child: Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        presetChip('day', tr('presetDay')),
-        presetChip('week', tr('presetWeek')),
-        presetChip('month', tr('presetMonth')),
-        presetChip('year', tr('presetYear')),
+  Widget searchField() {
+    return Container(
+      height: 40,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(color: cPanel, borderRadius: BorderRadius.circular(rMd), border: Border.fromBorderSide(line)),
+      child: Row(children: [
+        const Icon(Icons.search, size: 18, color: cMuted),
         const SizedBox(width: 8),
-        dateButton(tr('dateFrom'), from, true),
-        dateButton(tr('dateTo'), to, false),
+        Expanded(
+          child: TextField(
+            controller: searchCtl,
+            onChanged: (v) => setState(() => query = v.trim().toLowerCase()),
+            decoration: InputDecoration(border: InputBorder.none, isDense: true, hintText: tr('search'), hintStyle: const TextStyle(color: cMuted)),
+          ),
+        ),
+        if (query.isNotEmpty)
+          GestureDetector(
+            onTap: () => setState(() {
+              searchCtl.clear();
+              query = '';
+            }),
+            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Icon(Icons.close, size: 16, color: cMuted)),
+          ),
       ]),
     );
   }
@@ -476,7 +485,7 @@ class _ShellState extends State<Shell> {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
         const SizedBox(width: 6),
-        Flexible(child: Text(r.now == null ? '-' : stateText(r.now), style: TextStyle(color: c, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+        Flexible(child: EllipsisText(r.now == null ? '-' : stateText(r.now), style: TextStyle(color: c, fontWeight: FontWeight.w700))),
       ]),
     );
   }
@@ -491,7 +500,7 @@ class _ShellState extends State<Shell> {
   int metricValue(AppUsage r) => metricOf(r.ms, metric);
 
   List<AppUsage> sortedRows() {
-    final list = List<AppUsage>.from(rows);
+    final list = [for (final r in rows) if (query.isEmpty || r.title.toLowerCase().contains(query) || r.app.toLowerCase().contains(query)) r];
     list.sort((a, b) {
       final c = metricValue(b).compareTo(metricValue(a));
       return c != 0 ? c : b.total.compareTo(a.total);
@@ -536,6 +545,7 @@ class _ShellState extends State<Shell> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text(tr('chartTitle'), style: const TextStyle(fontWeight: FontWeight.w800)),
+          rangeSelect(),
           SelectBox<Metric>(
             value: metric,
             items: [for (final m in Metric.values) DropdownMenuItem(value: m, child: Text(metricLabel(m)))],
@@ -666,8 +676,6 @@ class _ShellState extends State<Shell> {
   Widget activity(bool narrow) {
     const head = TextStyle(color: cMuted, fontWeight: FontWeight.w800);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      rangeBar(),
-      const SizedBox(height: 12),
       chartPanel(narrow),
       const SizedBox(height: 12),
       if (rows.isEmpty)
@@ -676,6 +684,7 @@ class _ShellState extends State<Shell> {
         Panel(
           padding: EdgeInsets.all(narrow ? 12 : 16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            searchField(),
             narrow ? compactList(head) : wideTable(head),
           ]),
         ),
@@ -761,6 +770,7 @@ class _ShellState extends State<Shell> {
                       const SizedBox(height: 14),
                       tab == 0 ? activity(narrow) : SettingsPage(
                         onWithdraw: widget.onWithdraw,
+                        onExport: exportCsv,
                         onCheck: () async {
                           final info = await checkUpdate();
                           if (mounted) setState(() => update = info);
@@ -781,10 +791,11 @@ class _ShellState extends State<Shell> {
 }
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, required this.onWithdraw, required this.onCheck});
+  const SettingsPage({super.key, required this.onWithdraw, required this.onCheck, required this.onExport});
 
   final VoidCallback onWithdraw;
   final Future<UpdateInfo?> Function() onCheck;
+  final Future<String> Function() onExport;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -796,6 +807,27 @@ class _SettingsPageState extends State<SettingsPage> {
   late bool autoUpdate = prefs.autoUpdate;
   String? checkText;
   bool checking = false;
+  late bool localApi = prefs.flag('localapi');
+  late bool discord = prefs.flag('discordrpc');
+
+  Future<void> toggleApi(bool v) async {
+    if (v) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: Text(tr('localApi')),
+          content: Text(tr('localApiWarn')),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('cancel'))),
+            TextButton(onPressed: () => Navigator.pop(c, true), child: Text(tr('enable'))),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    prefs.setFlag('localapi', v);
+    setState(() => localApi = v);
+  }
 
   @override
   void initState() {
@@ -809,6 +841,11 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     return Panel(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(tr('version'), style: const TextStyle(fontWeight: FontWeight.w700))),
+          Text(installedVersion().isEmpty ? '-' : installedVersion(), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
+        ]),
+        const Divider(height: 28),
         Row(children: [
           Expanded(child: Text(tr('autostart'), style: const TextStyle(fontWeight: FontWeight.w700))),
           Switch(
@@ -856,6 +893,24 @@ class _SettingsPageState extends State<SettingsPage> {
         ]),
         const Divider(height: 28),
         Row(children: [
+          Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
+          Switch(value: localApi, onChanged: toggleApi),
+        ]),
+        Text(tr('localApiHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        const Divider(height: 28),
+        Row(children: [
+          Expanded(child: Text(tr('discordRpc'), style: const TextStyle(fontWeight: FontWeight.w700))),
+          Switch(
+            value: discord,
+            onChanged: (v) {
+              prefs.setFlag('discordrpc', v);
+              setState(() => discord = v);
+            },
+          ),
+        ]),
+        Text(tr('discordRpcHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        const Divider(height: 28),
+        Row(children: [
           Expanded(child: Text(tr('language'), style: const TextStyle(fontWeight: FontWeight.w700))),
           LanguagePicker(onChanged: () => setState(() {})),
         ]),
@@ -865,6 +920,11 @@ class _SettingsPageState extends State<SettingsPage> {
         Row(children: [
           Expanded(child: SelectableText(dataDir())),
           IconButton(
+            tooltip: tr('openFolder'),
+            icon: const Icon(Icons.folder_open, size: 18),
+            onPressed: () => Process.run('explorer', [dataDir()]),
+          ),
+          IconButton(
             tooltip: tr('copy'),
             icon: const Icon(Icons.copy, size: 18),
             onPressed: () {
@@ -873,6 +933,24 @@ class _SettingsPageState extends State<SettingsPage> {
                 ..clearSnackBars()
                 ..showSnackBar(SnackBar(content: Text(tr('copied')), duration: const Duration(seconds: 2)));
             },
+          ),
+        ]),
+        const Divider(height: 28),
+        Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          OutlinedButton(
+            onPressed: () async {
+              String msg;
+              try {
+                msg = '${tr('exported')}: ${await widget.onExport()}';
+              } catch (_) {
+                msg = tr('exportFailed');
+              }
+              if (!mounted) return;
+              ScaffoldMessenger.of(context)
+                ..clearSnackBars()
+                ..showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 4)));
+            },
+            child: Text(tr('exportCsv')),
           ),
         ]),
         const Divider(height: 28),

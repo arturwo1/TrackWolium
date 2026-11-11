@@ -59,6 +59,10 @@ inline std::wstring userdata(const std::wstring& name) {
   return data_dir() + L"\\" + name;
 }
 
+inline bool flag(const wchar_t* name) {
+  return exists(data_dir() + L"\\" + name);
+}
+
 inline bool consent_given() { return exists(data_dir() + L"\\consent"); }
 inline bool paused() { return exists(data_dir() + L"\\paused"); }
 

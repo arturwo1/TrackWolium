@@ -249,6 +249,20 @@ class Settings {
     } catch (_) {}
   }
 
+  bool flag(String name) => File('${dataDir()}${Platform.pathSeparator}$name').existsSync();
+
+  void setFlag(String name, bool v) {
+    try {
+      final f = File('${dataDir()}${Platform.pathSeparator}$name');
+      if (v) {
+        Directory(dataDir()).createSync(recursive: true);
+        f.writeAsStringSync('1');
+      } else if (f.existsSync()) {
+        f.deleteSync();
+      }
+    } catch (_) {}
+  }
+
   set accepted(bool v) {
     try {
       if (v) {

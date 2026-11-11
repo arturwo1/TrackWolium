@@ -109,3 +109,17 @@ Versions: CI builds as `<tag>.<run number>`, so every build is newer than the pr
 Date range: presets (day, week, month, year) and From/To pickers filter both the table and the graph. Long ranges load the timeline pre-aggregated (15 min for 8-31 days, 1 hour above 31 days).
 
 Auto-update: the UI checks the latest GitHub release (assets `version.txt` and `WoliumSetup.exe`) at start and every 6 hours when enabled in Settings (`noupdates` file in the data folder disables it). The banner downloads the installer and runs it with `--silent <install dir>`, which keeps autostart, desktop shortcut and language, then restarts the tray and UI. Release builds must be created from a tag so `version.txt` is uploaded.
+
+## Range, search, export
+
+- One range selector (Day / Week / Month / Year / Custom period) sits next to the chart selectors.
+- The table has a live search by app name; Settings can export the selected range to CSV (`exports` in the data folder).
+- Truncated text shows its full value in a tooltip (hover on desktop, tap on touch devices).
+
+## Local API (opt-in)
+
+Settings toggle creates the `localapi` flag file. Core then serves `GET http://127.0.0.1:9095/v1/current` on loopback only, rejecting any Host header other than 127.0.0.1/localhost.
+
+## Discord Rich Presence (experimental)
+
+The `discordrpc` flag makes core own `\\.\pipe\discord-ipc-0` and forward traffic to the next free pipe, saving SET_ACTIVITY texts into the `presence` table. It works only when Wolium starts before Discord and is untested on real Discord.

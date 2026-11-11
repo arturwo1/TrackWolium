@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <ctime>
 #include <fstream>
 #include <memory>
 #include <string>
+#include "net_win.hpp"
 #include "common_win.hpp"
 #include <shellapi.h>
 #include "tw/i18n.hpp"
@@ -137,11 +139,15 @@ void watch_guard(Orphan& o, HINSTANCE inst, HANDLE stop) {
 
 class LiveSink : public tw::ISink {
 public:
-  explicit LiveSink(app::LiveShare& live) : live_(live) {}
-  void render(const tw::Report& report) override { live_.write(tw::serialize(report)); }
+  LiveSink(app::LiveShare& live, app::LocalApi& api) : live_(live), api_(api) {}
+  void render(const tw::Report& report) override {
+    live_.write(tw::serialize(report));
+    if (api_.running()) api_.set_body(tw::current_json(report));
+  }
 
 private:
   app::LiveShare& live_;
+  app::LocalApi& api_;
 };
 
 struct Options {
@@ -203,7 +209,15 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     auto store = tw::SqliteStore::open(path, &err);
     if (store) engine.set_store(std::shared_ptr<tw::IStore>(std::move(store)), tw::Duration(180000));
   }
-  engine.add_sink(std::make_shared<LiveSink>(live));
+  app::LocalApi api;
+  tw::PresenceQueue presence;
+  app::DiscordProxy proxy(presence);
+  std::unique_ptr<tw::SqliteStore> presence_db;
+  if (!opt.no_db) {
+    std::string perr;
+    presence_db = tw::SqliteStore::open(opt.db.empty() ? tw::to_utf8(app::userdata(L"usage.db")) : opt.db, &perr);
+  }
+  engine.add_sink(std::make_shared<LiveSink>(live, api));
 
   Orphan orphan;
   g_orphan = &orphan;
@@ -218,6 +232,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     if (now - last_check >= 4000 || last_check == 0) {
       allowed = app::consent_given();
       is_paused = app::paused();
+      if (app::flag(L"localapi")) api.start();
+      else api.stop();
+      if (app::flag(L"discordrpc")) proxy.start();
+      else if (proxy.running()) proxy.stop();
       last_check = now;
     }
     if (!allowed) break;
@@ -231,8 +249,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     }
     if (w == WAIT_OBJECT_0) break;
     if (w == WAIT_OBJECT_0 + 1) engine.flush();
+    if (presence_db) {
+      auto items = presence.drain();
+      if (!items.empty()) presence_db->add_presence(static_cast<std::int64_t>(std::time(nullptr)), items);
+    }
   }
 
+  api.stop();
+  proxy.stop();
   orphan_hide();
   engine.finish();
   live.clear();
