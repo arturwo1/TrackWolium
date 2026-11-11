@@ -10,6 +10,7 @@ import 'data.dart';
 import 'icons.dart';
 import 'l10n.dart';
 import 'mark.dart';
+import 'picker.dart';
 import 'theme.dart';
 import 'updater.dart';
 import 'win.dart';
@@ -174,8 +175,7 @@ class _ShellState extends State<Shell> {
   late DateTime from;
   late DateTime to;
   String preset = 'day';
-  String query = '';
-  final searchCtl = TextEditingController();
+  String? hoverApp;
   List<AppUsage> rows = [];
   Duration? beat;
   bool hasDb = false;
@@ -367,34 +367,6 @@ class _ShellState extends State<Shell> {
     return f.path;
   }
 
-  Widget searchField() {
-    return Container(
-      height: 40,
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(color: cPanel, borderRadius: BorderRadius.circular(rMd), border: Border.fromBorderSide(line)),
-      child: Row(children: [
-        const Icon(Icons.search, size: 18, color: cMuted),
-        const SizedBox(width: 8),
-        Expanded(
-          child: TextField(
-            controller: searchCtl,
-            onChanged: (v) => setState(() => query = v.trim().toLowerCase()),
-            decoration: InputDecoration(border: InputBorder.none, isDense: true, hintText: tr('search'), hintStyle: const TextStyle(color: cMuted)),
-          ),
-        ),
-        if (query.isNotEmpty)
-          GestureDetector(
-            onTap: () => setState(() {
-              searchCtl.clear();
-              query = '';
-            }),
-            child: const MouseRegion(cursor: SystemMouseCursors.click, child: Icon(Icons.close, size: 16, color: cMuted)),
-          ),
-      ]),
-    );
-  }
-
   bool get serviceDown {
     final grace = startedAt != null && DateTime.now().difference(startedAt!) < const Duration(seconds: 10);
     if (beat == null) return !grace;
@@ -500,11 +472,15 @@ class _ShellState extends State<Shell> {
   int metricValue(AppUsage r) => metricOf(r.ms, metric);
 
   List<AppUsage> sortedRows() {
-    final list = [for (final r in rows) if (query.isEmpty || r.title.toLowerCase().contains(query) || r.app.toLowerCase().contains(query)) r];
+    final list = List<AppUsage>.from(rows);
     list.sort((a, b) {
       final c = metricValue(b).compareTo(metricValue(a));
       return c != 0 ? c : b.total.compareTo(a.total);
     });
+    if (only != null) {
+      final i = list.indexWhere((r) => r.app == only);
+      if (i > 0) list.insert(0, list.removeAt(i));
+    }
     return list;
   }
 
@@ -551,23 +527,10 @@ class _ShellState extends State<Shell> {
             items: [for (final m in Metric.values) DropdownMenuItem(value: m, child: Text(metricLabel(m)))],
             onChanged: (v) => setState(() => metric = v ?? metric),
           ),
-          SelectBox<String?>(
+          AppPicker(
             value: only,
-            items: [
-              DropdownMenuItem<String?>(value: null, child: Text(tr('allApps'))),
-              for (final app in appChoices())
-                DropdownMenuItem<String?>(
-                  value: app,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 220),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      iconOf(app, 20),
-                      const SizedBox(width: 8),
-                      Flexible(child: EllipsisText(titleOf(app))),
-                    ]),
-                  ),
-                ),
-            ],
+            items: [for (final app in appChoices()) PickerItem(app, titleOf(app), iconOf(app, 20))],
+            current: only == null ? null : PickerItem(only!, titleOf(only!), iconOf(only!, 20)),
             onChanged: (v) => setState(() => only = v),
           ),
           IconButton(
@@ -584,9 +547,17 @@ class _ShellState extends State<Shell> {
   }
 
   Widget wideTable(TextStyle head) {
-    Widget cell(String t, {TextStyle? style, bool ellipsis = false}) => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
-          child: EllipsisText(t, style: style),
+    Widget hov(String? app, Widget child) => MouseRegion(
+          onEnter: app == null ? null : (_) => setState(() => hoverApp = app),
+          onExit: app == null ? null : (_) => setState(() => hoverApp = hoverApp == app ? null : hoverApp),
+          child: child,
+        );
+    Widget cell(String t, {TextStyle? style, String? app}) => hov(
+          app,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+            child: EllipsisText(t, style: style),
+          ),
         );
     return Table(
       columnWidths: const {0: FlexColumnWidth(3)},
@@ -604,13 +575,15 @@ class _ShellState extends State<Shell> {
           TableRow(
             decoration: only == r.app
                 ? BoxDecoration(color: cSoft.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(8), border: Border.all(color: cPrimary))
-                : const BoxDecoration(border: Border(top: BorderSide(color: cBorder))),
+                : BoxDecoration(color: hoverApp == r.app ? cSoft.withValues(alpha: 0.35) : null, border: const Border(top: BorderSide(color: cBorder))),
             children: [
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => toggleOnly(r.app),
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
+                  onEnter: (_) => setState(() => hoverApp = r.app),
+                  onExit: (_) => setState(() => hoverApp = hoverApp == r.app ? null : hoverApp),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
                     child: Row(children: [
@@ -621,9 +594,9 @@ class _ShellState extends State<Shell> {
                   ),
                 ),
               ),
-              if (liveMode) nowCell(r),
-              for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i])),
-              cell(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w800)),
+              if (liveMode) hov(r.app, nowCell(r)),
+              for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i]), app: r.app),
+              cell(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w800), app: r.app),
             ],
           ),
       ],
@@ -684,7 +657,6 @@ class _ShellState extends State<Shell> {
         Panel(
           padding: EdgeInsets.all(narrow ? 12 : 16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            searchField(),
             narrow ? compactList(head) : wideTable(head),
           ]),
         ),
@@ -809,6 +781,54 @@ class _SettingsPageState extends State<SettingsPage> {
   bool checking = false;
   late bool localApi = prefs.flag('localapi');
   late bool discord = prefs.flag('discordrpc');
+  String rpcStatus = '';
+  bool rpcRestarting = false;
+  Timer? rpcTimer;
+
+  String readRpcStatus() {
+    try {
+      return File('${dataDir()}${Platform.pathSeparator}discordrpc.status').readAsStringSync().trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  @override
+  void dispose() {
+    rpcTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> restartRpc() async {
+    setState(() => rpcRestarting = true);
+    prefs.setFlag('discordrpc', true);
+    setState(() => discord = true);
+    try {
+      await Process.run('taskkill', ['/F', '/T', '/IM', 'Discord.exe']);
+      await Future<void>.delayed(const Duration(seconds: 7));
+      final local = Platform.environment['LOCALAPPDATA'] ?? '';
+      final updater = File('$local\\Discord\\Update.exe');
+      if (updater.existsSync()) {
+        await Process.start(updater.path, ['--processStart', 'Discord.exe'], mode: ProcessStartMode.detached);
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      rpcRestarting = false;
+      rpcStatus = readRpcStatus();
+    });
+  }
+
+  void showRpcHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(tr('discordRpc')),
+        content: Text(tr('rpcRestartHelp')),
+        actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok')))],
+      ),
+    );
+  }
 
   Future<void> toggleApi(bool v) async {
     if (v) {
@@ -832,6 +852,11 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    rpcStatus = readRpcStatus();
+    rpcTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      final v = readRpcStatus();
+      if (mounted && v != rpcStatus) setState(() => rpcStatus = v);
+    });
     autostartEnabled().then((v) {
       if (mounted) setState(() => auto = v);
     });
@@ -909,6 +934,30 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ]),
         Text(tr('discordRpcHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        if (discord) ...[
+          const SizedBox(height: 8),
+          if (rpcStatus == 'busy')
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: cWarn.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cWarn)),
+              child: Text(tr('rpcFailed'), style: const TextStyle(color: cWarn, fontWeight: FontWeight.w700)),
+            )
+          else
+            Text(
+              rpcStatus == 'active' ? tr('rpcActive') : tr('rpcWaiting'),
+              style: TextStyle(color: rpcStatus == 'active' ? cOk : cMuted, fontWeight: FontWeight.w700),
+            ),
+          const SizedBox(height: 8),
+          Row(children: [
+            OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
+            IconButton(
+              tooltip: tr('helpTitle'),
+              icon: const Icon(Icons.help_outline, size: 20, color: cMuted),
+              onPressed: showRpcHelp,
+            ),
+          ]),
+        ],
         const Divider(height: 28),
         Row(children: [
           Expanded(child: Text(tr('language'), style: const TextStyle(fontWeight: FontWeight.w700))),

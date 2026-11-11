@@ -1,4 +1,10 @@
 #pragma once
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <winsock2.h>
 #include <windows.h>
 #include <atomic>
@@ -89,9 +95,11 @@ public:
   ~DiscordProxy() { stop(); }
 
   bool running() const { return running_; }
+  int state() const { return state_; }
 
   void start() {
     if (running_) return;
+    state_ = 1;
     running_ = true;
     thread_ = std::thread([this] { accept_loop(); });
   }
@@ -102,6 +110,7 @@ public:
     HANDLE h = CreateFileW(L"\\\\.\\pipe\\discord-ipc-0", GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
     if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
     if (thread_.joinable()) thread_.join();
+    state_ = 0;
   }
 
 private:
@@ -124,9 +133,11 @@ private:
       HANDLE pipe = CreateNamedPipeW(L"\\\\.\\pipe\\discord-ipc-0", PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 8, 65536, 65536,
                                      0, nullptr);
       if (pipe == INVALID_HANDLE_VALUE) {
-        Sleep(5000);
+        state_ = 2;
+        for (int i = 0; i < 50 && running_; ++i) Sleep(100);
         continue;
       }
+      if (state_ == 2) state_ = 1;
       BOOL ok = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED;
       if (!ok || !running_) {
         CloseHandle(pipe);
@@ -137,6 +148,7 @@ private:
         CloseHandle(pipe);
         continue;
       }
+      state_ = 3;
       std::thread([this, pipe, upstream] { session(pipe, upstream); }).detach();
     }
   }
@@ -175,6 +187,7 @@ private:
   }
 
   tw::PresenceQueue& queue_;
+  std::atomic<int> state_{0};
   std::atomic<bool> running_{false};
   std::thread thread_;
 };

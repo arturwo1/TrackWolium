@@ -225,6 +225,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   bool allowed = true;
   bool is_paused = false;
   ULONGLONG last_check = 0;
+  std::string last_rpc = "off";
   HANDLE waits[2] = {stop, flush};
   for (;;) {
     ULONGLONG now = GetTickCount64();
@@ -236,6 +237,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
       else api.stop();
       if (app::flag(L"discordrpc")) proxy.start();
       else if (proxy.running()) proxy.stop();
+      const char* rs = proxy.state() == 3 ? "active" : (proxy.state() == 2 ? "busy" : (proxy.state() == 1 ? "listening" : "off"));
+      if (last_rpc != rs) {
+        last_rpc = rs;
+        write_text(app::userdata(L"discordrpc.status"), rs);
+      }
       last_check = now;
     }
     if (!allowed) break;
