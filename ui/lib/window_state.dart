@@ -31,6 +31,7 @@ class WindowState with WidgetsBindingObserver {
   void attach() {
     if (!Platform.isWindows) return;
     WidgetsBinding.instance.addObserver(this);
+    Timer.periodic(const Duration(seconds: 2), (_) => save());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_wantMaximize) maximizeMainWindow();
     });

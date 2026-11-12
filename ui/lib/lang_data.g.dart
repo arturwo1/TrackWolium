@@ -84,6 +84,9 @@ const strings = {
     'unitS': 's',
     'unitM': 'm',
     'unitH': 'h',
+    'exportRange': 'Export period',
+    'exportSaveTitle': 'Save statistics',
+    'openFile': 'Open file',
   },
   'ru': {
     'brandSub': 'Трекер активности',
@@ -165,5 +168,8 @@ const strings = {
     'unitS': 'с',
     'unitM': 'м',
     'unitH': 'ч',
+    'exportRange': 'Период экспорта',
+    'exportSaveTitle': 'Сохранить статистику',
+    'openFile': 'Открыть файл',
   },
 };

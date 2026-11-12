@@ -312,9 +312,12 @@ Future<void> startService() async {
 
 const _runKey = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
 
+bool? autostartCache;
+
 Future<bool> autostartEnabled() async {
   final r = await Process.run('reg', ['query', _runKey, '/v', 'Wolium']);
-  return r.exitCode == 0;
+  autostartCache = r.exitCode == 0;
+  return autostartCache!;
 }
 
 Future<void> setAutostart(bool on) async {

@@ -267,6 +267,7 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    autostartEnabled();
     to = dateOnly(DateTime.now());
     from = to;
     requestFlush();
@@ -425,21 +426,42 @@ class _ShellState extends State<Shell> {
     );
   }
 
-  Future<String> exportCsv() async {
-    final fk = keyOf(from);
-    final tk = keyOf(to);
-    final data = usage.range(fk, tk);
+  Future<String?> exportCsv() async {
+    final today = dateOnly(DateTime.now());
+    var first = DateTime(2020);
+    if (days.isNotEmpty) {
+      final parsed = DateTime.tryParse(days.last);
+      if (parsed != null) first = dateOnly(parsed);
+    }
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: first.isAfter(from) ? from : first,
+      lastDate: today,
+      helpText: tr('exportRange'),
+      initialDateRange: DateTimeRange(start: from, end: to.isAfter(today) ? today : to),
+    );
+    if (picked == null) return null;
+    final fk = keyOf(dateOnly(picked.start));
+    final tk = keyOf(dateOnly(picked.end));
+    requestFlush();
+    final home = Platform.environment['USERPROFILE'];
+    final docs = home == null ? null : '$home${Platform.pathSeparator}Documents';
+    final path = saveFileDialog(
+      title: tr('exportSaveTitle'),
+      filter: 'CSV (*.csv)\u0000*.csv\u0000',
+      name: 'wolium_${fk}_$tk.csv',
+      ext: 'csv',
+      dir: docs != null && Directory(docs).existsSync() ? docs : dataDir(),
+    );
+    if (path == null) return null;
     String q(String v) => '"${v.replaceAll('"', '""')}"';
     final b = StringBuffer('\uFEFF');
     b.writeln('${tr('app')},${tr('focused')} (s),${tr('open')} (s),${tr('minimized')} (s),${tr('background')} (s),${tr('total')} (s)');
-    for (final r in data) {
+    for (final r in usage.range(fk, tk)) {
       b.writeln('${q(r.title)},${r.ms[0] ~/ 1000},${r.ms[1] ~/ 1000},${r.ms[2] ~/ 1000},${r.ms[3] ~/ 1000},${r.total ~/ 1000}');
     }
-    final dir = Directory('${dataDir()}${Platform.pathSeparator}exports');
-    dir.createSync(recursive: true);
-    final f = File('${dir.path}${Platform.pathSeparator}wolium_${fk}_$tk.csv');
-    f.writeAsStringSync(b.toString());
-    return f.path;
+    File(path).writeAsStringSync(b.toString());
+    return path;
   }
 
   bool get serviceDown {
@@ -560,6 +582,8 @@ class _ShellState extends State<Shell> {
           return r.ms[3];
         case 'total':
           return r.total;
+        case 'now':
+          return r.now == null ? 0 : 4 - r.now!;
         default:
           return metricValue(r);
       }
@@ -660,7 +684,7 @@ class _ShellState extends State<Shell> {
       children: [
         TableRow(children: [
           sortHead(tr('app'), 'app', head),
-          if (liveMode) cell(tr('now'), style: head),
+          if (liveMode) sortHead(tr('now'), 'now', head),
           sortHead(tr('focused'), 'focused', head),
           sortHead(tr('open'), 'open', head),
           sortHead(tr('minimized'), 'minimized', head),
@@ -869,17 +893,19 @@ class SettingsPage extends StatefulWidget {
 
   final VoidCallback onWithdraw;
   final Future<UpdateInfo?> Function() onCheck;
-  final Future<String> Function() onExport;
+  final Future<String?> Function() onExport;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  bool? auto;
+  bool? auto = autostartCache;
   final prefs = Settings.load();
   late bool autoUpdate = prefs.autoUpdate;
   String? checkText;
+  String? exportedPath;
+  String? exportError;
   bool checking = false;
   late bool localApi = prefs.flag('localapi');
 
@@ -906,7 +932,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     autostartEnabled().then((v) {
-      if (mounted) setState(() => auto = v);
+      if (mounted && v != auto) setState(() => auto = v);
     });
   }
 
@@ -1000,20 +1026,48 @@ class _SettingsPageState extends State<SettingsPage> {
         Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           OutlinedButton(
             onPressed: () async {
-              String msg;
+              String? path;
+              String? err;
               try {
-                msg = '${tr('exported')}: ${await widget.onExport()}';
+                path = await widget.onExport();
               } catch (_) {
-                msg = tr('exportFailed');
+                err = tr('exportFailed');
               }
               if (!mounted) return;
-              ScaffoldMessenger.of(context)
-                ..clearSnackBars()
-                ..showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 4)));
+              if (path != null || err != null) {
+                setState(() {
+                  exportedPath = path;
+                  exportError = err;
+                });
+              }
             },
             child: Text(tr('exportCsv')),
           ),
         ]),
+        if (exportError != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(exportError!, style: const TextStyle(color: cDanger, fontWeight: FontWeight.w700))),
+        if (exportedPath != null)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(top: 10),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: cOk.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cOk)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(tr('exported'), style: const TextStyle(color: cOk, fontWeight: FontWeight.w800))),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.close, size: 18, color: cMuted),
+                  onPressed: () => setState(() => exportedPath = null),
+                ),
+              ]),
+              SelectableText(exportedPath!, style: const TextStyle(color: cMuted, fontSize: 12)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                OutlinedButton(onPressed: () => Process.run('explorer', ['/select,', exportedPath!]), child: Text(tr('openFolder'))),
+                OutlinedButton(onPressed: () => Process.run('explorer', [exportedPath!]), child: Text(tr('openFile'))),
+              ]),
+            ]),
+          ),
         const Divider(height: 28),
         Wrap(spacing: 8, children: [
           TextButton(onPressed: () => open(privacyUrl), child: Text(tr('privacy'))),

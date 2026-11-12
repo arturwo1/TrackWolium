@@ -192,3 +192,51 @@ void maximizeMainWindow() {
   final h = _mainWindow();
   if (h != 0) _showWindow?.call(h, 3);
 }
+
+final DynamicLibrary? _comdlg = Platform.isWindows ? DynamicLibrary.open('comdlg32.dll') : null;
+final _getSave = _comdlg?.lookupFunction<Int32 Function(Pointer<Uint8>), int Function(Pointer<Uint8>)>('GetSaveFileNameW');
+
+Pointer<Uint16> _wide(String s, {int tail = 1}) {
+  final units = s.codeUnits;
+  final p = calloc<Uint16>(units.length + tail);
+  for (var i = 0; i < units.length; i++) {
+    p[i] = units[i];
+  }
+  return p;
+}
+
+String? saveFileDialog({required String title, required String filter, required String name, required String ext, String? dir}) {
+  if (_getSave == null) return null;
+  final ofn = calloc<Uint8>(152);
+  final file = calloc<Uint16>(1024);
+  final nameUnits = name.codeUnits;
+  for (var i = 0; i < nameUnits.length && i < 1000; i++) {
+    file[i] = nameUnits[i];
+  }
+  final filterP = _wide(filter, tail: 2);
+  final titleP = _wide(title);
+  final extP = _wide(ext);
+  final dirP = _wide(dir ?? '');
+  try {
+    final bd = ofn.asTypedList(152).buffer.asByteData();
+    bd.setUint32(0, 152, Endian.little);
+    bd.setUint64(8, _mainWindow(), Endian.little);
+    bd.setUint64(24, filterP.address, Endian.little);
+    bd.setUint32(44, 1, Endian.little);
+    bd.setUint64(48, file.address, Endian.little);
+    bd.setUint32(56, 1024, Endian.little);
+    if (dir != null) bd.setUint64(80, dirP.address, Endian.little);
+    bd.setUint64(88, titleP.address, Endian.little);
+    bd.setUint32(96, 0x2 | 0x8 | 0x800 | 0x80000, Endian.little);
+    bd.setUint64(104, extP.address, Endian.little);
+    if (_getSave!(ofn) == 0) return null;
+    return file.cast<Utf16>().toDartString();
+  } finally {
+    calloc.free(ofn);
+    calloc.free(file);
+    calloc.free(filterP);
+    calloc.free(titleP);
+    calloc.free(extP);
+    calloc.free(dirP);
+  }
+}

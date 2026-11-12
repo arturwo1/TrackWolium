@@ -136,6 +136,9 @@
     "withdraw": "Withdraw consent and stop tracking",
     "unitS": "s",
     "unitM": "m",
-    "unitH": "h"
+    "unitH": "h",
+    "exportRange": "Export period",
+    "exportSaveTitle": "Save statistics",
+    "openFile": "Open file"
   }
 }
