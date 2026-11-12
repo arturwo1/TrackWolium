@@ -210,6 +210,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     if (store) engine.set_store(std::shared_ptr<tw::IStore>(std::move(store)), tw::Duration(180000));
   }
   app::LocalApi api;
+  tw::PresenceQueue presence;
+  app::DiscordProxy proxy(presence);
+  std::unique_ptr<tw::SqliteStore> presence_db;
+  if (!opt.no_db) {
+    std::string perr;
+    presence_db = tw::SqliteStore::open(opt.db.empty() ? tw::to_utf8(app::userdata(L"usage.db")) : opt.db, &perr);
+  }
+  std::string last_rpc = "off";
   engine.add_sink(std::make_shared<LiveSink>(live, api));
 
   Orphan orphan;
@@ -227,6 +235,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
       is_paused = app::paused();
       if (app::flag(L"localapi")) api.start();
       else api.stop();
+      if (app::flag(L"discordrpc")) proxy.start();
+      else if (proxy.running()) proxy.stop();
+      const char* rs = proxy.state() == 3 ? "active" : (proxy.state() == 2 ? "busy" : (proxy.state() == 1 ? "listening" : "off"));
+      if (last_rpc != rs) {
+        last_rpc = rs;
+        write_text(app::userdata(L"discordrpc.status"), rs);
+      }
       last_check = now;
     }
     if (!allowed) break;
@@ -240,9 +255,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     }
     if (w == WAIT_OBJECT_0) break;
     if (w == WAIT_OBJECT_0 + 1) engine.flush();
+    if (presence_db) {
+      auto items = presence.drain();
+      if (!items.empty()) presence_db->add_presence(static_cast<std::int64_t>(std::time(nullptr)), items);
+    }
   }
 
   api.stop();
+  proxy.stop();
   orphan_hide();
   engine.finish();
   live.clear();

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -194,6 +195,8 @@ class _ShellState extends State<Shell> {
   bool isPaused = false;
   bool liveMode = false;
   List<Contrib> contribs = [];
+  List<PresenceRow> presenceRows = [];
+  final rpcNames = <String, String>{};
   String? rangeKey;
   double viewFrom = 0;
   double viewTo = 86400;
@@ -217,10 +220,35 @@ class _ShellState extends State<Shell> {
     final w0 = math.max(0, viewFrom - sp).floor();
     final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
     contribs = usage.contribs(from, w0, w1, bin, useSess);
+    presenceRows = usage.presence(from, w0, w1);
+    for (final r in presenceRows) {
+      if (r.name.isEmpty && r.clientId.isNotEmpty) resolveRpcName(r.clientId);
+    }
     loadW0 = w0;
     loadW1 = w1;
     loadBin = bin;
     loadSess = useSess;
+  }
+
+  Future<void> resolveRpcName(String id) async {
+    if (rpcNames.containsKey(id)) return;
+    rpcNames[id] = '';
+    try {
+      final client = HttpClient();
+      final req = await client.getUrl(Uri.parse('https://discord.com/api/v10/applications/$id/rpc'));
+      final res = await req.close();
+      final body = await res.transform(utf8.decoder).join();
+      client.close();
+      final name = (jsonDecode(body) as Map)['name'];
+      if (name is String && mounted) setState(() => rpcNames[id] = name);
+    } catch (_) {}
+  }
+
+  String presenceText(PresenceRow r) {
+    final who = r.name.isNotEmpty ? r.name : (rpcNames[r.clientId] ?? '');
+    final what = [r.details, r.state].where((e) => e.isNotEmpty).join(' - ');
+    if (what.isEmpty) return '';
+    return who.isEmpty ? what : '$who: $what';
   }
 
   void onChartView(double a, double b, int bucketSec) {
@@ -661,7 +689,7 @@ class _ShellState extends State<Shell> {
           ),
         ]),
         const SizedBox(height: 10),
-        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240, onView: onChartView),
+        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) PresenceMark(r.sec, presenceText(r))], only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240, onView: onChartView),
       ]),
     );
   }
@@ -734,6 +762,7 @@ class _ShellState extends State<Shell> {
     return Column(children: [
       Wrap(children: [
         sortHead(tr('app'), 'app', head),
+        if (liveMode) sortHead(tr('now'), 'now', head),
         sortHead(tr('total'), 'total', head),
         sortHead(tr('focused'), 'focused', head),
         sortHead(tr('open'), 'open', head),
@@ -908,6 +937,67 @@ class _SettingsPageState extends State<SettingsPage> {
   String? exportError;
   bool checking = false;
   late bool localApi = prefs.flag('localapi');
+  late bool discord = prefs.flag('discordrpc');
+  String rpcStatus = '';
+  bool rpcRestarting = false;
+  Timer? rpcTimer;
+
+  String readRpcStatus() {
+    try {
+      return File('${dataDir()}${Platform.pathSeparator}discordrpc.status').readAsStringSync().trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  @override
+  void dispose() {
+    rpcTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> restartRpc() async {
+    setState(() => rpcRestarting = true);
+    prefs.setFlag('discordrpc', true);
+    setState(() => discord = true);
+    try {
+      final found = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        "Get-Process Discord,DiscordPTB,DiscordCanary,DiscordDevelopment -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path -Unique"
+      ]);
+      final paths = (found.stdout as String).split(RegExp(r'[\r\n]+')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      for (final exe in paths) {
+        await Process.run('taskkill', ['/F', '/T', '/IM', exe.split(Platform.pathSeparator).last]);
+      }
+      await Future<void>.delayed(const Duration(seconds: 7));
+      for (final exe in paths) {
+        final dir = File(exe).parent.parent.path;
+        final updater = File('$dir${Platform.pathSeparator}Update.exe');
+        if (updater.existsSync()) {
+          await Process.start(updater.path, ['--processStart', exe.split(Platform.pathSeparator).last], mode: ProcessStartMode.detached);
+        } else {
+          await Process.start(exe, [], mode: ProcessStartMode.detached);
+        }
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      rpcRestarting = false;
+      rpcStatus = readRpcStatus();
+    });
+  }
+
+  void showRpcHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(tr('discordRpc')),
+        content: Text(tr('rpcRestartHelp')),
+        actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok')))],
+      ),
+    );
+  }
 
   Future<void> toggleApi(bool v) async {
     if (v) {
@@ -931,6 +1021,11 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    rpcStatus = readRpcStatus();
+    rpcTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      final v = readRpcStatus();
+      if (mounted && v != rpcStatus) setState(() => rpcStatus = v);
+    });
     autostartEnabled().then((v) {
       if (mounted && v != auto) setState(() => auto = v);
     });
@@ -996,6 +1091,42 @@ class _SettingsPageState extends State<SettingsPage> {
           Switch(value: localApi, onChanged: toggleApi),
         ]),
         Text(tr('localApiHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        const Divider(height: 28),
+        Row(children: [
+          Expanded(child: Text(tr('discordRpc'), style: const TextStyle(fontWeight: FontWeight.w700))),
+          Switch(
+            value: discord,
+            onChanged: (v) {
+              prefs.setFlag('discordrpc', v);
+              setState(() => discord = v);
+            },
+          ),
+        ]),
+        Text(tr('discordRpcHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        if (discord) ...[
+          const SizedBox(height: 8),
+          if (rpcStatus == 'busy')
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: cWarn.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cWarn)),
+              child: Text(tr('rpcFailed'), style: const TextStyle(color: cWarn, fontWeight: FontWeight.w700)),
+            )
+          else
+            Text(
+              rpcStatus == 'active' ? tr('rpcActive') : tr('rpcWaiting'),
+              style: TextStyle(color: rpcStatus == 'active' ? cOk : cMuted, fontWeight: FontWeight.w700),
+            ),
+          const SizedBox(height: 8),
+          Row(children: [
+            OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
+            IconButton(
+              tooltip: tr('helpTitle'),
+              icon: const Icon(Icons.help_outline, size: 20, color: cMuted),
+              onPressed: showRpcHelp,
+            ),
+          ]),
+        ],
         const Divider(height: 28),
         Row(children: [
           Expanded(child: Text(tr('language'), style: const TextStyle(fontWeight: FontWeight.w700))),

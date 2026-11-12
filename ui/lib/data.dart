@@ -89,6 +89,16 @@ class Contrib {
   final int ms;
 }
 
+class PresenceRow {
+  const PresenceRow(this.sec, this.clientId, this.name, this.details, this.state);
+
+  final int sec;
+  final String clientId;
+  final String name;
+  final String details;
+  final String state;
+}
+
 class Usage {
   Database? _db;
 
@@ -183,6 +193,18 @@ class Usage {
       } catch (_) {}
     }
     return out;
+  }
+
+  List<PresenceRow> presence(DateTime first, int w0, int w1) {
+    final db = _open();
+    if (db == null) return [];
+    final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
+    try {
+      final rows = db.select('SELECT ts, client_id, name, details, state FROM presence WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts', [firstUnix + w0, firstUnix + w1]);
+      return [for (final r in rows) PresenceRow((r['ts'] as int) - firstUnix, r['client_id'] as String, r['name'] as String, r['details'] as String, r['state'] as String)];
+    } catch (_) {
+      return [];
+    }
   }
 
   Map<String, AppMeta> names() {

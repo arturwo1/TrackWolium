@@ -59,6 +59,13 @@ class Bucket {
   int value = 0;
 }
 
+class PresenceMark {
+  const PresenceMark(this.sec, this.text);
+
+  final int sec;
+  final String text;
+}
+
 class Session {
   Session(this.start, this.end, this.ms);
 
@@ -138,12 +145,14 @@ class ActivityChart extends StatefulWidget {
     required this.height,
     required this.first,
     required this.total,
+    this.presence = const [],
     this.onView,
   });
 
   final DateTime first;
   final int total;
   final List<Contrib> contribs;
+  final List<PresenceMark> presence;
   final String? only;
   final Metric metric;
   final String Function(String app) title;
@@ -505,6 +514,12 @@ class _ActivityChartState extends State<ActivityChart> {
     });
   }
 
+  List<PresenceMark> presenceIn(int i) {
+    final a = i * bucket;
+    final b = (i + 1) * bucket;
+    return widget.presence.where((p) => p.sec >= a && p.sec < b && p.text.isNotEmpty).take(3).toList();
+  }
+
   Widget buildOverlay(BuildContext overlayContext) {
     return ValueListenableBuilder<_Tip?>(
       valueListenable: tip,
@@ -517,7 +532,8 @@ class _ActivityChartState extends State<ActivityChart> {
             .toList()
           ..sort((a, c) => metricOf(c.value, widget.metric).compareTo(metricOf(a.value, widget.metric)));
         final visibleRows = math.min(rows.length, 6);
-        final height = 70.0 + math.max(1, visibleRows) * 40.0;
+        final marks = presenceIn(t.bucket);
+        final height = 70.0 + math.max(1, visibleRows) * 40.0 + marks.length * 20.0;
         double left;
         double topPos;
         if (t.follow) {
@@ -613,6 +629,11 @@ class _ActivityChartState extends State<ActivityChart> {
           const SizedBox(height: 2),
           Text('${metricLabel(widget.metric)}: ${formatMs(b.value)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w900, fontSize: 15)),
           const SizedBox(height: 6),
+          for (final m in presenceIn(t.bucket))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text('${labelAt(widget.first, widget.total, m.sec, seconds: true, timeOnly: true)}  ${m.text}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cOpen, fontSize: 12, fontWeight: FontWeight.w600)),
+            ),
           if (rows.isEmpty)
             Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(tr('noData'), style: const TextStyle(color: cMuted, fontSize: 12)))
           else
