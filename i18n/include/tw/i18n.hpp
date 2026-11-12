@@ -22,32 +22,18 @@ struct Table {
   const wchar_t* text[kKeyCount];
 };
 
-inline Table make_en() {
-  Table x{};
-#define S(k, t) x.text[static_cast<int>(Key::k)] = t;
-#include "lang/en.def"
-#undef S
-  return x;
-}
-
-inline Table make_ru() {
-  Table x{};
-#define S(k, t) x.text[static_cast<int>(Key::k)] = t;
-#include "lang/ru.def"
-#undef S
-  return x;
-}
+#include "lang/makers.inc"
 
 struct Language {
   const char* code;
   const wchar_t* name;
+  unsigned primary;
   Table table;
 };
 
 inline const std::vector<Language>& languages() {
   static const std::vector<Language> list = {
-      {"en", L"English", make_en()},
-      {"ru", L"Русский", make_ru()},
+#include "lang/list.inc"
   };
   return list;
 }
@@ -76,8 +62,11 @@ inline void set(int i) {
 }
 
 inline int from_langid(unsigned langid) {
-  int i = find(langid == 0x19 ? "ru" : "en");
-  return i < 0 ? 0 : i;
+  const auto& langs = detail::languages();
+  for (std::size_t i = 0; i < langs.size(); ++i) {
+    if (langs[i].primary != 0 && langs[i].primary == (langid & 0x3FF)) return static_cast<int>(i);
+  }
+  return 0;
 }
 
 inline const wchar_t* tr(Key k) {

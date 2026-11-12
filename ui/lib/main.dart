@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'icons.dart';
 import 'l10n.dart';
 import 'mark.dart';
 import 'picker.dart';
+import 'window_state.dart';
 import 'theme.dart';
 import 'updater.dart';
 import 'win.dart';
@@ -21,11 +23,19 @@ const privacyUrl = 'https://wolium.netlify.app/privacy-policy/';
 const narrowWidth = 760.0;
 const staleSeconds = 7;
 
+Locale materialLocale(String code) {
+  final base = code.split('-').first;
+  return Locale(kMaterialSupportedLanguages.contains(base) ? base : 'en');
+}
+
 void main() {
   if (!claimSingleInstance()) exit(0);
   migrateLegacyData();
   loadLanguage();
+  WidgetsFlutterBinding.ensureInitialized();
+  WindowState.instance.restore();
   runApp(const WoliumApp());
+  WindowState.instance.attach();
 }
 
 class WoliumApp extends StatelessWidget {
@@ -39,8 +49,8 @@ class WoliumApp extends StatelessWidget {
         title: appName,
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
-        locale: Locale(language.value),
-        supportedLocales: const [Locale('en'), Locale('ru')],
+        locale: materialLocale(language.value),
+        supportedLocales: [for (final c in languages.keys) materialLocale(c)],
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
         home: const Root(),
       ),
@@ -183,8 +193,68 @@ class _ShellState extends State<Shell> {
   int ticks = 0;
   bool isPaused = false;
   bool liveMode = false;
-  List<Slot> slots = [];
+  List<Contrib> contribs = [];
   String? rangeKey;
+  double viewFrom = 0;
+  double viewTo = 86400;
+  int viewBucket = 300;
+  int loadW0 = -1;
+  int loadW1 = -1;
+  int loadBin = 0;
+  bool loadSess = false;
+  String? sortKey;
+  bool sortAsc = false;
+
+  int get dayCount => DateTime.utc(to.year, to.month, to.day).difference(DateTime.utc(from.year, from.month, from.day)).inDays + 1;
+
+  void loadChart({bool force = false}) {
+    final total = dayCount * 86400;
+    final sp = viewTo - viewFrom;
+    final useSess = sp <= 7 * 86400;
+    final bin = viewBucket >= 3600 ? 12 : (viewBucket >= 900 ? 3 : 1);
+    final inside = loadW0 >= 0 && viewFrom >= loadW0 && viewTo <= loadW1;
+    if (!force && inside && bin == loadBin && useSess == loadSess) return;
+    final w0 = math.max(0, viewFrom - sp).floor();
+    final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
+    contribs = usage.contribs(from, w0, w1, bin, useSess);
+    loadW0 = w0;
+    loadW1 = w1;
+    loadBin = bin;
+    loadSess = useSess;
+  }
+
+  void onChartView(double a, double b, int bucketSec) {
+    if (!mounted) return;
+    viewFrom = a;
+    viewTo = b;
+    viewBucket = bucketSec;
+    setState(() => loadChart());
+  }
+
+  void sortBy(String k) {
+    setState(() {
+      if (sortKey == k) {
+        sortAsc = !sortAsc;
+      } else {
+        sortKey = k;
+        sortAsc = k == 'app';
+      }
+    });
+  }
+
+  Widget sortHead(String label, String k, TextStyle head) {
+    final on = sortKey == k;
+    return HoverBox(
+      onTap: () => sortBy(k),
+      builder: (hovered) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(child: EllipsisText(label, style: head.copyWith(color: on || hovered ? cPrimary : cMuted))),
+          if (on) Text(sortAsc ? ' \u25B2' : ' \u25BC', style: const TextStyle(color: cPrimary, fontSize: 10)),
+        ]),
+      ),
+    );
+  }
   String? only;
   Map<String, AppMeta> names = {};
   Metric metric = Metric.focused;
@@ -294,10 +364,15 @@ class _ShellState extends State<Shell> {
       isPaused = usage.paused;
       liveMode = l != null;
       rows = l ?? usage.range(fk, tk);
-      final spanDays = to.difference(from).inDays + 1;
-      final every = spanDays > 1 ? 30 : 5;
-      if (rangeKey != rk || ticks % every == 0) {
-        slots = usage.timeline(fk, tk, spanDays > 31 ? 12 : (spanDays > 7 ? 3 : 1));
+      final every = dayCount > 1 ? 30 : 5;
+      final changed = rangeKey != rk;
+      if (changed) {
+        viewFrom = 0;
+        viewTo = dayCount * 86400.0;
+        viewBucket = bucketSecFor(viewTo, 600);
+      }
+      if (changed || ticks % every == 0) {
+        loadChart(force: true);
         names = usage.names();
         rangeKey = rk;
       }
@@ -473,8 +548,29 @@ class _ShellState extends State<Shell> {
 
   List<AppUsage> sortedRows() {
     final list = List<AppUsage>.from(rows);
+    int val(AppUsage r) {
+      switch (sortKey) {
+        case 'focused':
+          return r.ms[0];
+        case 'open':
+          return r.ms[1];
+        case 'minimized':
+          return r.ms[2];
+        case 'background':
+          return r.ms[3];
+        case 'total':
+          return r.total;
+        default:
+          return metricValue(r);
+      }
+    }
+
     list.sort((a, b) {
-      final c = metricValue(b).compareTo(metricValue(a));
+      if (sortKey == 'app') {
+        final c = a.title.toLowerCase().compareTo(b.title.toLowerCase());
+        return sortAsc ? c : -c;
+      }
+      final c = sortKey == null ? val(b).compareTo(val(a)) : (sortAsc ? val(a).compareTo(val(b)) : val(b).compareTo(val(a)));
       return c != 0 ? c : b.total.compareTo(a.total);
     });
     if (only != null) {
@@ -489,7 +585,7 @@ class _ShellState extends State<Shell> {
   }
 
   List<String> appChoices() {
-    final set = <String>{for (final r in rows) r.app, for (final sl in slots) sl.app};
+    final set = <String>{for (final r in rows) r.app, for (final c in contribs) c.app};
     if (only != null) set.add(only!);
     final list = set.toList()..sort((a, b) => titleOf(a).toLowerCase().compareTo(titleOf(b).toLowerCase()));
     return list;
@@ -541,7 +637,7 @@ class _ShellState extends State<Shell> {
           ),
         ]),
         const SizedBox(height: 10),
-        ActivityChart(minGroup: to.difference(from).inDays + 1 > 31 ? 12 : (to.difference(from).inDays + 1 > 7 ? 3 : 1), first: from, total: (to.difference(from).inDays + 1) * 288, slots: slots, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240),
+        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240, onView: onChartView),
       ]),
     );
   }
@@ -563,13 +659,13 @@ class _ShellState extends State<Shell> {
       columnWidths: const {0: FlexColumnWidth(3)},
       children: [
         TableRow(children: [
-          cell(tr('app'), style: head),
+          sortHead(tr('app'), 'app', head),
           if (liveMode) cell(tr('now'), style: head),
-          cell(tr('focused'), style: head),
-          cell(tr('open'), style: head),
-          cell(tr('minimized'), style: head),
-          cell(tr('background'), style: head),
-          cell(tr('total'), style: head),
+          sortHead(tr('focused'), 'focused', head),
+          sortHead(tr('open'), 'open', head),
+          sortHead(tr('minimized'), 'minimized', head),
+          sortHead(tr('background'), 'background', head),
+          sortHead(tr('total'), 'total', head),
         ]),
         for (final r in sortedRows())
           TableRow(
@@ -612,6 +708,12 @@ class _ShellState extends State<Shell> {
           ]),
         );
     return Column(children: [
+      Wrap(children: [
+        sortHead(tr('app'), 'app', head),
+        sortHead(tr('total'), 'total', head),
+        sortHead(tr('focused'), 'focused', head),
+        sortHead(tr('open'), 'open', head),
+      ]),
       for (final r in sortedRows())
         GestureDetector(
           onTap: () => toggleOnly(r.app),
@@ -780,55 +882,6 @@ class _SettingsPageState extends State<SettingsPage> {
   String? checkText;
   bool checking = false;
   late bool localApi = prefs.flag('localapi');
-  late bool discord = prefs.flag('discordrpc');
-  String rpcStatus = '';
-  bool rpcRestarting = false;
-  Timer? rpcTimer;
-
-  String readRpcStatus() {
-    try {
-      return File('${dataDir()}${Platform.pathSeparator}discordrpc.status').readAsStringSync().trim();
-    } catch (_) {
-      return '';
-    }
-  }
-
-  @override
-  void dispose() {
-    rpcTimer?.cancel();
-    super.dispose();
-  }
-
-  Future<void> restartRpc() async {
-    setState(() => rpcRestarting = true);
-    prefs.setFlag('discordrpc', true);
-    setState(() => discord = true);
-    try {
-      await Process.run('taskkill', ['/F', '/T', '/IM', 'Discord.exe']);
-      await Future<void>.delayed(const Duration(seconds: 7));
-      final local = Platform.environment['LOCALAPPDATA'] ?? '';
-      final updater = File('$local\\Discord\\Update.exe');
-      if (updater.existsSync()) {
-        await Process.start(updater.path, ['--processStart', 'Discord.exe'], mode: ProcessStartMode.detached);
-      }
-    } catch (_) {}
-    if (!mounted) return;
-    setState(() {
-      rpcRestarting = false;
-      rpcStatus = readRpcStatus();
-    });
-  }
-
-  void showRpcHelp() {
-    showDialog<void>(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text(tr('discordRpc')),
-        content: Text(tr('rpcRestartHelp')),
-        actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok')))],
-      ),
-    );
-  }
 
   Future<void> toggleApi(bool v) async {
     if (v) {
@@ -852,11 +905,6 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
-    rpcStatus = readRpcStatus();
-    rpcTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      final v = readRpcStatus();
-      if (mounted && v != rpcStatus) setState(() => rpcStatus = v);
-    });
     autostartEnabled().then((v) {
       if (mounted) setState(() => auto = v);
     });
@@ -922,42 +970,6 @@ class _SettingsPageState extends State<SettingsPage> {
           Switch(value: localApi, onChanged: toggleApi),
         ]),
         Text(tr('localApiHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
-        const Divider(height: 28),
-        Row(children: [
-          Expanded(child: Text(tr('discordRpc'), style: const TextStyle(fontWeight: FontWeight.w700))),
-          Switch(
-            value: discord,
-            onChanged: (v) {
-              prefs.setFlag('discordrpc', v);
-              setState(() => discord = v);
-            },
-          ),
-        ]),
-        Text(tr('discordRpcHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
-        if (discord) ...[
-          const SizedBox(height: 8),
-          if (rpcStatus == 'busy')
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: cWarn.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cWarn)),
-              child: Text(tr('rpcFailed'), style: const TextStyle(color: cWarn, fontWeight: FontWeight.w700)),
-            )
-          else
-            Text(
-              rpcStatus == 'active' ? tr('rpcActive') : tr('rpcWaiting'),
-              style: TextStyle(color: rpcStatus == 'active' ? cOk : cMuted, fontWeight: FontWeight.w700),
-            ),
-          const SizedBox(height: 8),
-          Row(children: [
-            OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
-            IconButton(
-              tooltip: tr('helpTitle'),
-              icon: const Icon(Icons.help_outline, size: 20, color: cMuted),
-              onPressed: showRpcHelp,
-            ),
-          ]),
-        ],
         const Divider(height: 28),
         Row(children: [
           Expanded(child: Text(tr('language'), style: const TextStyle(fontWeight: FontWeight.w700))),

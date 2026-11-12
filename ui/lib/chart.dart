@@ -35,16 +35,24 @@ int metricOf(List<int> v, Metric m) {
   }
 }
 
-const _daySlots = 288;
-const _groups = [1, 3, 12, 36, 72, 144, 288, 864, 2016];
-const _tickSteps = [6, 12, 36, 72, 144, 288, 576, 1440, 2016, 4320, 8640, 17280];
-const _minSpan = 12.0;
+const _daySec = 86400;
+const _niceSteps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800, 2592000];
+const _minSpan = 30.0;
 const _left = 42.0;
 const _right = 10.0;
 const _top = 8.0;
 const _bottom = 22.0;
 const _tipWidth = 250.0;
-const _detailWidth = 236.0;
+const _detailWidth = 250.0;
+
+int bucketSecFor(double span, double plotW) {
+  final budget = (plotW / 5).clamp(150.0, 250.0).toDouble();
+  final target = span / budget;
+  for (final c in _niceSteps) {
+    if (c >= target) return c;
+  }
+  return _niceSteps.last;
+}
 
 class Bucket {
   final Map<String, List<int>> apps = {};
@@ -61,38 +69,42 @@ class Session {
 
 String two(int v) => v.toString().padLeft(2, '0');
 
-String clock(int slot) {
-  final m = (slot % _daySlots) * 5;
-  return '${two(m ~/ 60 % 24)}:${two(m % 60)}';
-}
-
-String labelOf(DateTime first, int total, int slot, {bool dateOnly = false}) {
-  final day = first.add(Duration(days: slot ~/ _daySlots));
-  final date = '${two(day.day)}.${two(day.month)}';
+String labelAt(DateTime first, int total, num sec, {bool seconds = false, bool dateOnly = false, bool timeOnly = false}) {
+  if (total <= _daySec && sec >= total) return '24:00';
+  final d = first.add(Duration(seconds: sec.floor()));
+  final date = '${two(d.day)}.${two(d.month)}';
   if (dateOnly) return date;
-  if (total <= _daySlots) return slot >= _daySlots ? '24:00' : clock(slot);
-  return '$date ${clock(slot)}';
+  final t = '${two(d.hour)}:${two(d.minute)}${seconds ? ':${two(d.second)}' : ''}';
+  if (timeOnly || total <= _daySec) return t;
+  return '$date $t';
 }
 
-List<Session> sessionsOf(List<Slot> slots, String app, Metric metric) {
-  final per = <int, List<int>>{};
-  for (final s in slots) {
-    if (s.app != app) continue;
-    per.putIfAbsent(s.slot, () => [0, 0, 0])[s.state.clamp(0, 2).toInt()] += s.ms;
-  }
-  final keys = per.keys.toList()..sort();
-  final out = <Session>[];
-  for (final k in keys) {
-    final v = metricOf(per[k]!, metric);
-    if (v <= 0) continue;
-    if (out.isNotEmpty && out.last.end == k - 1) {
-      final prev = out.last;
-      out[out.length - 1] = Session(prev.start, k, prev.ms + v);
+List<Session> sessionsOf(List<Contrib> items, String app, Metric metric) {
+  final list = <Session>[];
+  final mine = items.where((c) => c.app == app && c.ms > 0 && _inMetric(c.state, metric)).toList()..sort((a, b) => a.start.compareTo(b.start));
+  for (final c in mine) {
+    final end = c.end > c.start ? c.end : c.start + 1;
+    if (list.isNotEmpty && c.start - list.last.end <= 30 && c.start >= list.last.start) {
+      final p = list.last;
+      list[list.length - 1] = Session(p.start, math.max(p.end, end), p.ms + c.ms);
     } else {
-      out.add(Session(k, k, v));
+      list.add(Session(c.start, end, c.ms));
     }
   }
-  return out;
+  return list;
+}
+
+bool _inMetric(int state, Metric m) {
+  switch (m) {
+    case Metric.focused:
+      return state == 0;
+    case Metric.open:
+      return state == 1;
+    case Metric.minimized:
+      return state == 2;
+    case Metric.visible:
+      return state >= 0 && state <= 2;
+  }
 }
 
 class _Tip {
@@ -118,7 +130,7 @@ class _Tip {
 class ActivityChart extends StatefulWidget {
   const ActivityChart({
     super.key,
-    required this.slots,
+    required this.contribs,
     required this.only,
     required this.metric,
     required this.title,
@@ -126,19 +138,18 @@ class ActivityChart extends StatefulWidget {
     required this.height,
     required this.first,
     required this.total,
-    required this.minGroup,
+    this.onView,
   });
-
-  final int minGroup;
 
   final DateTime first;
   final int total;
-  final List<Slot> slots;
+  final List<Contrib> contribs;
   final String? only;
   final Metric metric;
   final String Function(String app) title;
   final Widget Function(String app, double size) icon;
   final double height;
+  final void Function(double from, double to, int bucketSec)? onView;
 
   @override
   State<ActivityChart> createState() => _ActivityChartState();
@@ -150,18 +161,20 @@ class _ActivityChartState extends State<ActivityChart> {
   OverlayEntry? entry;
   Timer? hideTimer;
   Timer? removeTimer;
+  Timer? viewTimer;
   String? lastDetail;
 
   double vx0 = 0;
-  double vx1 = _daySlots.toDouble();
+  double vx1 = _daySec.toDouble();
   List<Bucket?> cache = [];
-  Object? cacheKey;
-  int dataTotal = _daySlots;
+  List<Object?> cacheKey = [];
+  int cLo = 0;
+  int cHi = 0;
   double lastScale = 1;
   bool touch = false;
   bool dragging = false;
 
-    int group = 3;
+  int bucket = 300;
   int top = 60000;
   double plotW = 1;
   double plotH = 1;
@@ -172,23 +185,31 @@ class _ActivityChartState extends State<ActivityChart> {
   void initState() {
     super.initState();
     vx1 = widget.total.toDouble();
+    scheduleView();
   }
 
-  String rangeText(int bucket) {
-    final start = bucket * group;
-    final end = math.min(widget.total, (bucket + 1) * group);
-    if (group >= _daySlots) {
-      final a = labelOf(widget.first, widget.total, start, dateOnly: true);
-      final b = labelOf(widget.first, widget.total, end - 1, dateOnly: true);
+  void scheduleView() {
+    viewTimer?.cancel();
+    viewTimer = Timer(const Duration(milliseconds: 140), () => widget.onView?.call(vx0, vx1, bucket));
+  }
+
+  String rangeText(int i) {
+    final start = i * bucket;
+    final end = math.min(widget.total, (i + 1) * bucket);
+    if (bucket >= _daySec) {
+      final a = labelAt(widget.first, widget.total, start, dateOnly: true);
+      final b = labelAt(widget.first, widget.total, end - 1, dateOnly: true);
       return a == b ? a : '$a - $b';
     }
-    return '${labelOf(widget.first, widget.total, start)} - ${clock(end)}';
+    final sec = bucket < 60;
+    return '${labelAt(widget.first, widget.total, start, seconds: sec)} - ${labelAt(widget.first, widget.total, end, seconds: sec, timeOnly: true)}';
   }
 
   @override
   void dispose() {
     hideTimer?.cancel();
     removeTimer?.cancel();
+    viewTimer?.cancel();
     entry?.remove();
     entry = null;
     tip.dispose();
@@ -202,59 +223,77 @@ class _ActivityChartState extends State<ActivityChart> {
       vx0 = 0;
       vx1 = widget.total.toDouble();
       hideNow();
+      scheduleView();
     }
     entry?.markNeedsBuild();
   }
 
   void rebuildData() {
     final total = widget.total;
-    var g = _groups.last;
-    for (final c in _groups) {
-      if (c >= widget.minGroup && span / c <= 200) {
-        g = c;
-        break;
+    final b = bucketSecFor(span, plotW);
+    bucket = b;
+    final count = (total / b).ceil();
+    final needLo = (vx0 / b).floor() - 1;
+    final needHi = (vx1 / b).ceil() + 1;
+    final sameKey = cacheKey.length == 4 &&
+        identical(cacheKey[0], widget.contribs) &&
+        cacheKey[1] == widget.only &&
+        cacheKey[2] == widget.metric &&
+        cacheKey[3] == b;
+    if (sameKey && (needLo >= cLo || cLo == 0) && (needHi <= cHi || cHi >= count)) return;
+    final margin = ((needHi - needLo) * 1.0).ceil();
+    cLo = math.max(0, needLo - margin);
+    cHi = math.min(count, needHi + margin);
+    cacheKey = [widget.contribs, widget.only, widget.metric, b];
+    final list = List<Bucket?>.filled(math.max(0, cHi - cLo), null);
+    final winStart = cLo * b;
+    final winEnd = cHi * b;
+    for (final c in widget.contribs) {
+      if (c.state < 0 || c.state > 2) continue;
+      final cs = c.start;
+      final ce = c.end > c.start ? c.end : c.start + 1;
+      if (ce <= winStart || cs >= winEnd) continue;
+      final dur = ce - cs;
+      final i0 = math.max(cLo, cs ~/ b);
+      final i1 = math.min(cHi - 1, (ce - 1) ~/ b);
+      for (var i = i0; i <= i1; i++) {
+        final ov = math.min(ce, (i + 1) * b) - math.max(cs, i * b);
+        if (ov <= 0) continue;
+        final share = (c.ms * ov / dur).round();
+        if (share <= 0) continue;
+        final bk = list[i - cLo] ??= Bucket();
+        bk.apps.putIfAbsent(c.app, () => [0, 0, 0])[c.state] += share;
       }
     }
-    group = g;
-    final key = [identityHashCode(widget.slots), widget.only, widget.metric, group, total];
-    final same = cacheKey is List && (cacheKey as List).length == key.length && Iterable<int>.generate(key.length).every((i) => (cacheKey as List)[i] == key[i]);
-    if (same) return;
-    cacheKey = key;
-    final count = (total / group).ceil();
-    final list = List<Bucket?>.filled(count, null);
-    for (final s in widget.slots) {
-      if (s.slot < 0 || s.slot >= total) continue;
-      final i = (s.slot ~/ group).clamp(0, count - 1).toInt();
-      final b = list[i] ??= Bucket();
-      b.apps.putIfAbsent(s.app, () => [0, 0, 0])[s.state.clamp(0, 2).toInt()] += s.ms;
-    }
     var peak = 0;
-    for (final b in list) {
-      if (b == null) continue;
-      b.value = widget.only != null
-          ? (b.apps[widget.only] == null ? 0 : metricOf(b.apps[widget.only]!, widget.metric))
-          : b.apps.values.fold(0, (a, v) => a + metricOf(v, widget.metric));
-      if (b.value > peak) peak = b.value;
+    for (final bk in list) {
+      if (bk == null) continue;
+      bk.value = widget.only != null
+          ? (bk.apps[widget.only] == null ? 0 : metricOf(bk.apps[widget.only]!, widget.metric))
+          : bk.apps.values.fold(0, (a, v) => a + metricOf(v, widget.metric));
+      if (bk.value > peak) peak = bk.value;
     }
     cache = list;
-    top = peak < 60000 ? 60000 : peak;
+    final floor = math.min(b * 1000, 60000);
+    top = peak < floor ? floor : peak;
   }
 
-  int valueAt(int i) => (i < 0 || i >= cache.length) ? 0 : (cache[i]?.value ?? 0);
+  Bucket? bucketOf(int i) => (i < cLo || i >= cHi) ? null : cache[i - cLo];
 
-  double slotCenter(int i) => i * group + (group - 1) / 2.0;
+  int valueAt(int i) => bucketOf(i)?.value ?? 0;
 
-  double xOf(double slot) => _left + (slot - vx0) / span * plotW;
+  double slotCenter(int i) => (i + 0.5) * bucket;
+
+  double xOf(double sec) => _left + (sec - vx0) / span * plotW;
 
   double yOf(double value) => _top + plotH * (1 - value / top);
 
   double lineY(double x) {
-    final slot = vx0 + (x - _left) / plotW * span;
-    final f = (slot - (group - 1) / 2.0) / group;
-    final i0 = f.floor().clamp(0, cache.length - 1).toInt();
-    final i1 = (i0 + 1).clamp(0, cache.length - 1).toInt();
+    final sec = vx0 + (x - _left) / plotW * span;
+    final f = sec / bucket - 0.5;
+    final i0 = f.floor();
     final t = (f - i0).clamp(0.0, 1.0).toDouble();
-    final v = valueAt(i0) * (1 - t) + valueAt(i1) * t;
+    final v = valueAt(i0) * (1 - t) + valueAt(i0 + 1) * t;
     return yOf(v);
   }
 
@@ -268,12 +307,13 @@ class _ActivityChartState extends State<ActivityChart> {
     vx1 = a + s;
   }
 
-  void zoomX(double factor, double focalSlot) {
+  void zoomX(double factor, double focal) {
     final s = (span / factor).clamp(math.min(_minSpan, widget.total.toDouble()), widget.total.toDouble()).toDouble();
-    final ratio = (focalSlot - vx0) / span;
-    vx0 = focalSlot - ratio * s;
+    final ratio = (focal - vx0) / span;
+    vx0 = focal - ratio * s;
     vx1 = vx0 + s;
     clampView();
+    scheduleView();
   }
 
   void resetView() {
@@ -282,12 +322,13 @@ class _ActivityChartState extends State<ActivityChart> {
       vx1 = widget.total.toDouble();
     });
     hideNow();
+    scheduleView();
   }
 
   int bucketAt(double dx) {
-    final slot = vx0 + (dx - _left) / plotW * span;
-    final i = ((slot - (group - 1) / 2.0) / group).round();
-    return i.clamp(0, cache.length - 1).toInt();
+    final sec = vx0 + (dx - _left) / plotW * span;
+    final maxI = (widget.total / bucket).ceil() - 1;
+    return (sec / bucket).floor().clamp(0, math.max(0, maxI)).toInt();
   }
 
   void show(Offset local, {required bool touchMode, bool pin = false}) {
@@ -429,7 +470,10 @@ class _ActivityChartState extends State<ActivityChart> {
                 vx1 = vx0 + width;
                 clampView();
               });
-              if (moved) hideNow();
+              if (moved) {
+                hideNow();
+                scheduleView();
+              }
             },
             child: SizedBox(
               key: key,
@@ -441,7 +485,8 @@ class _ActivityChartState extends State<ActivityChart> {
                   builder: (context, t, _) => CustomPaint(
                     painter: _ChartPainter(
                       buckets: cache,
-                      group: group,
+                      cLo: cLo,
+                      bucket: bucket,
                       first: widget.first,
                       total: widget.total,
                       vx0: vx0,
@@ -464,9 +509,9 @@ class _ActivityChartState extends State<ActivityChart> {
     return ValueListenableBuilder<_Tip?>(
       valueListenable: tip,
       builder: (context, t, _) {
-        if (t == null || t.bucket >= cache.length) return const SizedBox.shrink();
+        if (t == null) return const SizedBox.shrink();
         final screen = MediaQuery.of(context).size;
-        final b = cache[t.bucket] ?? Bucket();
+        final b = bucketOf(t.bucket) ?? Bucket();
         final rows = b.apps.entries
             .where((e) => metricOf(e.value, widget.metric) > 0 && (widget.only == null || e.key == widget.only))
             .toList()
@@ -611,7 +656,10 @@ class _ActivityChartState extends State<ActivityChart> {
   }
 
   Widget _detailTip(String app) {
-    final sessions = sessionsOf(widget.slots, app, widget.metric);
+    final tb = tip.value?.bucket ?? 0;
+    final ws = tb * bucket;
+    final we = (tb + 1) * bucket;
+    final sessions = sessionsOf(widget.contribs, app, widget.metric).where((s) => s.end > ws && s.start < we).toList();
     final total = sessions.fold<int>(0, (a, s) => a + s.ms);
     return Material(
       type: MaterialType.transparency,
@@ -639,7 +687,7 @@ class _ActivityChartState extends State<ActivityChart> {
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 3),
                     child: Row(children: [
-                      Expanded(child: Text('${labelOf(widget.first, widget.total, s.start)} - ${clock(s.end + 1)}', style: const TextStyle(fontSize: 13))),
+                      Expanded(child: Text('${labelAt(widget.first, widget.total, s.start, seconds: true)} - ${labelAt(widget.first, widget.total, s.end, seconds: true, timeOnly: true)}', style: const TextStyle(fontSize: 13))),
                       Text(formatMs(s.ms), style: const TextStyle(fontSize: 12, color: cMuted)),
                     ]),
                   ),
@@ -653,12 +701,13 @@ class _ActivityChartState extends State<ActivityChart> {
 }
 
 class _ChartPainter extends CustomPainter {
-  _ChartPainter({required this.buckets, required this.first, required this.total, required this.group, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover});
+  _ChartPainter({required this.buckets, required this.cLo, required this.bucket, required this.first, required this.total, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover});
 
   final List<Bucket?> buckets;
+  final int cLo;
+  final int bucket;
   final DateTime first;
   final int total;
-  final int group;
   final double vx0;
   final double vx1;
   final double yBottom;
@@ -670,9 +719,10 @@ class _ChartPainter extends CustomPainter {
     final plotW = size.width - _left - _right;
     final plotH = size.height - _top - _bottom;
     final span = vx1 - vx0;
-    double xOf(double slot) => _left + (slot - vx0) / span * plotW;
+    double xOf(double sec) => _left + (sec - vx0) / span * plotW;
     double yOf(double v) => _top + plotH * (1 - (v - yBottom) / ySpan);
-    double center(int i) => i * group + (group - 1) / 2.0;
+    double center(int i) => (i + 0.5) * bucket;
+    double valueOf(int i) => (i < cLo || i >= cLo + buckets.length ? 0 : (buckets[i - cLo]?.value ?? 0)).toDouble();
 
     final grid = Paint()
       ..color = cBorder
@@ -685,18 +735,18 @@ class _ChartPainter extends CustomPainter {
       final tp = TextPainter(text: TextSpan(text: formatMs(v.round()), style: label), textDirection: TextDirection.ltr)..layout();
       tp.paint(canvas, Offset(_left - tp.width - 6, y - tp.height / 2));
     }
-    var step = _tickSteps.last;
-    for (final c in _tickSteps) {
+    var step = _niceSteps.last;
+    for (final c in _niceSteps) {
       if (span / c <= 6) {
         step = c;
         break;
       }
     }
     final firstTick = (vx0 / step).ceil() * step;
-    for (var sl = firstTick; sl <= vx1; sl += step) {
-      final x = xOf(sl.toDouble());
+    for (var sec = firstTick; sec <= vx1; sec += step) {
+      final x = xOf(sec.toDouble());
       canvas.drawLine(Offset(x, _top), Offset(x, _top + plotH), grid..color = cBorder.withValues(alpha: 0.5));
-      final text = labelOf(first, total, sl, dateOnly: step >= _daySlots);
+      final text = labelAt(first, total, sec, seconds: step < 60, dateOnly: step >= _daySec);
       final tp = TextPainter(text: TextSpan(text: text, style: label), textDirection: TextDirection.ltr)..layout();
       var dx = x - tp.width / 2;
       if (dx + tp.width > size.width) dx = size.width - tp.width;
@@ -707,9 +757,10 @@ class _ChartPainter extends CustomPainter {
 
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(_left, 0, plotW, _top + plotH + 1));
-    final lo = (((vx0 - (group - 1) / 2.0) / group).floor() - 1).clamp(0, buckets.length - 1).toInt();
-    final hi = (((vx1 - (group - 1) / 2.0) / group).ceil() + 1).clamp(0, buckets.length - 1).toInt();
-    final pts = [for (var i = lo; i <= hi; i++) Offset(xOf(center(i)), yOf((buckets[i]?.value ?? 0).toDouble()))];
+    final maxI = (total / bucket).ceil() - 1;
+    final lo = ((vx0 / bucket).floor() - 1).clamp(0, maxI).toInt();
+    final hi = ((vx1 / bucket).ceil() + 1).clamp(0, maxI).toInt();
+    final pts = [for (var i = lo; i <= hi; i++) Offset(xOf(center(i)), yOf(valueOf(i)))];
     final baseY = yOf(0);
     if (pts.length >= 2) {
       final path = Path()..moveTo(pts.first.dx, pts.first.dy);
@@ -752,8 +803,8 @@ class _ChartPainter extends CustomPainter {
           ..color = cPrimary,
       );
     }
-    if (hover != null && hover! < buckets.length) {
-      final p = Offset(xOf(center(hover!)), yOf((buckets[hover!]?.value ?? 0).toDouble()));
+    if (hover != null) {
+      final p = Offset(xOf(center(hover!)), yOf(valueOf(hover!)));
       canvas.drawLine(
           Offset(p.dx, _top),
           Offset(p.dx, _top + plotH),

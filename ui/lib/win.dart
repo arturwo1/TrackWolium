@@ -116,3 +116,79 @@ String? readLive() {
     calloc.free(name);
   }
 }
+
+final _getPlacement = _u32?.lookupFunction<Int32 Function(IntPtr, Pointer<Int32>), int Function(int, Pointer<Int32>)>('GetWindowPlacement');
+final _setPlacement = _u32?.lookupFunction<Int32 Function(IntPtr, Pointer<Int32>), int Function(int, Pointer<Int32>)>('SetWindowPlacement');
+final _monitorFromRect = _u32?.lookupFunction<IntPtr Function(Pointer<Int32>, Uint32), int Function(Pointer<Int32>, int)>('MonitorFromRect');
+
+int _mainWindow() {
+  if (_findWindow == null) return 0;
+  final cls = 'FLUTTER_RUNNER_WIN32_WINDOW'.toNativeUtf16();
+  try {
+    return _findWindow!(cls, Pointer<Utf16>.fromAddress(0));
+  } finally {
+    calloc.free(cls);
+  }
+}
+
+class WindowBox {
+  const WindowBox(this.left, this.top, this.right, this.bottom, this.maximized);
+
+  final int left;
+  final int top;
+  final int right;
+  final int bottom;
+  final bool maximized;
+}
+
+WindowBox? readWindowBox() {
+  final h = _mainWindow();
+  if (h == 0 || _getPlacement == null) return null;
+  final p = calloc<Int32>(11);
+  try {
+    p[0] = 44;
+    if (_getPlacement!(h, p) == 0) return null;
+    final show = p[2];
+    if (show == 2) return null;
+    return WindowBox(p[7], p[8], p[9], p[10], show == 3);
+  } finally {
+    calloc.free(p);
+  }
+}
+
+bool boxVisible(WindowBox b) {
+  if (_monitorFromRect == null) return true;
+  if (b.right - b.left < 300 || b.bottom - b.top < 240) return false;
+  final r = calloc<Int32>(4);
+  try {
+    r[0] = b.left;
+    r[1] = b.top;
+    r[2] = b.right;
+    r[3] = b.top + 48;
+    return _monitorFromRect!(r, 0) != 0;
+  } finally {
+    calloc.free(r);
+  }
+}
+
+void applyWindowBox(WindowBox b) {
+  final h = _mainWindow();
+  if (h == 0 || _getPlacement == null || _setPlacement == null) return;
+  final p = calloc<Int32>(11);
+  try {
+    p[0] = 44;
+    if (_getPlacement!(h, p) == 0) return;
+    p[7] = b.left;
+    p[8] = b.top;
+    p[9] = b.right;
+    p[10] = b.bottom;
+    _setPlacement!(h, p);
+  } finally {
+    calloc.free(p);
+  }
+}
+
+void maximizeMainWindow() {
+  final h = _mainWindow();
+  if (h != 0) _showWindow?.call(h, 3);
+}

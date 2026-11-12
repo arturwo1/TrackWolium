@@ -79,10 +79,11 @@ class AppMeta {
   final String path;
 }
 
-class Slot {
-  Slot(this.slot, this.app, this.state, this.ms);
+class Contrib {
+  const Contrib(this.start, this.end, this.app, this.state, this.ms);
 
-  final int slot;
+  final int start;
+  final int end;
   final String app;
   final int state;
   final int ms;
@@ -144,18 +145,44 @@ class Usage {
     return list;
   }
 
-  List<Slot> timeline(String from, String to, [int bin = 1]) {
+  List<Contrib> contribs(DateTime first, int w0, int w1, int bin, bool sessions) {
     final db = _open();
     if (db == null) return [];
-    try {
-      final base = DateTime.parse(from);
-      return db.select('SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM timeline WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, state', [from, to, bin]).map((r) {
-        final d = DateTime.parse(r['day'] as String).difference(base).inDays;
-        return Slot(d * 288 + (r['bslot'] as int), r['app'] as String, r['state'] as int, r['ms'] as int);
-      }).toList();
-    } catch (_) {
-      return [];
+    final out = <Contrib>[];
+    final origin = DateTime.utc(first.year, first.month, first.day);
+    final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
+    int? cutoff;
+    if (sessions) {
+      try {
+        final r = db.select('SELECT MIN(start) AS m FROM sessions');
+        if (r.isNotEmpty && r.first['m'] != null) cutoff = (r.first['m'] as int) - firstUnix;
+      } catch (_) {}
     }
+    try {
+      final a = first.add(Duration(seconds: w0));
+      final b = first.add(Duration(seconds: w1));
+      String key(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      final rows = db.select(
+          'SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM timeline WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, state',
+          [key(a), key(b), bin]);
+      for (final r in rows) {
+        final d = DateTime.parse('${r['day']}T00:00:00Z').difference(origin).inDays;
+        final start = d * 86400 + (r['bslot'] as int) * 300;
+        final end = start + bin * 300;
+        if (cutoff != null && end > cutoff) continue;
+        out.add(Contrib(start, end, r['app'] as String, r['state'] as int, r['ms'] as int));
+      }
+    } catch (_) {}
+    if (cutoff != null) {
+      try {
+        for (final r in db.select('SELECT app, state, start, stop FROM sessions WHERE stop >= ?1 AND start <= ?2', [firstUnix + w0, firstUnix + w1])) {
+          final start = (r['start'] as int) - firstUnix;
+          final end = (r['stop'] as int) - firstUnix;
+          out.add(Contrib(start, end, r['app'] as String, r['state'] as int, (end - start) * 1000));
+        }
+      } catch (_) {}
+    }
+    return out;
   }
 
   Map<String, AppMeta> names() {

@@ -1,4 +1,5 @@
 #include "tw/engine.hpp"
+#include <algorithm>
 #include <ctime>
 #include <thread>
 
@@ -29,10 +30,14 @@ int local_slot_now() {
 }
 
 Engine::Engine(std::shared_ptr<IProbe> probe, Duration max_gap)
-    : probe_(std::move(probe)), max_gap_(max_gap), tracker_(max_gap), day_fn_(local_day_now), slot_fn_(local_slot_now) {}
+    : probe_(std::move(probe)), max_gap_(max_gap), tracker_(max_gap), day_fn_(local_day_now), slot_fn_(local_slot_now), wall_fn_([] { return static_cast<long long>(std::time(nullptr)); }) {}
 
 void Engine::set_slot_source(std::function<int()> slot) {
   slot_fn_ = std::move(slot);
+}
+
+void Engine::set_wall_source(std::function<long long()> wall) {
+  wall_fn_ = std::move(wall);
 }
 
 void Engine::add_sink(std::shared_ptr<ISink> sink) {
@@ -54,6 +59,12 @@ void Engine::set_store(std::shared_ptr<IStore> store, Duration flush_every) {
 
 void Engine::flush_pending() {
   if (!store_) return;
+  if (!pending_sessions_.empty()) {
+    std::vector<SessionRec> recs;
+    recs.reserve(pending_sessions_.size());
+    for (const auto& kv : pending_sessions_) recs.push_back(kv.second);
+    if (store_->add_sessions(recs)) pending_sessions_.clear();
+  }
   if (pending_.empty()) {
     if (!new_names_.empty() && store_->set_names(new_names_)) new_names_.clear();
     return;
@@ -71,6 +82,28 @@ void Engine::flush_pending() {
     if (store_->add_timeline(day_, slots)) pending_slots_.clear();
   }
   if (store_->add(day_, batch)) pending_.clear();
+}
+
+void Engine::note_session(const Interval& iv) {
+  long long wall = wall_fn_();
+  long long secs = (iv.ms.count() + 999) / 1000;
+  if (secs < 1) secs = 1;
+  long long gap = std::max<long long>(15, (max_gap_.count() + 999) / 1000);
+  auto it = open_.find(iv.app);
+  int st = static_cast<int>(iv.state);
+  if (it != open_.end() && it->second.state == st && wall - it->second.stop <= gap) {
+    it->second.stop = std::max(wall, it->second.stop + 1);
+  } else {
+    OpenSession o;
+    o.state = st;
+    o.start = wall - secs;
+    o.stop = wall;
+    if (it != open_.end() && o.start < it->second.stop) o.start = it->second.stop;
+    if (o.stop <= o.start) o.stop = o.start + 1;
+    open_[iv.app] = o;
+    it = open_.find(iv.app);
+  }
+  pending_sessions_[{iv.app, it->second.start}] = {iv.app, it->second.state, it->second.start, it->second.stop};
 }
 
 void Engine::step(TimePoint now) {
@@ -106,6 +139,7 @@ void Engine::step(TimePoint now) {
   if (store_) {
     for (const auto& iv : intervals) {
       pending_[{iv.app, static_cast<int>(iv.state)}] += iv.ms;
+      if (iv.state != State::Background) note_session(iv);
       if (iv.state != State::Background) pending_slots_[{slot_fn_(), iv.app, static_cast<int>(iv.state)}] += iv.ms.count();
     }
     bool focus_changed = flush_started_ && focus != last_focus_;

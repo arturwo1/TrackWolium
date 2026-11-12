@@ -48,6 +48,8 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
       "ms INTEGER NOT NULL,"
       "PRIMARY KEY(day, app, state)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app, state)) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS sessions(app TEXT NOT NULL, start INTEGER NOT NULL, stop INTEGER NOT NULL, state INTEGER NOT NULL, PRIMARY KEY(app, start)) WITHOUT ROWID;"
+      "CREATE INDEX IF NOT EXISTS sessions_start ON sessions(start);"
       "CREATE TABLE IF NOT EXISTS presence(ts INTEGER NOT NULL, client_id TEXT NOT NULL, name TEXT NOT NULL, details TEXT NOT NULL, state TEXT NOT NULL, started INTEGER NOT NULL);"
       "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;";
   if (!exec(db, schema, error)) {
@@ -153,6 +155,46 @@ bool SqliteStore::set_names(const std::vector<AppMeta>& names) {
   }
   sqlite3_finalize(st);
   return exec(db_, "COMMIT", &last_error_);
+}
+
+bool SqliteStore::add_sessions(const std::vector<SessionRec>& sessions) {
+  if (sessions.empty()) return true;
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
+  sqlite3_stmt* st = nullptr;
+  const char* sql =
+      "INSERT INTO sessions(app, start, stop, state) VALUES(?1, ?2, ?3, ?4) "
+      "ON CONFLICT(app, start) DO UPDATE SET stop = excluded.stop, state = excluded.state";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+    last_error_ = sqlite3_errmsg(db_);
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  for (const auto& r : sessions) {
+    sqlite3_bind_text(st, 1, r.app.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, r.start);
+    sqlite3_bind_int64(st, 3, r.stop);
+    sqlite3_bind_int(st, 4, r.state);
+    sqlite3_step(st);
+    sqlite3_reset(st);
+  }
+  sqlite3_finalize(st);
+  return exec(db_, "COMMIT", &last_error_);
+}
+
+std::vector<SessionRec> SqliteStore::load_sessions(long long from, long long to) {
+  std::vector<SessionRec> out;
+  std::lock_guard<std::mutex> lock(mtx_);
+  sqlite3_stmt* st = nullptr;
+  if (sqlite3_prepare_v2(db_, "SELECT app, state, start, stop FROM sessions WHERE stop >= ?1 AND start <= ?2 ORDER BY start", -1, &st, nullptr) != SQLITE_OK) return out;
+  sqlite3_bind_int64(st, 1, from);
+  sqlite3_bind_int64(st, 2, to);
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    const unsigned char* t = sqlite3_column_text(st, 0);
+    out.push_back({t ? reinterpret_cast<const char*>(t) : "", sqlite3_column_int(st, 1), sqlite3_column_int64(st, 2), sqlite3_column_int64(st, 3)});
+  }
+  sqlite3_finalize(st);
+  return out;
 }
 
 bool SqliteStore::add_presence(std::int64_t ts, const std::vector<Presence>& items) {

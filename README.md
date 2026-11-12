@@ -1,6 +1,42 @@
-# TrackWolium
+<div align="center">
 
-Modular tracker of running applications. The core is C++17 with no dependencies.
+<img src="assets/icon/wolium_128.png" width="96" alt="Wolium">
+
+# Wolium
+
+**Private activity tracker for Windows. Everything stays on your computer.**
+
+<a href="https://github.com/arturwo1/trackwolium/releases/latest/download/WoliumSetup.exe"><img src="https://img.shields.io/badge/Download-WoliumSetup.exe-80e0f5?style=for-the-badge&logo=windows&logoColor=111" alt="Download WoliumSetup.exe"></a>
+
+![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus&logoColor=white)
+![Flutter](https://img.shields.io/badge/Flutter-UI-02569B?logo=flutter&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
+![Windows 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white)
+![Disk overhead](https://img.shields.io/badge/Disk%20overhead-0%25-3ba55d)
+![DTSys](https://img.shields.io/badge/DTSys-proprietary-23272a)
+
+<img src="assets/screenshot.png" width="860" alt="Wolium preview (schematic)">
+
+</div>
+
+## Graph controls
+
+| Action | Mouse | Touch |
+| --- | --- | --- |
+| Zoom | wheel | pinch |
+| Pan | drag with left button | drag |
+| Reset | middle click or double click | double tap |
+| Tooltip | hover the line, click to pin | tap |
+
+The graph keeps 150-250 points in view and picks the bucket from the zoom level (days, hours, minutes, seconds). Idle time is drawn as zero. Second-level detail exists for data recorded since sessions were introduced; older data has 5-minute resolution.
+
+## Local API
+
+Off by default. Enable it in Settings (a warning explains that other programs can read your activity). Loopback only, requests with a foreign `Host` header are rejected.
+
+    GET http://127.0.0.1:9095/v1/current
+
+    {"uptime_ms":123456,"apps":[{"app":"code.exe","running":true,"state":"focused","focused_ms":1000,"open_ms":0,"minimized_ms":0,"background_ms":0}]}
 
 ## App states
 
@@ -27,7 +63,12 @@ The service keeps counters in RAM and writes them to `usage.db` (WAL) every 3 mi
 
 ## Localization
 
-No user-facing text is hardcoded in code. C++ strings live in `i18n/include/tw/lang/<code>.def` (one file per language, `en.def` is the reference and the fallback), Flutter strings in `ui/lib/l10n.dart`. The chosen language is stored in `%LOCALAPPDATA%\DTSys\Wolium\lang` and shared by the installer, uninstaller, tray menu and UI. A test checks that every language has every key. To add a language: add `<code>.def`, one line in `i18n.hpp` and one map in `l10n.dart`.
+No user-facing text is hardcoded. Every language is one file, `i18n/translations/<code>.json`, holding all native (tray, installer) and UI strings. Missing keys fall back to English. The chosen language is stored in `%LOCALAPPDATA%\DTSys\Wolium\lang`.
+
+    python tools/lang.py add de Deutsch 0x07
+    python tools/lang.py sync
+
+`add` creates the file from the English texts and registers the language everywhere. After translating the values, `sync` regenerates the C++ and Dart tables (CI runs it too). `0x07` is the Windows primary language id used for auto-detection (optional).
 
 ## Icon
 

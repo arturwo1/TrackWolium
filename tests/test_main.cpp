@@ -221,6 +221,11 @@ struct FakeStore : tw::IStore {
   std::map<std::string, std::map<std::pair<std::string, int>, long long>> data;
   int adds = 0;
   std::map<std::pair<int, std::string>, long long> slots;
+  std::map<std::pair<std::string, long long>, tw::SessionRec> sessions;
+  bool add_sessions(const std::vector<tw::SessionRec>& v) override {
+    for (const auto& r : v) sessions[{r.app, r.start}] = r;
+    return true;
+  }
   bool add_timeline(const std::string&, const std::vector<tw::SlotEntry>& v) override {
     for (const auto& e : v) slots[{e.slot, e.app}] += e.ms;
     return true;
@@ -318,6 +323,42 @@ void test_engine_timeline_slots() {
   CHECK((store->slots[{10, "a.exe"}] == 3000));
   CHECK((store->slots[{11, "a.exe"}] == 2000));
   CHECK((store->slots.count({10, "bg.exe"}) == 0));
+}
+
+void test_engine_sessions() {
+  auto probe = std::make_shared<tw::PushProbe>();
+  auto store = std::make_shared<FakeStore>();
+  long long wall = 1000;
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_wall_source([&] { return wall; });
+  e.set_store(store, Duration(1000000));
+  probe->push({{"a.exe", State::Focused}, {"bg.exe", State::Background}});
+  e.step(at(0));
+  wall = 1002;
+  e.step(at(2000));
+  wall = 1004;
+  e.step(at(4000));
+  wall = 1100;
+  e.step(at(6000));
+  e.finish();
+  CHECK(store->sessions.size() == 2);
+  auto first = store->sessions.begin()->second;
+  CHECK(first.app == "a.exe" && first.start == 1000 && first.stop == 1004);
+  auto second = store->sessions.rbegin()->second;
+  CHECK(second.start == 1098 && second.stop == 1100);
+  for (const auto& kv : store->sessions) CHECK(kv.second.app != "bg.exe");
+}
+
+void test_sqlite_sessions() {
+  std::string err;
+  auto store = tw::SqliteStore::open(":memory:", &err);
+  CHECK(store != nullptr);
+  if (!store) return;
+  CHECK(store->add_sessions({{"a", 0, 100, 160}}));
+  CHECK(store->add_sessions({{"a", 0, 100, 200}}));
+  auto got = store->load_sessions(0, 1000);
+  CHECK(got.size() == 1 && got[0].stop == 200);
 }
 
 void test_engine_seeds_from_store() {
@@ -497,6 +538,8 @@ int main() {
   test_engine_store_flush_and_finish();
   test_engine_flush_on_focus_change();
   test_engine_timeline_slots();
+  test_engine_sessions();
+  test_sqlite_sessions();
   test_engine_seeds_from_store();
   test_engine_day_rollover();
   test_sqlite_store();

@@ -1,0 +1,109 @@
+PROPRIETARY LICENSE - WOLIUM(TM) / TRACKWOLIUM
+
+Copyright (c) 2026 arturwol (GitHub: https://github.com/arturwo1), operating under the DTSys name.
+All rights reserved.
+
+This license covers TrackWolium and the Wolium desktop application, including source code, installers and binaries, user interface, design, branding, icons, documentation, translations, data formats and all related assets (the "Software"). DTSys products are marked and distributed by arturwol. In this license, "Author" means arturwol / DTSys.
+
+The Software is proprietary. The source code is published for transparency and for collaboration under section 3. It is not open source.
+
+---
+
+1. Rights granted
+
+Subject to this license, the Author grants you a personal, non-exclusive, non-transferable, revocable, royalty-free license to:
+
+(a) download official releases published by the Author and install and use them on devices you own or control, for personal or internal non-commercial purposes;
+(b) view the public repositories on GitHub and read the source code and documentation;
+(c) fork the repository on GitHub and run the code locally, solely for the purposes in section 3.
+
+No ownership, and no other right to the source code, binaries, design or branding, is granted. Rights not expressly granted are reserved.
+
+---
+
+2. Restrictions
+
+Without prior written permission of the Author you may NOT:
+
+(a) use the Software or any part of it commercially, or offer it, a modified version or a similar service to third parties, including as a hosted service;
+(b) sell, sublicense, rent, lend, publish or distribute the Software, its source code or modified versions, including public forks kept as independent products, mirrors, archives and unofficial installers or repackaged builds;
+(c) rebrand the Software or use the names Wolium, TrackWolium and DTSys, the icons or the visual identity for your own products or in a way that suggests affiliation or endorsement;
+(d) copy the user interface design, layouts or branding;
+(e) reverse engineer, decompile or disassemble the binaries, except where applicable law gives this right and forbids restricting it;
+(f) remove or alter copyright, trademark or license notices;
+(g) circumvent the consent, pause or privacy mechanisms of the Software or use it to monitor a person without that person's knowledge and consent;
+(h) use the Software, its source code, documentation, designs or data to train, fine-tune, evaluate or build machine learning or artificial intelligence models, or include them in datasets for such purposes. The Author expressly reserves this right, including the right to opt out of text and data mining under Article 4(3) of Directive (EU) 2019/790 and equivalent laws.
+
+---
+
+3. Contributions and permitted forks
+
+The Author welcomes people who help improve the Software. The following is allowed and is not a violation of section 2:
+
+(a) forking the repository on GitHub, as allowed by the GitHub Terms of Service, and modifying your fork to prepare bug reports, fixes, improvements and translations;
+(b) submitting pull requests, issues, patches and translations to the official repository;
+(c) using the build scripts and tests to verify your changes locally.
+
+Rules for forks: a fork exists only to contribute back. Do not publish releases or installers from it, do not present it as an independent or official product, and keep this license and all notices in it. The Author may ask you to delete a fork that is used for other purposes.
+
+Contribution license. By submitting a contribution you confirm that you wrote it or have the right to submit it, and you grant the Author a perpetual, worldwide, irrevocable, non-exclusive, royalty-free, sublicensable license to use, copy, modify, translate, distribute and relicense the contribution as part of the Software and in any form. You keep the copyright in your contribution. The Author is not obliged to accept it and owes no payment for it. Contributors are credited in the repository history.
+
+---
+
+4. Privacy
+
+The Software stores activity data locally on your device. The Author does not receive this data. The optional local API is disabled by default and serves only the loopback address of the device after you enable it. You are responsible for the data the Software records, including compliance with data protection laws (such as Regulation (EU) 2016/679) if you use it on devices of other people.
+
+---
+
+5. Third-party components
+
+The Software includes third-party components (for example SQLite, Flutter and its packages) that remain under their own licenses. Nothing in this license restricts rights you have under those licenses.
+
+---
+
+6. Warranty disclaimer
+
+The Software is provided "AS IS", without warranty of any kind, express or implied, including merchantability, fitness for a particular purpose and non-infringement. Nothing in this license excludes warranties or liability that cannot be excluded under mandatory law, including consumer protection law.
+
+---
+
+7. Limitation of liability
+
+To the maximum extent permitted by law, the Author is not liable for indirect, incidental or consequential damages, loss of data or loss of profit arising from the use of or inability to use the Software. Liability for intent, gross negligence, personal injury and other cases that cannot be limited by law remains unaffected.
+
+---
+
+8. Enforcement
+
+The Author may, without limitation:
+
+(a) send takedown notices (including under the DMCA, the EU Digital Services Act and equivalent mechanisms) to hosting platforms, app stores and repository hosts for unauthorized copies;
+(b) restrict or end access to official releases and repositories;
+(c) seek injunctions, removal of infringing material, damages and recovery of reasonable legal costs where the applicable law allows.
+
+---
+
+9. Termination
+
+Your rights end automatically if you breach this license. You must then stop using the Software and delete all copies, including forks. The Author may also end your rights in writing at any time, except for contributions already accepted, for which section 3 continues to apply. Sections 2, 3 (contribution license), 6, 7, 8 and 10 survive termination.
+
+---
+
+10. Governing law and jurisdiction
+
+This license is governed by the laws of the Republic of Lithuania and applicable European Union law, excluding conflict-of-law rules. The courts of the Republic of Lithuania have jurisdiction, without prejudice to mandatory rules that give consumers the right to use the courts of their place of residence. If a provision is invalid, the rest stays in force and the provision is replaced by the closest valid one.
+
+---
+
+11. Changes
+
+The Author may publish new versions of this license. A new version applies to releases and contributions made after its publication.
+
+---
+
+12. Contact
+
+Legal notices, permission requests and reports of unauthorized use: https://github.com/arturwo1 (open an issue or use the contact details on the profile).
+
+WOLIUM(TM) and TRACKWOLIUM(TM) are names used by the Author. All rights reserved.
