@@ -69,7 +69,7 @@ jobs:
         run: |
           mkdir -p "$HOME/.local/share/DTSys/Wolium"
           touch "$HOME/.local/share/DTSys/Wolium/consent"
-          xvfb-run -a -s "-screen 0 1280x800x24" sh -c 'ui/build/linux/x64/release/bundle/wolium & sleep 12; import -window root shot.png; kill %1'
+          xvfb-run -a -s "-screen 0 1280x800x24" sh -c 'ui/build/linux/x64/release/bundle/wolium & pid=$!; sleep 12; import -window root shot.png; kill $pid || true'
       - uses: actions/upload-artifact@v4
         with:
           name: ui-linux-screenshot
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
       - uses: subosito/flutter-action@v2
         with:
           channel: stable

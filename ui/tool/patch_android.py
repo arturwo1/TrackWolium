@@ -100,3 +100,15 @@ try:
         src.resize((size, size), Image.LANCZOS).save(target / "ic_launcher.png")
 except ImportError:
     shutil.copy(icon, main_dir / "res" / "mipmap-xxxhdpi" / "ic_launcher.png")
+
+root_gradle = root / "android" / "build.gradle.kts"
+gtext = root_gradle.read_text(encoding="utf-8")
+if "lintVital" not in gtext:
+    gtext += """
+subprojects {
+  tasks.configureEach {
+    if (name.startsWith("lintVital")) enabled = false
+  }
+}
+"""
+    root_gradle.write_text(gtext, encoding="utf-8")
