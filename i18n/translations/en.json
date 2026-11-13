@@ -55,7 +55,9 @@
     "UnKeepOption": "Remove the app, keep my data",
     "UnAllOption": "Remove the app and all my data",
     "UnAction": "Uninstall",
-    "UnFolder": "Installed in"
+    "UnFolder": "Installed in",
+    "NotifUpdateTitle": "Wolium update available",
+    "NotifUpdateBody": "Version {version} is ready. Click to update."
   },
   "ui": {
     "brandSub": "Activity tracker",
@@ -146,6 +148,16 @@
     "rpcStreaming": "Streaming",
     "rpcListening": "Listening to",
     "rpcWatching": "Watching",
-    "rpcCompeting": "Competing in"
+    "rpcCompeting": "Competing in",
+    "notifChannel": "Updates",
+    "notifUpdateTitle": "Wolium update available",
+    "notifUpdateText": "Version %s is ready. Tap to install.",
+    "backupTitle": "Backup",
+    "backupHint": "Android also backs up Wolium to your Google account automatically when system backup is on. A file backup is independent: save it to any folder or Google Drive and restore it after a reinstall.",
+    "backupSave": "Save backup",
+    "backupRestore": "Restore from file",
+    "backupSaved": "Backup saved.",
+    "backupRestored": "Backup restored.",
+    "backupBad": "This file is not a Wolium backup."
   }
 }

@@ -91,6 +91,7 @@ class _RootState extends State<Root> {
     settings.accepted = true;
     startService();
     collector?.sync();
+    collector?.bridge.requestNotifications();
     setState(() => accepted = true);
   }
 
@@ -356,6 +357,7 @@ class _ShellState extends State<Shell> {
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (++ticks % 20 == 0) requestFlush();
       if (ticks % 21600 == 0) checkForUpdate();
+      if (updaterSupported && settings.autoUpdate) pollAction();
       refresh();
     });
   }
@@ -367,8 +369,28 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
+  Future<void> pollAction() async {
+    String? action;
+    if (Platform.isAndroid) {
+      action = await collector?.bridge.takeAction();
+    } else {
+      final f = File('${dataDir()}${Platform.pathSeparator}update_request');
+      if (f.existsSync()) {
+        try {
+          f.deleteSync();
+        } catch (_) {}
+        action = 'update';
+      }
+    }
+    if (action != 'update' || !mounted || updating) return;
+    final info = await checkUpdate();
+    if (!mounted || info == null) return;
+    setState(() => update = info);
+    runUpdate();
+  }
+
   Future<void> checkForUpdate() async {
-    if (!Platform.isWindows || !settings.autoUpdate || updating) return;
+    if (!updaterSupported || !settings.autoUpdate || updating) return;
     final info = await checkUpdate();
     if (mounted && info != null) setState(() => update = info);
   }
@@ -384,11 +406,11 @@ class _ShellState extends State<Shell> {
     final ok = await downloadAndInstall(info, (v) {
       if (mounted) setState(() => updateProgress = v);
     });
-    if (ok) exit(0);
+    if (ok && Platform.isWindows) exit(0);
     if (mounted) {
       setState(() {
         updating = false;
-        updateFailed = true;
+        updateFailed = !ok;
       });
     }
   }
@@ -1048,6 +1070,7 @@ class _SettingsPageState extends State<SettingsPage> {
   late bool autoUpdate = prefs.autoUpdate;
   String? checkText;
   String? exportedPath;
+  String? backupText;
   String? exportError;
   bool checking = false;
   late bool localApi = prefs.flag('localapi');
@@ -1170,7 +1193,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
           const Divider(height: 28),
         ],
-        if (Platform.isWindows) ...[
+        if (updaterSupported) ...[
           Row(children: [
             Expanded(child: Text(tr('autoUpdate'), style: const TextStyle(fontWeight: FontWeight.w700))),
             Switch(
@@ -1203,6 +1226,8 @@ class _SettingsPageState extends State<SettingsPage> {
             if (checkText != null) Text(checkText!, style: const TextStyle(color: cMuted)),
           ]),
           const Divider(height: 28),
+        ],
+        if (Platform.isWindows) ...[
           Row(children: [
             Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
             Switch(value: localApi, onChanged: toggleApi),
@@ -1294,6 +1319,29 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Text(tr('exportCsv')),
           ),
         ]),
+        if (Platform.isAndroid && collector != null) ...[
+          const Divider(height: 28),
+          Text(tr('backupTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
+          Text(tr('backupHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 12, runSpacing: 8, children: [
+            OutlinedButton(
+              onPressed: () async {
+                final r = await saveBackup(collector!.bridge);
+                if (mounted && r != null) setState(() => backupText = tr('backupSaved'));
+              },
+              child: Text(tr('backupSave')),
+            ),
+            OutlinedButton(
+              onPressed: () async {
+                final r = await restoreBackup(collector!.bridge);
+                if (mounted && r != null) setState(() => backupText = r ? tr('backupRestored') : tr('backupBad'));
+              },
+              child: Text(tr('backupRestore')),
+            ),
+          ]),
+          if (backupText != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(backupText!, style: const TextStyle(color: cMuted))),
+        ],
         if (exportError != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(exportError!, style: const TextStyle(color: cDanger, fontWeight: FontWeight.w700))),
         if (exportedPath != null)
           Container(

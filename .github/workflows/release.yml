@@ -97,16 +97,31 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: signing and version
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          VER=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac)
+          echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
+          echo "WOLIUM_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/wolium.jks"
+            echo "WOLIUM_KEYSTORE=$RUNNER_TEMP/wolium.jks" >> "$GITHUB_ENV"
+            echo "WOLIUM_KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "WOLIUM_KEY_ALIAS=$KS_ALIAS" >> "$GITHUB_ENV"
+          fi
       - name: build
         working-directory: ui
         run: |
           pip install pillow
-          flutter create --platforms=android --project-name wolium .
+          flutter create --platforms=android --org io.github.arturwo1 --project-name wolium .
           rm -f test/widget_test.dart
           python3 tool/patch_android.py . assets/icon/wolium_256.png
           flutter pub get
           flutter test
-          flutter build apk --release --dart-define=WOLIUM_VERSION=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac)
+          flutter build apk --release --dart-define=WOLIUM_VERSION=$WOLIUM_VERSION
           cp build/app/outputs/flutter-apk/app-release.apk ../Wolium.apk
       - uses: actions/upload-artifact@v4
         with:

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'data.dart';
 
 const repository = 'arturwo1/trackwolium';
@@ -11,6 +12,8 @@ class UpdateInfo {
   final String latest;
   final String url;
 }
+
+final bool updaterSupported = Platform.isWindows || Platform.isAndroid;
 
 const _buildVersion = String.fromEnvironment('WOLIUM_VERSION');
 
@@ -46,7 +49,7 @@ Future<String> _get(HttpClient client, Uri uri) async {
 
 Future<UpdateInfo?> checkUpdate() async {
   final current = installedVersion();
-  if (current.isEmpty) return null;
+  if (current.isEmpty || !updaterSupported) return null;
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
   try {
     final body = await _get(client, Uri.parse('https://api.github.com/repos/$repository/releases/latest'));
@@ -56,7 +59,7 @@ Future<UpdateInfo?> checkUpdate() async {
     for (final a in (json['assets'] as List<dynamic>? ?? [])) {
       final m = a as Map<String, dynamic>;
       if (m['name'] == 'version.txt') versionUrl = m['browser_download_url'] as String?;
-      if (m['name'] == 'WoliumSetup.exe') setupUrl = m['browser_download_url'] as String?;
+      if (m['name'] == (Platform.isAndroid ? 'Wolium.apk' : 'WoliumSetup.exe')) setupUrl = m['browser_download_url'] as String?;
     }
     if (versionUrl == null || setupUrl == null) return null;
     final latest = (await _get(client, Uri.parse(versionUrl))).trim();
@@ -71,7 +74,7 @@ Future<UpdateInfo?> checkUpdate() async {
 
 Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
-  final target = File('${Directory.systemTemp.path}${Platform.pathSeparator}WoliumSetup_update.exe');
+  final target = File('${Directory.systemTemp.path}${Platform.pathSeparator}${Platform.isAndroid ? 'Wolium_update.apk' : 'WoliumSetup_update.exe'}');
   try {
     final req = await client.getUrl(Uri.parse(info.url));
     req.headers.set('User-Agent', 'Wolium');
@@ -87,6 +90,7 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
     }
     await sink.close();
     if (total > 0 && got != total) return false;
+    if (Platform.isAndroid) return await installApk(target.path);
     await Process.start(target.path, ['--silent', installDir()], mode: ProcessStartMode.detached);
     return true;
   } catch (_) {
@@ -94,4 +98,9 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
   } finally {
     client.close(force: true);
   }
+}
+
+Future<bool> installApk(String path) async {
+  final r = await const MethodChannel('wolium/usage').invokeMethod<String>('installApk', {'path': path});
+  return r == 'ok';
 }

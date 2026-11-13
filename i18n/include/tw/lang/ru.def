@@ -52,3 +52,5 @@ S(UnKeepOption, L"Удалить программу, сохранить мои �
 S(UnAllOption, L"Удалить программу и все мои данные")
 S(UnAction, L"Удалить")
 S(UnFolder, L"Установлено в")
+S(NotifUpdateTitle, L"Доступно обновление Wolium")
+S(NotifUpdateBody, L"Версия {version} готова. Нажмите, чтобы обновить.")

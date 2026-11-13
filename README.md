@@ -26,7 +26,7 @@ Wolium shows how much time you spend in each app: a zoomable activity graph, a p
 
 **Windows 10 / 11.** Run `WoliumSetup.exe`. Windows SmartScreen may warn about an unknown publisher: choose *More info*, then *Run anyway*. Wolium is not code-signed yet.
 
-**Android 8+.** Open `Wolium.apk` and allow installing from this source. On first start grant *Usage access* to Wolium. Android only keeps about a week of history, so open the app at least once a week to keep your statistics complete.
+**Android 8+.** Open `Wolium.apk` and allow installing from this source. On first start grant *Usage access* to Wolium. Wolium then collects statistics in the background (about every 6 hours, no service and no battery cost), so you never need to open it to keep the history complete. Use *Settings > Backup* to save or restore your data as a file; Android's own Google backup also works when it is enabled on the phone.
 
 **Linux (X11 / XWayland).** Extract the archive and run `./install.sh`. Windows of pure Wayland apps are not visible to the tracker.
 
@@ -44,7 +44,7 @@ Wolium shows how much time you spend in each app: a zoomable activity graph, a p
 | | Windows | Linux | Android |
 | --- | --- | --- | --- |
 | Focused / open / minimized / background | yes | yes | focused only |
-| Auto-update | yes | no | no |
+| Auto-update with notification | yes | no | yes |
 | Local API, Discord activity | yes | no | no |
 
 ## Privacy

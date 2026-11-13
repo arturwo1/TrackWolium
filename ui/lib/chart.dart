@@ -42,7 +42,7 @@ final ValueNotifier<bool> chartPinch = ValueNotifier<bool>(false);
 const _daySec = 86400;
 const _niceSteps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800, 2592000];
 const _minSpan = 30.0;
-const _left = 42.0;
+const _left = 54.0;
 const _right = 10.0;
 const _top = 8.0;
 const _bottom = 22.0;
@@ -195,6 +195,10 @@ class _ActivityChartState extends State<ActivityChart> {
   final detailKey = GlobalKey();
   final Map<int, Offset> pts = {};
   double pinchDist = 0;
+  Timer? pressTimer;
+  bool scrub = false;
+  bool scrubbed = false;
+  Offset downPos = Offset.zero;
 
   int bucket = 300;
   int top = 60000;
@@ -224,8 +228,21 @@ class _ActivityChartState extends State<ActivityChart> {
     hideNow();
   }
 
+  void endPress() {
+    pressTimer?.cancel();
+    if (scrub) {
+      scrub = false;
+      chartPinch.value = pts.length >= 2;
+    }
+  }
+
   void pinchMove(PointerMoveEvent e) {
     if (!pts.containsKey(e.pointer)) return;
+    if (scrub) {
+      show(e.localPosition, touchMode: true);
+      return;
+    }
+    if (pressTimer != null && (e.localPosition - downPos).distance > 10) pressTimer!.cancel();
     final before = pts.values.toList();
     pts[e.pointer] = e.localPosition;
     if (pts.length < 2 || before.length < 2) return;
@@ -266,6 +283,7 @@ class _ActivityChartState extends State<ActivityChart> {
   void dispose() {
     GestureBinding.instance.pointerRouter.removeGlobalRoute(globalPointer);
     tipsReset.removeListener(hideNow);
+    pressTimer?.cancel();
     hideTimer?.cancel();
     removeTimer?.cancel();
     viewTimer?.cancel();
@@ -471,6 +489,10 @@ class _ActivityChartState extends State<ActivityChart> {
   }
 
   void onTapUp(TapUpDetails d) {
+    if (scrubbed) {
+      scrubbed = false;
+      return;
+    }
     final p = d.localPosition;
     if (touch) {
       final t = tip.value;
@@ -500,17 +522,32 @@ class _ActivityChartState extends State<ActivityChart> {
         onPointerMove: pinchMove,
         onPointerUp: (e) {
           pts.remove(e.pointer);
+          endPress();
           pinchDist = 0;
           chartPinch.value = pts.length >= 2;
         },
         onPointerCancel: (e) {
           pts.remove(e.pointer);
+          endPress();
           pinchDist = 0;
           chartPinch.value = pts.length >= 2;
         },
         onPointerDown: (e) {
+          scrubbed = false;
           if (e.kind != PointerDeviceKind.mouse) {
             pts[e.pointer] = e.localPosition;
+            if (pts.length == 1) {
+              downPos = e.localPosition;
+              pressTimer?.cancel();
+              pressTimer = Timer(const Duration(milliseconds: 350), () {
+                if (pts.length != 1 || !mounted) return;
+                scrub = true;
+                scrubbed = true;
+                chartPinch.value = true;
+                HapticFeedback.selectionClick();
+                show(downPos, touchMode: true);
+              });
+            }
             if (pts.length >= 2) {
               final a = pts.values.elementAt(0);
               final b = pts.values.elementAt(1);
@@ -539,7 +576,7 @@ class _ActivityChartState extends State<ActivityChart> {
             },
             onScaleEnd: (_) => setState(() => dragging = false),
             onScaleUpdate: (d) {
-              if (pts.length >= 2) return;
+              if (pts.length >= 2 || scrub) return;
               final moved = d.focalPointDelta.dx != 0 || d.scale != 1;
               setState(() {
                 if (d.scale != 1) {

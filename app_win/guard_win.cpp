@@ -2,7 +2,9 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <thread>
 #include "common_win.hpp"
+#include "update_win.hpp"
 #include <shellapi.h>
 #include "tw/i18n.hpp"
 
@@ -18,6 +20,7 @@ using tw::i18n::tr;
 constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT kTrayId = 1;
 constexpr UINT_PTR kTimer = 1;
+constexpr UINT kMsgUpdate = WM_APP + 4;
 constexpr UINT kCmdOpen = 1001;
 constexpr UINT kCmdExit = 1002;
 constexpr UINT kCmdPause = 1003;
@@ -41,6 +44,7 @@ struct Guard {
   HANDLE viewer = nullptr;
   HANDLE clean = nullptr;
   app::Heartbeat beat;
+  bool update_pending = false;
 };
 
 Guard* g = nullptr;
@@ -110,6 +114,49 @@ void notify(Key title, Key body, DWORD flags) {
   wcsncpy_s(nid.szInfoTitle, tr(title), _TRUNCATE);
   wcsncpy_s(nid.szInfo, tr(body), _TRUNCATE);
   Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
+void notify_update(const std::string& version) {
+  std::wstring body = tr(Key::NotifUpdateBody);
+  std::wstring v(version.begin(), version.end());
+  size_t at = body.find(L"{version}");
+  if (at != std::wstring::npos) body.replace(at, 9, v);
+  NOTIFYICONDATAW nid = base_nid();
+  nid.uFlags = NIF_INFO;
+  nid.dwInfoFlags = NIIF_INFO;
+  wcsncpy_s(nid.szInfoTitle, tr(Key::NotifUpdateTitle), _TRUNCATE);
+  wcsncpy_s(nid.szInfo, body.c_str(), _TRUNCATE);
+  Shell_NotifyIconW(NIM_MODIFY, &nid);
+  g->update_pending = true;
+}
+
+void update_loop(HWND hwnd) {
+  Sleep(60000);
+  for (;;) {
+    if (app::consent_given() && !app::flag(L"noupdates")) {
+      std::string current = app::installed_version();
+      std::string latest = app::latest_version();
+      if (!current.empty() && !latest.empty() && app::compare_versions(current, latest) < 0) {
+        std::string seen;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, app::userdata(L"update_notified").c_str(), L"rb") == 0 && f) {
+          char buf[64];
+          size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+          fclose(f);
+          seen = app::trim(std::string(buf, n));
+        }
+        if (seen != latest) {
+          FILE* w = nullptr;
+          if (_wfopen_s(&w, app::userdata(L"update_notified").c_str(), L"wb") == 0 && w) {
+            fwrite(latest.data(), 1, latest.size(), w);
+            fclose(w);
+          }
+          PostMessageW(hwnd, kMsgUpdate, 0, reinterpret_cast<LPARAM>(new std::string(latest)));
+        }
+      }
+    }
+    Sleep(6 * 60 * 60 * 1000);
+  }
 }
 
 void set_state(State s) {
@@ -293,7 +340,13 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
           show_menu();
           break;
         case NIN_BALLOONUSERCLICK:
-          if (g->state == State::Error) restart_from_error();
+          if (g->state == State::Error) {
+            restart_from_error();
+          } else if (g->update_pending) {
+            g->update_pending = false;
+            std::ofstream(std::filesystem::path(app::userdata(L"update_request"))) << "1";
+            launch_viewer();
+          }
           break;
       }
       return 0;
@@ -304,6 +357,14 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (msg == app::kMsgEnsure) {
       if (g->state == State::Error) restart_from_error();
+      return 0;
+    }
+    if (msg == kMsgUpdate) {
+      std::string* v = reinterpret_cast<std::string*>(lp);
+      if (v) {
+        if (g->state != State::Error) notify_update(*v);
+        delete v;
+      }
       return 0;
     }
     if (msg == app::kMsgOpenUi) {
@@ -388,6 +449,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   tray_update(true);
   SetTimer(guard.hwnd, kTimer, 1000, nullptr);
   if (!guard.background) launch_viewer();
+  std::thread(update_loop, guard.hwnd).detach();
 
   MSG m;
   while (GetMessageW(&m, nullptr, 0, 0) > 0) {

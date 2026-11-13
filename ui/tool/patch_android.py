@@ -1,166 +1,88 @@
+import json
 import re
-import shutil
 import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
 icon = Path(sys.argv[2])
+here = Path(__file__).resolve().parent
+repo = here.parent.parent
 main_dir = root / "android" / "app" / "src" / "main"
 
 manifest = main_dir / "AndroidManifest.xml"
 text = manifest.read_text(encoding="utf-8")
-perms = (
-    '    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"/>\n'
-    '    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\n'
-)
-if "PACKAGE_USAGE_STATS" not in text:
-    text = re.sub(r"(<manifest[^>]*>)", r"\1\n" + perms.rstrip("\n"), text, count=1)
 if "xmlns:tools" not in text:
     text = text.replace("<manifest ", '<manifest xmlns:tools="http://schemas.android.com/tools" ', 1)
+perms = [
+    '<uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"/>',
+    '<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>',
+    '<uses-permission android:name="android.permission.INTERNET"/>',
+    '<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>',
+    '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>',
+]
+for p in perms:
+    name = re.search(r'android:name="([^"]+)"', p).group(1)
+    if name not in text:
+        text = re.sub(r"(<manifest[^>]*>)", lambda m: m.group(1) + "\n    " + p, text, count=1)
 text = re.sub(r'android:label="[^"]*"', 'android:label="Wolium"', text, count=1)
 if "allowBackup" not in text:
     text = text.replace("<application", '<application android:allowBackup="true"', 1)
+if "FileProvider" not in text:
+    provider = (
+        '        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" '
+        'android:exported="false" android:grantUriPermissions="true">\n'
+        '            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>\n'
+        "        </provider>\n"
+    )
+    text = text.replace("</application>", provider + "    </application>", 1)
 manifest.write_text(text, encoding="utf-8")
 
-kt = next(main_dir.glob("kotlin/**/MainActivity.kt"))
-package = re.search(r"^package\s+(\S+)", kt.read_text(encoding="utf-8"), re.M).group(1)
-kt.write_text(
-    f"""package {package}
-
-import android.app.AppOpsManager
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.app.usage.UsageEvents
-import android.app.usage.UsageStatsManager
-import android.net.Uri
-import android.os.Process
-import android.provider.Settings
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodChannel
-
-class MainActivity : FlutterActivity() {{
-
-  private var pendingResult: MethodChannel.Result? = null
-  private var pendingBytes: ByteArray? = null
-
-  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {{
-    if (requestCode == 4711) {{
-      val r = pendingResult
-      pendingResult = null
-      val uri = data?.data
-      if (resultCode == RESULT_OK && uri != null) {{
-        try {{
-          contentResolver.openOutputStream(uri)?.use {{ it.write(pendingBytes ?: ByteArray(0)) }}
-          r?.success(uri.toString())
-        }} catch (ex: Exception) {{
-          r?.success(null)
-        }}
-      }} else {{
-        r?.success(null)
-      }}
-      pendingBytes = null
-      return
-    }}
-    super.onActivityResult(requestCode, resultCode, data)
-  }}
-  override fun configureFlutterEngine(flutterEngine: FlutterEngine) {{
-    super.configureFlutterEngine(flutterEngine)
-    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "wolium/usage").setMethodCallHandler {{ call, result ->
-      when (call.method) {{
-        "hasAccess" -> {{
-          val ops = getSystemService(APP_OPS_SERVICE) as AppOpsManager
-          val mode = ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
-          result.success(mode == AppOpsManager.MODE_ALLOWED)
-        }}
-        "openSettings" -> {{
-          startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-          result.success(null)
-        }}
-        "events" -> {{
-          val from = (call.argument<Number>("from") ?: 0).toLong()
-          val to = (call.argument<Number>("to") ?: 0).toLong()
-          val mgr = getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
-          val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-          val launcher = packageManager.resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
-          val out = ArrayList<Map<String, Any>>()
-          val events = mgr.queryEvents(from, to)
-          val e = UsageEvents.Event()
-          while (events.hasNextEvent()) {{
-            events.getNextEvent(e)
-            val t = e.eventType
-            if (t != 1 && t != 2 && t != 16 && t != 26) continue
-            val pkg = e.packageName ?: ""
-            if (pkg == launcher || pkg == "com.android.systemui") {{
-              if (t == 1) out.add(mapOf("pkg" to pkg, "type" to 16, "time" to e.timeStamp))
-              continue
-            }}
-            out.add(mapOf("pkg" to pkg, "type" to t, "time" to e.timeStamp))
-          }}
-          result.success(out)
-        }}
-        "label" -> {{
-          val pkg = call.argument<String>("pkg") ?: ""
-          val label = try {{
-            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
-          }} catch (ex: Exception) {{
-            pkg
-          }}
-          result.success(label)
-        }}
-        "icon" -> {{
-          val pkg = call.argument<String>("pkg") ?: ""
-          try {{
-            val d = packageManager.getApplicationIcon(pkg)
-            val size = 96
-            val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
-            d.setBounds(0, 0, size, size)
-            d.draw(android.graphics.Canvas(bmp))
-            val out = java.io.ByteArrayOutputStream()
-            bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-            result.success(out.toByteArray())
-          }} catch (ex: Exception) {{
-            result.success(null)
-          }}
-        }}
-        "saveFile" -> {{
-          pendingBytes = call.argument<ByteArray>("bytes")
-          pendingResult = result
-          val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
-            .addCategory(Intent.CATEGORY_OPENABLE)
-            .setType("text/csv")
-            .putExtra(Intent.EXTRA_TITLE, call.argument<String>("name") ?: "wolium.csv")
-          startActivityForResult(intent, 4711)
-        }}
-        "openUri" -> {{
-          try {{
-            val view = Intent(Intent.ACTION_VIEW)
-              .setDataAndType(Uri.parse(call.argument<String>("uri") ?: ""), "text/csv")
-              .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(Intent.createChooser(view, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-          }} catch (ex: Exception) {{
-          }}
-          result.success(null)
-        }}
-        else -> result.notImplemented()
-      }}
-    }}
-  }}
-}}
-""",
+xml_dir = main_dir / "res" / "xml"
+xml_dir.mkdir(parents=True, exist_ok=True)
+(xml_dir / "file_paths.xml").write_text(
+    '<?xml version="1.0" encoding="utf-8"?>\n<paths>\n    <cache-path name="cache" path="."/>\n</paths>\n',
     encoding="utf-8",
 )
 
-try:
-    from PIL import Image
+kt = next(main_dir.glob("kotlin/**/MainActivity.kt"))
+package = re.search(r"^package\s+(\S+)", kt.read_text(encoding="utf-8"), re.M).group(1)
+kt.write_text((here / "android" / "MainActivity.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
+(kt.parent / "SyncWorker.kt").write_text((here / "android" / "SyncWorker.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
 
-    src = Image.open(icon).convert("RGBA")
-    for name, size in (("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144), ("xxxhdpi", 192)):
-        target = main_dir / "res" / f"mipmap-{name}"
-        target.mkdir(parents=True, exist_ok=True)
-        src.resize((size, size), Image.LANCZOS).save(target / "ic_launcher.png")
-except ImportError:
-    shutil.copy(icon, main_dir / "res" / "mipmap-xxxhdpi" / "ic_launcher.png")
+merged = {}
+for f in sorted((repo / "i18n" / "translations").glob("*.json")):
+    merged[f.stem] = json.loads(f.read_text(encoding="utf-8"))["ui"]
+assets = main_dir / "assets"
+assets.mkdir(parents=True, exist_ok=True)
+(assets / "strings.json").write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+
+app_gradle = root / "android" / "app" / "build.gradle.kts"
+g = app_gradle.read_text(encoding="utf-8")
+g = g.replace("versionCode = flutter.versionCode", 'versionCode = (System.getenv("WOLIUM_BUILD") ?: "").toIntOrNull() ?: flutter.versionCode')
+g = g.replace("versionName = flutter.versionName", 'versionName = System.getenv("WOLIUM_VERSION") ?: flutter.versionName')
+if "WOLIUM_KEYSTORE" not in g:
+    signing = (
+        "    signingConfigs {\n"
+        '        create("wolium") {\n'
+        '            val ks = System.getenv("WOLIUM_KEYSTORE")\n'
+        "            if (ks != null) {\n"
+        "                storeFile = file(ks)\n"
+        '                storePassword = System.getenv("WOLIUM_KEYSTORE_PASSWORD")\n'
+        '                keyAlias = System.getenv("WOLIUM_KEY_ALIAS")\n'
+        '                keyPassword = System.getenv("WOLIUM_KEYSTORE_PASSWORD")\n'
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+    )
+    g = g.replace("    buildTypes {", signing + "    buildTypes {", 1)
+    g = re.sub(
+        r'signingConfig = signingConfigs\.getByName\("debug"\)',
+        'signingConfig = if (System.getenv("WOLIUM_KEYSTORE") != null) signingConfigs.getByName("wolium") else signingConfigs.getByName("debug")',
+        g,
+        count=1,
+    )
+g += '\ndependencies {\n    implementation("androidx.work:work-runtime-ktx:2.9.1")\n    implementation("androidx.core:core-ktx:1.13.1")\n}\n'
+app_gradle.write_text(g, encoding="utf-8")
 
 root_gradle = root / "android" / "build.gradle.kts"
 gtext = root_gradle.read_text(encoding="utf-8")
@@ -173,3 +95,14 @@ subprojects {
 }
 """
     root_gradle.write_text(gtext, encoding="utf-8")
+
+try:
+    from PIL import Image
+
+    src = Image.open(icon).convert("RGBA")
+    for name, size in (("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144), ("xxxhdpi", 192)):
+        target = main_dir / "res" / f"mipmap-{name}"
+        target.mkdir(parents=True, exist_ok=True)
+        src.resize((size, size), Image.LANCZOS).save(target / "ic_launcher.png")
+except ImportError:
+    pass

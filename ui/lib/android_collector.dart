@@ -152,10 +152,59 @@ class UsageBridge {
 
   Future<String> label(String pkg) async => (await _channel.invokeMethod<String>('label', {'pkg': pkg})) ?? pkg;
 
+  Future<String?> takeAction() async => _channel.invokeMethod<String>('takeAction');
+
+  Future<void> requestNotifications() async => _channel.invokeMethod('requestNotifications');
+
   Future<Uint8List?> icon(String pkg) async => _channel.invokeMethod<Uint8List>('icon', {'pkg': pkg});
 
-  Future<String?> saveFile(String name, List<int> bytes) async =>
-      _channel.invokeMethod<String>('saveFile', {'name': name, 'bytes': Uint8List.fromList(bytes)});
+  Future<String?> saveFile(String name, List<int> bytes, {String mime = 'text/csv'}) async =>
+      _channel.invokeMethod<String>('saveFile', {'name': name, 'bytes': Uint8List.fromList(bytes), 'mime': mime});
+
+  Future<Uint8List?> pickFile() async => _channel.invokeMethod<Uint8List>('pickFile');
+}
+
+Future<String?> saveBackup(UsageBridge bridge) async {
+  final db = sqlite3.open(dbPath());
+  try {
+    db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+  } finally {
+    db.dispose();
+  }
+  final bytes = File(dbPath()).readAsBytesSync();
+  return bridge.saveFile('wolium_backup.db', bytes, mime: 'application/octet-stream');
+}
+
+Future<bool?> restoreBackup(UsageBridge bridge) async {
+  final bytes = await bridge.pickFile();
+  if (bytes == null) return null;
+  if (bytes.length < 100 || String.fromCharCodes(bytes.sublist(0, 15)) != 'SQLite format 3') return false;
+  final tmp = File('${Directory.systemTemp.path}${Platform.pathSeparator}wolium_restore.db')..writeAsBytesSync(bytes);
+  final db = sqlite3.open(dbPath());
+  try {
+    db.execute(_schema);
+    db.execute('ATTACH DATABASE ? AS b', [tmp.path]);
+    db.execute('BEGIN');
+    try {
+      db.execute('INSERT OR IGNORE INTO usage(day, app, state, ms) SELECT day, app, state, ms FROM b.usage WHERE day NOT IN (SELECT day FROM main.usage)');
+      db.execute('INSERT OR IGNORE INTO timeline(day, slot, app, state, ms) SELECT day, slot, app, state, ms FROM b.timeline WHERE day NOT IN (SELECT day FROM main.timeline)');
+      db.execute('INSERT OR IGNORE INTO sessions(app, start, stop, state) SELECT app, start, stop, state FROM b.sessions');
+      db.execute("INSERT OR IGNORE INTO apps(app, name, path) SELECT app, name, '' FROM b.apps");
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
+    db.execute('DETACH DATABASE b');
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    db.dispose();
+    try {
+      tmp.deleteSync();
+    } catch (_) {}
+  }
 }
 
 class AndroidCollector {
@@ -211,7 +260,10 @@ class AndroidCollector {
       try {
         db.execute(_schema);
         storeSessions(db, sessions, firstDay, DateTime(now.year, now.month, now.day));
-        final known = {for (final r in db.select("SELECT app FROM apps WHERE path != ''")) r['app'] as String};
+        final known = {
+          for (final r in db.select("SELECT app, path FROM apps WHERE path != ''"))
+            if (File(r['path'] as String).existsSync()) r['app'] as String
+        };
         for (final app in sessions.map((s) => s.app).toSet()) {
           if (known.contains(app)) continue;
           final label = await bridge.label(app);

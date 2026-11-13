@@ -151,3 +151,12 @@ Settings toggle creates the `localapi` flag file. Core then serves `GET http://1
 ## Discord Rich Presence (experimental)
 
 The `discordrpc` flag makes core own `\\.\pipe\discord-ipc-0` and forward traffic to the next free pipe, saving SET_ACTIVITY texts into the `presence` table. It works only when Wolium starts before Discord and is untested on real Discord.
+
+## Android signing (one time, free)
+
+Android refuses to update an app signed with a different key, and CI generates a new debug key on every run. Create a permanent key once and keep it safe (losing it means users must reinstall):
+
+    keytool -genkeypair -v -keystore wolium.jks -alias wolium -keyalg RSA -keysize 2048 -validity 36500
+    base64 -w0 wolium.jks
+
+In the repository open Settings > Secrets and variables > Actions and add `ANDROID_KEYSTORE_B64` (the base64 text), `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS` (`wolium`). Releases built after that are signed with it and update in place. The package name is set by `--org` in the workflows (`io.github.arturwo1.wolium`).
