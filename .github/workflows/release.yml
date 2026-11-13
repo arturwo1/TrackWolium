@@ -67,7 +67,7 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
-          (cd ui && flutter create --platforms=linux --project-name wolium . && flutter pub get && flutter build linux --release)
+          (cd ui && flutter create --platforms=linux --project-name wolium . && rm -f test/widget_test.dart && flutter pub get && flutter build linux --release)
       - name: package
         run: |
           mkdir -p pkg/wolium-linux/app
@@ -102,6 +102,7 @@ jobs:
         run: |
           pip install pillow
           flutter create --platforms=android --project-name wolium .
+          rm -f test/widget_test.dart
           python3 tool/patch_android.py . assets/icon/wolium_256.png
           flutter pub get
           flutter test

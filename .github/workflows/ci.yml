@@ -61,6 +61,7 @@ jobs:
         working-directory: ui
         run: |
           flutter create --platforms=linux --project-name wolium .
+          rm -f test/widget_test.dart
           flutter pub get
           flutter analyze --no-fatal-infos --no-fatal-warnings
           flutter build linux --release
@@ -91,6 +92,7 @@ jobs:
         run: |
           pip install pillow
           flutter create --platforms=android --project-name wolium .
+          rm -f test/widget_test.dart
           python3 tool/patch_android.py . assets/icon/wolium_256.png
           flutter pub get
           flutter analyze --no-fatal-infos --no-fatal-warnings
