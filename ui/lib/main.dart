@@ -16,6 +16,9 @@ import 'picker.dart';
 import 'window_state.dart';
 import 'theme.dart';
 import 'updater.dart';
+import 'android_collector.dart';
+import 'package:path_provider/path_provider.dart';
+import 'posix.dart';
 import 'win.dart';
 
 const appName = 'Wolium';
@@ -29,12 +32,17 @@ Locale materialLocale(String code) {
   return Locale(kMaterialSupportedLanguages.contains(base) ? base : 'en');
 }
 
-void main() {
+AndroidCollector? collector;
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isAndroid) androidBase = (await getApplicationSupportDirectory()).path;
   if (!claimSingleInstance()) exit(0);
   migrateLegacyData();
   loadLanguage();
   WidgetsFlutterBinding.ensureInitialized();
   WindowState.instance.restore();
+  if (Platform.isAndroid) collector = AndroidCollector(UsageBridge())..start();
   runApp(const WoliumApp());
   WindowState.instance.attach();
 }
@@ -354,7 +362,7 @@ class _ShellState extends State<Shell> {
   }
 
   Future<void> checkForUpdate() async {
-    if (!settings.autoUpdate || updating) return;
+    if (!Platform.isWindows || !settings.autoUpdate || updating) return;
     final info = await checkUpdate();
     if (mounted && info != null) setState(() => update = info);
   }
@@ -510,15 +518,23 @@ class _ShellState extends State<Shell> {
     final fk = keyOf(dateOnly(picked.start));
     final tk = keyOf(dateOnly(picked.end));
     requestFlush();
-    final home = Platform.environment['USERPROFILE'];
+    final home = Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'];
     final docs = home == null ? null : '$home${Platform.pathSeparator}Documents';
-    final path = saveFileDialog(
-      title: tr('exportSaveTitle'),
-      filter: 'CSV (*.csv)\u0000*.csv\u0000',
-      name: 'wolium_${fk}_$tk.csv',
-      ext: 'csv',
-      dir: docs != null && Directory(docs).existsSync() ? docs : dataDir(),
-    );
+    final dir = docs != null && Directory(docs).existsSync() ? docs : dataDir();
+    final fileName = 'wolium_${fk}_$tk.csv';
+    final String? path;
+    if (Platform.isWindows) {
+      path = saveFileDialog(
+        title: tr('exportSaveTitle'),
+        filter: 'CSV (*.csv)\u0000*.csv\u0000',
+        name: fileName,
+        ext: 'csv',
+        dir: dir,
+      );
+    } else {
+      Directory(dir).createSync(recursive: true);
+      path = '$dir${Platform.pathSeparator}$fileName';
+    }
     if (path == null) return null;
     String q(String v) => '"${v.replaceAll('"', '""')}"';
     final b = StringBuffer('\uFEFF');
@@ -534,6 +550,22 @@ class _ShellState extends State<Shell> {
     final grace = startedAt != null && DateTime.now().difference(startedAt!) < const Duration(seconds: 10);
     if (beat == null) return !grace;
     return beat! > const Duration(seconds: staleSeconds);
+  }
+
+  Widget accessBanner() {
+    return Container(
+      width: double.infinity,
+      color: cWarn.withValues(alpha: 0.16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text(tr('usageAccess'), style: const TextStyle(color: cWarn, fontWeight: FontWeight.w700)),
+        FilledButton(
+          style: FilledButton.styleFrom(minimumSize: const Size(0, 34)),
+          onPressed: () => collector?.bridge.openSettings(),
+          child: Text(tr('usageAccessGrant')),
+        ),
+      ]),
+    );
   }
 
   Widget banner() {
@@ -926,6 +958,11 @@ class _ShellState extends State<Shell> {
                 child: Column(children: [
                   if (update != null) updateBanner(),
                   if (serviceDown) banner() else if (isPaused) pausedBanner(),
+                  if (collector != null)
+                    ValueListenableBuilder<bool>(
+                      valueListenable: collector!.access,
+                      builder: (_, ok, __) => ok ? const SizedBox.shrink() : accessBanner(),
+                    ),
                   Expanded(
                     child: ListView(padding: EdgeInsets.fromLTRB(pad, pad, pad, 28), children: [
                       Wrap(spacing: 16, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -1078,94 +1115,98 @@ class _SettingsPageState extends State<SettingsPage> {
           Text(installedVersion().isEmpty ? '-' : installedVersion(), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
         ]),
         const Divider(height: 28),
-        Row(children: [
-          Expanded(child: Text(tr('autostart'), style: const TextStyle(fontWeight: FontWeight.w700))),
-          Switch(
-            value: auto ?? false,
-            onChanged: auto == null
-                ? null
-                : (v) async {
-                    await setAutostart(v);
-                    final now = await autostartEnabled();
-                    if (mounted) setState(() => auto = now);
-                  },
-          ),
-        ]),
-        const Divider(height: 28),
-        Row(children: [
-          Expanded(child: Text(tr('autoUpdate'), style: const TextStyle(fontWeight: FontWeight.w700))),
-          Switch(
-            value: autoUpdate,
-            onChanged: (v) {
-              prefs.autoUpdate = v;
-              setState(() => autoUpdate = v);
-            },
-          ),
-        ]),
-        const SizedBox(height: 8),
-        Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          OutlinedButton(
-            onPressed: checking
-                ? null
-                : () async {
-                    setState(() {
-                      checking = true;
-                      checkText = tr('checking');
-                    });
-                    final info = await widget.onCheck();
-                    if (!mounted) return;
-                    setState(() {
-                      checking = false;
-                      checkText = info == null ? tr('upToDate') : '${tr('updateAvailable')}: ${info.current} \u2192 ${info.latest}';
-                    });
-                  },
-            child: Text(tr('checkNow')),
-          ),
-          if (checkText != null) Text(checkText!, style: const TextStyle(color: cMuted)),
-        ]),
-        const Divider(height: 28),
-        Row(children: [
-          Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
-          Switch(value: localApi, onChanged: toggleApi),
-        ]),
-        Text(tr('localApiHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
-        const Divider(height: 28),
-        Row(children: [
-          Expanded(child: Text(tr('discordRpc'), style: const TextStyle(fontWeight: FontWeight.w700))),
-          Switch(
-            value: discord,
-            onChanged: (v) {
-              prefs.setFlag('discordrpc', v);
-              setState(() => discord = v);
-            },
-          ),
-        ]),
-        Text(tr('discordRpcHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
-        if (discord) ...[
-          const SizedBox(height: 8),
-          if (rpcStatus == 'busy')
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: cWarn.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cWarn)),
-              child: Text(tr('rpcFailed'), style: const TextStyle(color: cWarn, fontWeight: FontWeight.w700)),
-            )
-          else
-            Text(
-              rpcStatus == 'active' ? tr('rpcActive') : tr('rpcWaiting'),
-              style: TextStyle(color: rpcStatus == 'active' ? cOk : cMuted, fontWeight: FontWeight.w700),
-            ),
-          const SizedBox(height: 8),
+        if (!Platform.isAndroid) ...[
           Row(children: [
-            OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
-            IconButton(
-              tooltip: tr('helpTitle'),
-              icon: const Icon(Icons.help_outline, size: 20, color: cMuted),
-              onPressed: showRpcHelp,
+            Expanded(child: Text(tr('autostart'), style: const TextStyle(fontWeight: FontWeight.w700))),
+            Switch(
+              value: auto ?? false,
+              onChanged: auto == null
+                  ? null
+                  : (v) async {
+                      await setAutostart(v);
+                      final now = await autostartEnabled();
+                      if (mounted) setState(() => auto = now);
+                    },
             ),
           ]),
+          const Divider(height: 28),
+        ],
+        if (Platform.isWindows) ...[
+          Row(children: [
+            Expanded(child: Text(tr('autoUpdate'), style: const TextStyle(fontWeight: FontWeight.w700))),
+            Switch(
+              value: autoUpdate,
+              onChanged: (v) {
+                prefs.autoUpdate = v;
+                setState(() => autoUpdate = v);
+              },
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            OutlinedButton(
+              onPressed: checking
+                  ? null
+                  : () async {
+                      setState(() {
+                        checking = true;
+                        checkText = tr('checking');
+                      });
+                      final info = await widget.onCheck();
+                      if (!mounted) return;
+                      setState(() {
+                        checking = false;
+                        checkText = info == null ? tr('upToDate') : '${tr('updateAvailable')}: ${info.current} \u2192 ${info.latest}';
+                      });
+                    },
+              child: Text(tr('checkNow')),
+            ),
+            if (checkText != null) Text(checkText!, style: const TextStyle(color: cMuted)),
+          ]),
+          const Divider(height: 28),
+          Row(children: [
+            Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
+            Switch(value: localApi, onChanged: toggleApi),
+          ]),
+          Text(tr('localApiHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+          const Divider(height: 28),
+          Row(children: [
+            Expanded(child: Text(tr('discordRpc'), style: const TextStyle(fontWeight: FontWeight.w700))),
+            Switch(
+              value: discord,
+              onChanged: (v) {
+                prefs.setFlag('discordrpc', v);
+                setState(() => discord = v);
+              },
+            ),
+          ]),
+          Text(tr('discordRpcHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+          if (discord) ...[
+            const SizedBox(height: 8),
+            if (rpcStatus == 'busy')
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: cWarn.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cWarn)),
+                child: Text(tr('rpcFailed'), style: const TextStyle(color: cWarn, fontWeight: FontWeight.w700)),
+              )
+            else
+              Text(
+                rpcStatus == 'active' ? tr('rpcActive') : tr('rpcWaiting'),
+                style: TextStyle(color: rpcStatus == 'active' ? cOk : cMuted, fontWeight: FontWeight.w700),
+              ),
+            const SizedBox(height: 8),
+            Row(children: [
+              OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
+              IconButton(
+                tooltip: tr('helpTitle'),
+                icon: const Icon(Icons.help_outline, size: 20, color: cMuted),
+                onPressed: showRpcHelp,
+              ),
+            ]),
         ],
         const Divider(height: 28),
+        ],
         Row(children: [
           Expanded(child: Text(tr('language'), style: const TextStyle(fontWeight: FontWeight.w700))),
           LanguagePicker(onChanged: () => setState(() {})),
@@ -1178,7 +1219,7 @@ class _SettingsPageState extends State<SettingsPage> {
           IconButton(
             tooltip: tr('openFolder'),
             icon: const Icon(Icons.folder_open, size: 18),
-            onPressed: () => Process.run('explorer', [dataDir()]),
+            onPressed: () => openPath(dataDir()),
           ),
           IconButton(
             tooltip: tr('copy'),
@@ -1232,8 +1273,8 @@ class _SettingsPageState extends State<SettingsPage> {
               SelectableText(exportedPath!, style: const TextStyle(color: cMuted, fontSize: 12)),
               const SizedBox(height: 8),
               Wrap(spacing: 8, runSpacing: 8, children: [
-                OutlinedButton(onPressed: () => Process.run('explorer', ['/select,', exportedPath!]), child: Text(tr('openFolder'))),
-                OutlinedButton(onPressed: () => Process.run('explorer', [exportedPath!]), child: Text(tr('openFile'))),
+                OutlinedButton(onPressed: () => openPath(exportedPath!, select: true), child: Text(tr('openFolder'))),
+                OutlinedButton(onPressed: () => openPath(exportedPath!), child: Text(tr('openFile'))),
               ]),
             ]),
           ),

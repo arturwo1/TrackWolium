@@ -53,3 +53,65 @@ jobs:
           files: |
             WoliumSetup.exe
             version.txt
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - run: sudo apt-get update && sudo apt-get install -y libx11-dev clang cmake ninja-build pkg-config libgtk-3-dev libsqlite3-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          (cd ui && flutter create --platforms=linux --project-name wolium . && flutter pub get && flutter build linux --release)
+      - name: package
+        run: |
+          mkdir -p pkg/wolium-linux/app
+          cp -r ui/build/linux/x64/release/bundle/. pkg/wolium-linux/app/
+          cp build/bin/trackwolium-core pkg/wolium-linux/app/
+          cp tools/linux/install.sh tools/linux/uninstall.sh pkg/wolium-linux/
+          cp assets/icon/wolium_256.png pkg/wolium-linux/wolium.png
+          tar -C pkg -czf Wolium-linux-x86_64.tar.gz wolium-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolium-linux
+          path: Wolium-linux-x86_64.tar.gz
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: Wolium-linux-x86_64.tar.gz
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: build
+        working-directory: ui
+        run: |
+          pip install pillow
+          flutter create --platforms=android --project-name wolium .
+          python3 tool/patch_android.py . assets/icon/wolium_256.png
+          flutter pub get
+          flutter test
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk ../Wolium.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolium-apk
+          path: Wolium.apk
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: Wolium.apk

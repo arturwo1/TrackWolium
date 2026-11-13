@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:ffi';
+import 'posix.dart';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
@@ -26,6 +27,7 @@ final _showWindow = _u32?.lookupFunction<Int32 Function(IntPtr, Int32), int Func
 final _setForeground = _u32?.lookupFunction<Int32 Function(IntPtr), int Function(int)>('SetForegroundWindow');
 
 int? heartbeatAgeMs() {
+  if (!Platform.isWindows) return Platform.isAndroid ? 0 : posixHeartbeatAgeMs();
   if (_openMapping == null) return null;
   final name = r'Local\TrackWolium.Heartbeat'.toNativeUtf16();
   try {
@@ -47,6 +49,10 @@ int? heartbeatAgeMs() {
 }
 
 void requestFlush() {
+  if (!Platform.isWindows) {
+    if (Platform.isLinux) posixRequestFlush();
+    return;
+  }
   if (_openEvent == null) return;
   final name = r'Local\TrackWolium.CoreFlush'.toNativeUtf16();
   try {
@@ -60,6 +66,7 @@ void requestFlush() {
 }
 
 bool claimSingleInstance() {
+  if (!Platform.isWindows) return Platform.isLinux ? posixClaimSingleInstance() : true;
   if (_openMutex == null) return true;
   final name = r'Local\Wolium.Ui'.toNativeUtf16();
   try {
@@ -92,6 +99,7 @@ void focusExistingWindow() {
 }
 
 String? readLive() {
+  if (!Platform.isWindows) return Platform.isLinux ? posixReadLive() : null;
   if (_openMapping == null) return null;
   final name = r'Local\TrackWolium.Live'.toNativeUtf16();
   try {

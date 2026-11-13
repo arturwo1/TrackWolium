@@ -87,6 +87,12 @@ No user-facing text is hardcoded. Every language is one file, `i18n/translations
 
 Apps that never had a window and Windows shell helpers are hidden by default. `--all` shows everything. Where the platform cannot see windows (Linux for now) the filter is disabled automatically.
 
+## Linux and Android
+
+- Linux (X11 or XWayland): download `Wolium-linux-x86_64.tar.gz` from Releases, extract, run `./install.sh`. Requires GTK 3 and libX11. Pure Wayland windows are not visible to the tracker. The Local API, Discord Rich Presence and self-update are Windows-only.
+- Android 8+: install `Wolium.apk` from Releases and grant Usage access when asked. Only the focused app is tracked, and only history that Android itself keeps is imported.
+- CI checks both on every push: a Linux end-to-end test (Xvfb + window manager) and Android session-logic unit tests. The Linux UI screenshot is attached to each CI run as an artifact.
+
 ## SmartScreen
 
 The blue screen appears for unsigned exe files marked as downloaded from the internet. For your own use: right-click the file or zip, Properties, "Unblock" (or `Unblock-File`), or build locally. For distribution see code signing options (Microsoft Store MSIX, Azure Artifact Signing, OV certificate).

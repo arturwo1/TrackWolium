@@ -37,3 +37,66 @@ jobs:
           -DANDROID_PLATFORM=android-26
           -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build-android
+
+  linux-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - run: sudo apt-get update && sudo apt-get install -y libx11-dev xvfb openbox xdotool x11-apps
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build
+      - run: sh tests/e2e_linux.sh build/bin/trackwolium-core
+
+  ui-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev xvfb imagemagick libsqlite3-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: build
+        working-directory: ui
+        run: |
+          flutter create --platforms=linux --project-name wolium .
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter build linux --release
+      - name: screenshot
+        run: |
+          mkdir -p "$HOME/.local/share/DTSys/Wolium"
+          touch "$HOME/.local/share/DTSys/Wolium/consent"
+          xvfb-run -a -s "-screen 0 1280x800x24" sh -c 'ui/build/linux/x64/release/bundle/wolium & sleep 12; import -window root shot.png; kill %1'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-linux-screenshot
+          path: shot.png
+
+  ui-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: test and build
+        working-directory: ui
+        run: |
+          pip install pillow
+          flutter create --platforms=android --project-name wolium .
+          python3 tool/patch_android.py . assets/icon/wolium_256.png
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test
+          flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolium-apk
+          path: ui/build/app/outputs/flutter-apk/app-release.apk

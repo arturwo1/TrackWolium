@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import 'l10n.dart';
+import 'posix.dart';
 import 'win.dart';
 
 class AppUsage {
@@ -20,7 +21,15 @@ class AppUsage {
 
 String installDir() => File(Platform.resolvedExecutable).parent.path;
 
+String? androidBase;
+
 String dataDir() {
+  if (Platform.isAndroid && androidBase != null) return '$androidBase${Platform.pathSeparator}Wolium';
+  if (Platform.isLinux) {
+    final x = Platform.environment['XDG_DATA_HOME'];
+    final home = Platform.environment['HOME'] ?? installDir();
+    return '${x != null && x.isNotEmpty ? x : '$home/.local/share'}/DTSys/Wolium';
+  }
   final base = Platform.environment['LOCALAPPDATA'] ?? installDir();
   return '$base${Platform.pathSeparator}DTSys${Platform.pathSeparator}Wolium';
 }
@@ -332,6 +341,8 @@ class Settings {
 }
 
 Future<void> startService() async {
+  if (Platform.isLinux) return posixStartService();
+  if (!Platform.isWindows) return;
   final exe = '${installDir()}${Platform.pathSeparator}trackwolium.exe';
   if (!File(exe).existsSync()) return;
   try {
@@ -344,12 +355,18 @@ const _runKey = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
 bool? autostartCache;
 
 Future<bool> autostartEnabled() async {
+  if (!Platform.isWindows) return autostartCache = posixAutostartEnabled();
   final r = await Process.run('reg', ['query', _runKey, '/v', 'Wolium']);
   autostartCache = r.exitCode == 0;
   return autostartCache!;
 }
 
 Future<void> setAutostart(bool on) async {
+  if (!Platform.isWindows) {
+    posixSetAutostart(on);
+    autostartCache = on;
+    return;
+  }
   if (on) {
     await Process.run('reg', [
       'add',

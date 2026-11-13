@@ -1,0 +1,3 @@
+add_executable(trackwolium_core_linux core_linux.cpp)
+target_link_libraries(trackwolium_core_linux PRIVATE tw_core tw_platform tw_storage Threads::Threads)
+set_target_properties(trackwolium_core_linux PROPERTIES OUTPUT_NAME trackwolium-core)

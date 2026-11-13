@@ -132,6 +132,8 @@
     "copy": "Copy path",
     "copied": "Path copied",
     "restart": "Restart service",
+    "usageAccess": "Usage access is required to read app activity.",
+    "usageAccessGrant": "Grant access",
     "serviceDown": "The collector service is not running.",
     "withdraw": "Withdraw consent and stop tracking",
     "unitS": "s",

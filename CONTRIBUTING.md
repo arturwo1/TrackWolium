@@ -2,7 +2,7 @@
 
 Thanks for helping with Wolium. The project is proprietary (see `LICENSE`), but forks made to contribute back are explicitly allowed (section 3), and community help is welcome in three forms:
 
-- bug reports (open an issue with steps, Windows version and the app version from Settings)
+- bug reports (open an issue with steps, OS version and the app version from Settings)
 - improvements: fork the repository, make a focused change, open a pull request
 - translations
 
