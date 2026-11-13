@@ -87,6 +87,11 @@ const strings = {
     'exportRange': 'Export period',
     'exportSaveTitle': 'Save statistics',
     'openFile': 'Open file',
+    'rpcPlaying': 'Playing',
+    'rpcStreaming': 'Streaming',
+    'rpcListening': 'Listening to',
+    'rpcWatching': 'Watching',
+    'rpcCompeting': 'Competing in',
   },
   'ru': {
     'brandSub': 'Трекер активности',
@@ -171,5 +176,10 @@ const strings = {
     'exportRange': 'Период экспорта',
     'exportSaveTitle': 'Сохранить статистику',
     'openFile': 'Открыть файл',
+    'rpcPlaying': 'Играет',
+    'rpcStreaming': 'Стримит',
+    'rpcListening': 'Слушает',
+    'rpcWatching': 'Смотрит',
+    'rpcCompeting': 'Соревнуется',
   },
 };

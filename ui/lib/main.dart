@@ -197,6 +197,7 @@ class _ShellState extends State<Shell> {
   List<Contrib> contribs = [];
   List<PresenceRow> presenceRows = [];
   final rpcNames = <String, String>{};
+  final rpcAssets = <String, Map<String, String>>{};
   String? rangeKey;
   double viewFrom = 0;
   double viewTo = 86400;
@@ -230,18 +231,55 @@ class _ShellState extends State<Shell> {
     loadSess = useSess;
   }
 
+  Future<dynamic> fetchJson(String url) async {
+    final client = HttpClient();
+    try {
+      final req = await client.getUrl(Uri.parse(url));
+      final res = await req.close();
+      return jsonDecode(await res.transform(utf8.decoder).join());
+    } finally {
+      client.close();
+    }
+  }
+
   Future<void> resolveRpcName(String id) async {
     if (rpcNames.containsKey(id)) return;
     rpcNames[id] = '';
+    rpcAssets[id] = {};
     try {
-      final client = HttpClient();
-      final req = await client.getUrl(Uri.parse('https://discord.com/api/v10/applications/$id/rpc'));
-      final res = await req.close();
-      final body = await res.transform(utf8.decoder).join();
-      client.close();
-      final name = (jsonDecode(body) as Map)['name'];
+      final info = await fetchJson('https://discord.com/api/v10/applications/$id/rpc');
+      final name = info is Map ? info['name'] : null;
       if (name is String && mounted) setState(() => rpcNames[id] = name);
     } catch (_) {}
+    try {
+      final list = await fetchJson('https://discord.com/api/v10/oauth2/applications/$id/assets');
+      if (list is List && mounted) {
+        setState(() {
+          for (final a in list) {
+            if (a is Map && a['name'] is String && a['id'] is String) rpcAssets[id]![a['name'] as String] = a['id'] as String;
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  String? rpcAssetUrl(String client, String key) {
+    if (key.startsWith('mp:')) return 'https://media.discordapp.net/${key.substring(3)}';
+    if (key.startsWith('http://') || key.startsWith('https://')) return key;
+    if (RegExp(r'^\d{10,}$').hasMatch(key)) return 'https://cdn.discordapp.com/app-assets/$client/$key.png';
+    final id = rpcAssets[client]?[key];
+    return id == null ? null : 'https://cdn.discordapp.com/app-assets/$client/$id.png';
+  }
+
+  PresenceMark presenceMark(PresenceRow r) {
+    Map<String, dynamic> data = {};
+    if (r.raw.isNotEmpty) {
+      try {
+        final v = jsonDecode(r.raw);
+        if (v is Map) data = Map<String, dynamic>.from(v);
+      } catch (_) {}
+    }
+    return PresenceMark(r.sec, presenceText(r), r.clientId, r.name.isNotEmpty ? r.name : (rpcNames[r.clientId] ?? ''), data);
   }
 
   String presenceText(PresenceRow r) {
@@ -689,7 +727,7 @@ class _ShellState extends State<Shell> {
           ),
         ]),
         const SizedBox(height: 10),
-        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) PresenceMark(r.sec, presenceText(r))], only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240, onView: onChartView),
+        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240, onView: onChartView),
       ]),
     );
   }

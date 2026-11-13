@@ -87,6 +87,25 @@ std::string json_string(const std::string& json, const std::string& key, std::si
   return out;
 }
 
+std::string json_object(const std::string& json, const std::string& key, std::size_t from) {
+  std::size_t i = find_key(json, key, from);
+  if (i == std::string::npos || i >= json.size() || json[i] != '{') return {};
+  int depth = 0;
+  bool in_str = false;
+  for (std::size_t j = i; j < json.size(); ++j) {
+    char c = json[j];
+    if (in_str) {
+      if (c == '\\') ++j;
+      else if (c == '"') in_str = false;
+      continue;
+    }
+    if (c == '"') in_str = true;
+    else if (c == '{') ++depth;
+    else if (c == '}' && --depth == 0) return json.substr(i, j - i + 1);
+  }
+  return {};
+}
+
 std::int64_t json_number(const std::string& json, const std::string& key, std::size_t from) {
   std::size_t i = find_key(json, key, from);
   if (i == std::string::npos) return 0;
@@ -108,6 +127,7 @@ bool extract_presence(const RpcFrame& frame, Presence& out) {
   out.details = json_string(frame.payload, "details", act);
   out.state = json_string(frame.payload, "state", act);
   out.started = json_number(frame.payload, "start", act);
+  out.raw = json_object(frame.payload, "activity", 0);
   return true;
 }
 

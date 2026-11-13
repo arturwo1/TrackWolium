@@ -239,7 +239,7 @@ private:
           tw::Presence p;
           if (tw::extract_presence(f, p)) {
             p.client_id = client_id;
-            std::string key = p.client_id + "|" + p.name + "|" + p.details + "|" + p.state;
+            std::string key = p.client_id + "|" + p.raw;
             if (key != last) {
               last = key;
               queue_.push(std::move(p));

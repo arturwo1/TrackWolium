@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'data.dart';
 import 'l10n.dart';
 import 'theme.dart';
@@ -60,10 +61,13 @@ class Bucket {
 }
 
 class PresenceMark {
-  const PresenceMark(this.sec, this.text);
+  const PresenceMark(this.sec, this.text, this.clientId, this.appName, this.data);
 
   final int sec;
   final String text;
+  final String clientId;
+  final String appName;
+  final Map<String, dynamic> data;
 }
 
 class Session {
@@ -146,6 +150,7 @@ class ActivityChart extends StatefulWidget {
     required this.first,
     required this.total,
     this.presence = const [],
+    this.assetUrl,
     this.onView,
   });
 
@@ -153,6 +158,7 @@ class ActivityChart extends StatefulWidget {
   final int total;
   final List<Contrib> contribs;
   final List<PresenceMark> presence;
+  final String? Function(String client, String key)? assetUrl;
   final String? only;
   final Metric metric;
   final String Function(String app) title;
@@ -284,7 +290,7 @@ class _ActivityChartState extends State<ActivityChart> {
     }
     cache = list;
     final floor = math.min(b * 1000, 60000);
-    top = peak < floor ? floor : peak;
+    top = ((peak < floor ? floor : peak) * 1.18).ceil();
   }
 
   Bucket? bucketOf(int i) => (i < cLo || i >= cHi) ? null : cache[i - cLo];
@@ -412,7 +418,8 @@ class _ActivityChartState extends State<ActivityChart> {
       scheduleHide();
       return;
     }
-    if ((p.dy - lineY(p.dx)).abs() <= 16) {
+    final lineTop = math.min(lineY(p.dx), math.min(lineY(p.dx - 8), lineY(p.dx + 8)));
+    if (p.dy >= lineTop - 34 && p.dy <= _top + plotH + 6) {
       show(p, touchMode: false);
     } else {
       scheduleHide(60);
@@ -517,7 +524,99 @@ class _ActivityChartState extends State<ActivityChart> {
   List<PresenceMark> presenceIn(int i) {
     final a = i * bucket;
     final b = (i + 1) * bucket;
-    return widget.presence.where((p) => p.sec >= a && p.sec < b && p.text.isNotEmpty).take(3).toList();
+    return widget.presence.where((p) => p.sec >= a && p.sec < b && p.text.isNotEmpty).take(2).toList();
+  }
+
+  Widget _presenceCard(PresenceMark m) {
+    final d = m.data;
+    final time = labelAt(widget.first, widget.total, m.sec, seconds: true, timeOnly: true);
+    if (d.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text('$time  ${m.text}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cOpen, fontSize: 12, fontWeight: FontWeight.w600)),
+      );
+    }
+    String str(dynamic v) => v is String ? v : '';
+    final type = d['type'] is int ? d['type'] as int : 0;
+    final kinds = [tr('rpcPlaying'), tr('rpcStreaming'), tr('rpcListening'), tr('rpcWatching'), tr('rpcPlaying'), tr('rpcCompeting')];
+    final kind = kinds[type >= 0 && type < kinds.length ? type : 0];
+    final assets = d['assets'] is Map ? Map<String, dynamic>.from(d['assets'] as Map) : <String, dynamic>{};
+    final largeKey = str(assets['large_image']);
+    final smallKey = str(assets['small_image']);
+    final large = largeKey.isEmpty ? null : widget.assetUrl?.call(m.clientId, largeKey);
+    final small = smallKey.isEmpty ? null : widget.assetUrl?.call(m.clientId, smallKey);
+    final name = m.appName.isNotEmpty ? m.appName : str(d['name']);
+    var party = '';
+    if (d['party'] is Map && (d['party'] as Map)['size'] is List) {
+      final sz = (d['party'] as Map)['size'] as List;
+      if (sz.length == 2) party = '(${sz[0]} / ${sz[1]})';
+    }
+    int? startSec;
+    if (d['timestamps'] is Map) {
+      final v = (d['timestamps'] as Map)['start'];
+      if (v is int) startSec = v > 1000000000000 ? v ~/ 1000 : v;
+    }
+    String elapsed = '';
+    if (startSec != null) {
+      final now = widget.first.millisecondsSinceEpoch ~/ 1000 + m.sec;
+      final e = now - startSec;
+      if (e >= 0) elapsed = '${e ~/ 3600 > 0 ? '${e ~/ 3600}:' : ''}${two(e % 3600 ~/ 60)}:${two(e % 60)}';
+    }
+    final buttons = d['buttons'] is List ? (d['buttons'] as List).whereType<Map>().toList() : <Map>[];
+    Widget art(String? url, double size, {double radius = 8}) => ClipRRect(
+          borderRadius: BorderRadius.circular(radius),
+          child: url == null
+              ? Container(width: size, height: size, color: cSoft, child: Icon(Icons.sports_esports, size: size * 0.5, color: cMuted))
+              : Image.network(url, width: size, height: size, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(width: size, height: size, color: cSoft)),
+            );
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(color: cPanel, borderRadius: BorderRadius.circular(10), border: Border.fromBorderSide(line)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(kind.toUpperCase(), style: const TextStyle(color: cMuted, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.6))),
+          Text(time, style: const TextStyle(color: cMuted, fontSize: 10)),
+        ]),
+        const SizedBox(height: 6),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(
+            width: 52,
+            height: 52,
+            child: Stack(clipBehavior: Clip.none, children: [
+              art(large, 48),
+              if (small != null) Positioned(right: 0, bottom: 0, child: Container(decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: cPanel, width: 2)), child: ClipOval(child: art(small, 20, radius: 10)))),
+            ]),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (name.isNotEmpty) Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800, fontSize: 13)),
+              if (str(d['details']).isNotEmpty) Text(str(d['details']), maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+              if (str(d['state']).isNotEmpty || party.isNotEmpty) Text('${str(d['state'])} $party'.trim(), maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cMuted, fontSize: 12)),
+              if (elapsed.isNotEmpty) Text(elapsed, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        ]),
+        if (buttons.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final b in buttons)
+              HoverBox(
+                onTap: () {
+                  final u = Uri.tryParse(str(b['url']));
+                  if (u != null && (u.scheme == 'http' || u.scheme == 'https')) launchUrl(u);
+                },
+                builder: (h) => Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(color: h ? cSoft : cBg, borderRadius: BorderRadius.circular(8), border: Border.fromBorderSide(line)),
+                  child: Text(str(b['label']), style: const TextStyle(color: cPrimary, fontSize: 12, fontWeight: FontWeight.w700)),
+                ),
+              ),
+          ]),
+        ],
+      ]),
+    );
   }
 
   Widget buildOverlay(BuildContext overlayContext) {
@@ -533,7 +632,7 @@ class _ActivityChartState extends State<ActivityChart> {
           ..sort((a, c) => metricOf(c.value, widget.metric).compareTo(metricOf(a.value, widget.metric)));
         final visibleRows = math.min(rows.length, 6);
         final marks = presenceIn(t.bucket);
-        final height = 70.0 + math.max(1, visibleRows) * 40.0 + marks.length * 20.0;
+        final height = 70.0 + math.max(1, visibleRows) * 40.0 + marks.length * 150.0;
         double left;
         double topPos;
         if (t.follow) {
@@ -629,11 +728,7 @@ class _ActivityChartState extends State<ActivityChart> {
           const SizedBox(height: 2),
           Text('${metricLabel(widget.metric)}: ${formatMs(b.value)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w900, fontSize: 15)),
           const SizedBox(height: 6),
-          for (final m in presenceIn(t.bucket))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text('${labelAt(widget.first, widget.total, m.sec, seconds: true, timeOnly: true)}  ${m.text}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cOpen, fontSize: 12, fontWeight: FontWeight.w600)),
-            ),
+          for (final m in presenceIn(t.bucket)) _presenceCard(m),
           if (rows.isEmpty)
             Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(tr('noData'), style: const TextStyle(color: cMuted, fontSize: 12)))
           else

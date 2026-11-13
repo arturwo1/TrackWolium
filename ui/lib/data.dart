@@ -90,13 +90,14 @@ class Contrib {
 }
 
 class PresenceRow {
-  const PresenceRow(this.sec, this.clientId, this.name, this.details, this.state);
+  const PresenceRow(this.sec, this.clientId, this.name, this.details, this.state, this.raw);
 
   final int sec;
   final String clientId;
   final String name;
   final String details;
   final String state;
+  final String raw;
 }
 
 class Usage {
@@ -199,11 +200,17 @@ class Usage {
     final db = _open();
     if (db == null) return [];
     final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
+    final args = [firstUnix + w0, firstUnix + w1];
     try {
-      final rows = db.select('SELECT ts, client_id, name, details, state FROM presence WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts', [firstUnix + w0, firstUnix + w1]);
-      return [for (final r in rows) PresenceRow((r['ts'] as int) - firstUnix, r['client_id'] as String, r['name'] as String, r['details'] as String, r['state'] as String)];
+      final rows = db.select('SELECT ts, client_id, name, details, state, raw FROM presence WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts', args);
+      return [for (final r in rows) PresenceRow((r['ts'] as int) - firstUnix, r['client_id'] as String, r['name'] as String, r['details'] as String, r['state'] as String, r['raw'] as String)];
     } catch (_) {
-      return [];
+      try {
+        final rows = db.select('SELECT ts, client_id, name, details, state FROM presence WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts', args);
+        return [for (final r in rows) PresenceRow((r['ts'] as int) - firstUnix, r['client_id'] as String, r['name'] as String, r['details'] as String, r['state'] as String, '')];
+      } catch (_) {
+        return [];
+      }
     }
   }
 

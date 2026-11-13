@@ -139,6 +139,11 @@
     "unitH": "h",
     "exportRange": "Export period",
     "exportSaveTitle": "Save statistics",
-    "openFile": "Open file"
+    "openFile": "Open file",
+    "rpcPlaying": "Playing",
+    "rpcStreaming": "Streaming",
+    "rpcListening": "Listening to",
+    "rpcWatching": "Watching",
+    "rpcCompeting": "Competing in"
   }
 }

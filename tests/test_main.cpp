@@ -489,6 +489,8 @@ void test_rpc_parser() {
   CHECK(p.details == "Song \"X\"");
   CHECK(p.state == "by Y");
   CHECK(p.started == 1700000000);
+  CHECK(p.raw.find("\"state\":\"by Y\"") != std::string::npos);
+  CHECK(p.raw.front() == '{' && p.raw.back() == '}');
   tw::RpcFrame other{1, "{\"cmd\":\"SUBSCRIBE\"}"};
   CHECK(!tw::extract_presence(other, p));
 }
@@ -513,10 +515,10 @@ void test_presence_store() {
   auto store = tw::SqliteStore::open(":memory:", &err);
   CHECK(store != nullptr);
   if (!store) return;
-  tw::Presence p{"1", "Game", "d", "s", 5};
+  tw::Presence p{"1", "Game", "d", "s", 5, "{\"a\":1}"};
   CHECK(store->add_presence(100, {p}));
   auto got = store->load_presence(0, 200);
-  CHECK(got.size() == 1 && got[0].name == "Game" && got[0].started == 5);
+  CHECK(got.size() == 1 && got[0].name == "Game" && got[0].started == 5 && got[0].raw == "{\"a\":1}");
 }
 
 int main() {

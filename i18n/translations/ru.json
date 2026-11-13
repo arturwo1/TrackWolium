@@ -139,6 +139,11 @@
     "unitH": "ч",
     "exportRange": "Период экспорта",
     "exportSaveTitle": "Сохранить статистику",
-    "openFile": "Открыть файл"
+    "openFile": "Открыть файл",
+    "rpcPlaying": "Играет",
+    "rpcStreaming": "Стримит",
+    "rpcListening": "Слушает",
+    "rpcWatching": "Смотрит",
+    "rpcCompeting": "Соревнуется"
   }
 }

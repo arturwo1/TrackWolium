@@ -17,6 +17,7 @@ struct Presence {
   std::string details;
   std::string state;
   std::int64_t started = 0;
+  std::string raw;
 };
 
 class RpcFrameParser {
@@ -28,6 +29,7 @@ private:
 };
 
 std::string json_string(const std::string& json, const std::string& key, std::size_t from = 0);
+std::string json_object(const std::string& json, const std::string& key, std::size_t from = 0);
 std::int64_t json_number(const std::string& json, const std::string& key, std::size_t from = 0);
 bool extract_client_id(const RpcFrame& frame, std::string& out);
 bool extract_presence(const RpcFrame& frame, Presence& out);

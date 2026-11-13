@@ -50,12 +50,13 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
       "CREATE TABLE IF NOT EXISTS timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app, state)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS sessions(app TEXT NOT NULL, start INTEGER NOT NULL, stop INTEGER NOT NULL, state INTEGER NOT NULL, PRIMARY KEY(app, start)) WITHOUT ROWID;"
       "CREATE INDEX IF NOT EXISTS sessions_start ON sessions(start);"
-      "CREATE TABLE IF NOT EXISTS presence(ts INTEGER NOT NULL, client_id TEXT NOT NULL, name TEXT NOT NULL, details TEXT NOT NULL, state TEXT NOT NULL, started INTEGER NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS presence(ts INTEGER NOT NULL, client_id TEXT NOT NULL, name TEXT NOT NULL, details TEXT NOT NULL, state TEXT NOT NULL, started INTEGER NOT NULL, raw TEXT NOT NULL DEFAULT '');"
       "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;";
   if (!exec(db, schema, error)) {
     sqlite3_close(db);
     return nullptr;
   }
+  sqlite3_exec(db, "ALTER TABLE presence ADD COLUMN raw TEXT NOT NULL DEFAULT ''", nullptr, nullptr, nullptr);
   sqlite3_exec(db, "ALTER TABLE apps ADD COLUMN path TEXT NOT NULL DEFAULT ''", nullptr, nullptr, nullptr);
   return std::unique_ptr<SqliteStore>(new SqliteStore(db));
 }
@@ -202,7 +203,7 @@ bool SqliteStore::add_presence(std::int64_t ts, const std::vector<Presence>& ite
   std::lock_guard<std::mutex> lock(mtx_);
   if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
   sqlite3_stmt* st = nullptr;
-  const char* sql = "INSERT INTO presence(ts, client_id, name, details, state, started) VALUES(?1, ?2, ?3, ?4, ?5, ?6)";
+  const char* sql = "INSERT INTO presence(ts, client_id, name, details, state, started, raw) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)";
   if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
     last_error_ = sqlite3_errmsg(db_);
     exec(db_, "ROLLBACK", nullptr);
@@ -215,6 +216,7 @@ bool SqliteStore::add_presence(std::int64_t ts, const std::vector<Presence>& ite
     sqlite3_bind_text(st, 4, p.details.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 5, p.state.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(st, 6, p.started);
+    sqlite3_bind_text(st, 7, p.raw.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(st);
     sqlite3_reset(st);
   }
@@ -226,7 +228,7 @@ std::vector<Presence> SqliteStore::load_presence(std::int64_t from_ts, std::int6
   std::vector<Presence> out;
   std::lock_guard<std::mutex> lock(mtx_);
   sqlite3_stmt* st = nullptr;
-  const char* sql = "SELECT client_id, name, details, state, started FROM presence WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts";
+  const char* sql = "SELECT client_id, name, details, state, started, raw FROM presence WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts";
   if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) return out;
   sqlite3_bind_int64(st, 1, from_ts);
   sqlite3_bind_int64(st, 2, to_ts);
@@ -234,7 +236,7 @@ std::vector<Presence> SqliteStore::load_presence(std::int64_t from_ts, std::int6
     const unsigned char* t = sqlite3_column_text(st, c);
     return std::string(t ? reinterpret_cast<const char*>(t) : "");
   };
-  while (sqlite3_step(st) == SQLITE_ROW) out.push_back({text(0), text(1), text(2), text(3), sqlite3_column_int64(st, 4)});
+  while (sqlite3_step(st) == SQLITE_ROW) out.push_back({text(0), text(1), text(2), text(3), sqlite3_column_int64(st, 4), text(5)});
   sqlite3_finalize(st);
   return out;
 }
