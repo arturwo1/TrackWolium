@@ -1,5 +1,6 @@
 import 'dart:ffi';
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:ffi/ffi.dart';
 import 'data.dart';
 
@@ -87,7 +88,9 @@ Future<void> posixStartService() async {
 
 Future<void> openPath(String path, {bool select = false}) async {
   try {
-    if (Platform.isWindows) {
+    if (path.startsWith('content://')) {
+      await const MethodChannel('wolium/usage').invokeMethod('openUri', {'uri': path});
+    } else if (Platform.isWindows) {
       await Process.run('explorer', select ? ['/select,', path] : [path]);
     } else if (Platform.isLinux) {
       final target = select ? File(path).parent.path : path;

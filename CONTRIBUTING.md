@@ -26,3 +26,5 @@ No code needs to be edited by hand.
 - the product name is always "Wolium"
 - keep background disk activity at zero: no periodic writes outside the batched flush
 - run the tests before opening a pull request: `cmake -S . -B build && cmake --build build && ctest --test-dir build`
+
+Technical notes for contributors: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

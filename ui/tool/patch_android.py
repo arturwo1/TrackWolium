@@ -18,6 +18,8 @@ if "PACKAGE_USAGE_STATS" not in text:
 if "xmlns:tools" not in text:
     text = text.replace("<manifest ", '<manifest xmlns:tools="http://schemas.android.com/tools" ', 1)
 text = re.sub(r'android:label="[^"]*"', 'android:label="Wolium"', text, count=1)
+if "allowBackup" not in text:
+    text = text.replace("<application", '<application android:allowBackup="true"', 1)
 manifest.write_text(text, encoding="utf-8")
 
 kt = next(main_dir.glob("kotlin/**/MainActivity.kt"))
@@ -30,6 +32,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.net.Uri
 import android.os.Process
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
@@ -37,6 +40,30 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {{
+
+  private var pendingResult: MethodChannel.Result? = null
+  private var pendingBytes: ByteArray? = null
+
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {{
+    if (requestCode == 4711) {{
+      val r = pendingResult
+      pendingResult = null
+      val uri = data?.data
+      if (resultCode == RESULT_OK && uri != null) {{
+        try {{
+          contentResolver.openOutputStream(uri)?.use {{ it.write(pendingBytes ?: ByteArray(0)) }}
+          r?.success(uri.toString())
+        }} catch (ex: Exception) {{
+          r?.success(null)
+        }}
+      }} else {{
+        r?.success(null)
+      }}
+      pendingBytes = null
+      return
+    }}
+    super.onActivityResult(requestCode, resultCode, data)
+  }}
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {{
     super.configureFlutterEngine(flutterEngine)
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "wolium/usage").setMethodCallHandler {{ call, result ->
@@ -80,6 +107,40 @@ class MainActivity : FlutterActivity() {{
             pkg
           }}
           result.success(label)
+        }}
+        "icon" -> {{
+          val pkg = call.argument<String>("pkg") ?: ""
+          try {{
+            val d = packageManager.getApplicationIcon(pkg)
+            val size = 96
+            val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+            d.setBounds(0, 0, size, size)
+            d.draw(android.graphics.Canvas(bmp))
+            val out = java.io.ByteArrayOutputStream()
+            bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            result.success(out.toByteArray())
+          }} catch (ex: Exception) {{
+            result.success(null)
+          }}
+        }}
+        "saveFile" -> {{
+          pendingBytes = call.argument<ByteArray>("bytes")
+          pendingResult = result
+          val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("text/csv")
+            .putExtra(Intent.EXTRA_TITLE, call.argument<String>("name") ?: "wolium.csv")
+          startActivityForResult(intent, 4711)
+        }}
+        "openUri" -> {{
+          try {{
+            val view = Intent(Intent.ACTION_VIEW)
+              .setDataAndType(Uri.parse(call.argument<String>("uri") ?: ""), "text/csv")
+              .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(Intent.createChooser(view, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          }} catch (ex: Exception) {{
+          }}
+          result.success(null)
         }}
         else -> result.notImplemented()
       }}

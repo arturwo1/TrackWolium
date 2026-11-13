@@ -12,7 +12,10 @@ class UpdateInfo {
   final String url;
 }
 
+const _buildVersion = String.fromEnvironment('WOLIUM_VERSION');
+
 String installedVersion() {
+  if (!Platform.isWindows) return _buildVersion;
   try {
     return File('${installDir()}${Platform.pathSeparator}version.txt').readAsStringSync().trim();
   } catch (_) {

@@ -26,6 +26,7 @@ const siteUrl = 'https://wolium.netlify.app/';
 const privacyUrl = 'https://wolium.netlify.app/privacy-policy/';
 const narrowWidth = 760.0;
 const staleSeconds = 7;
+final bool multiState = !Platform.isAndroid;
 
 Locale materialLocale(String code) {
   final base = code.split('-').first;
@@ -89,6 +90,7 @@ class _RootState extends State<Root> {
   void accept() {
     settings.accepted = true;
     startService();
+    collector?.sync();
     setState(() => accepted = true);
   }
 
@@ -137,6 +139,10 @@ class Brand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(valueListenable: language, builder: (context, _, __) => brandRow());
+  }
+
+  Widget brandRow() {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       Container(
         width: 38,
@@ -518,10 +524,27 @@ class _ShellState extends State<Shell> {
     final fk = keyOf(dateOnly(picked.start));
     final tk = keyOf(dateOnly(picked.end));
     requestFlush();
+    String q(String v) => '"${v.replaceAll('"', '""')}"';
+    final b = StringBuffer('\uFEFF');
+    if (multiState) {
+      b.writeln('${tr('app')},${tr('focused')} (s),${tr('open')} (s),${tr('minimized')} (s),${tr('background')} (s),${tr('total')} (s)');
+    } else {
+      b.writeln('${tr('app')},${tr('total')} (s)');
+    }
+    for (final r in usage.range(fk, tk)) {
+      if (multiState) {
+        b.writeln('${q(r.title)},${r.ms[0] ~/ 1000},${r.ms[1] ~/ 1000},${r.ms[2] ~/ 1000},${r.ms[3] ~/ 1000},${r.total ~/ 1000}');
+      } else {
+        b.writeln('${q(r.title)},${r.total ~/ 1000}');
+      }
+    }
+    final fileName = 'wolium_${fk}_$tk.csv';
+    if (Platform.isAndroid) {
+      return collector?.bridge.saveFile(fileName, utf8.encode(b.toString()));
+    }
     final home = Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'];
     final docs = home == null ? null : '$home${Platform.pathSeparator}Documents';
     final dir = docs != null && Directory(docs).existsSync() ? docs : dataDir();
-    final fileName = 'wolium_${fk}_$tk.csv';
     final String? path;
     if (Platform.isWindows) {
       path = saveFileDialog(
@@ -536,12 +559,6 @@ class _ShellState extends State<Shell> {
       path = '$dir${Platform.pathSeparator}$fileName';
     }
     if (path == null) return null;
-    String q(String v) => '"${v.replaceAll('"', '""')}"';
-    final b = StringBuffer('\uFEFF');
-    b.writeln('${tr('app')},${tr('focused')} (s),${tr('open')} (s),${tr('minimized')} (s),${tr('background')} (s),${tr('total')} (s)');
-    for (final r in usage.range(fk, tk)) {
-      b.writeln('${q(r.title)},${r.ms[0] ~/ 1000},${r.ms[1] ~/ 1000},${r.ms[2] ~/ 1000},${r.ms[3] ~/ 1000},${r.total ~/ 1000}');
-    }
     File(path).writeAsStringSync(b.toString());
     return path;
   }
@@ -740,11 +757,12 @@ class _ShellState extends State<Shell> {
         Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text(tr('chartTitle'), style: const TextStyle(fontWeight: FontWeight.w800)),
           rangeSelect(),
-          SelectBox<Metric>(
-            value: metric,
-            items: [for (final m in Metric.values) DropdownMenuItem(value: m, child: Text(metricLabel(m)))],
-            onChanged: (v) => setState(() => metric = v ?? metric),
-          ),
+          if (!Platform.isAndroid)
+            SelectBox<Metric>(
+              value: metric,
+              items: [for (final m in Metric.values) DropdownMenuItem(value: m, child: Text(metricLabel(m)))],
+              onChanged: (v) => setState(() => metric = v ?? metric),
+            ),
           AppPicker(
             value: only,
             items: [for (final app in appChoices()) PickerItem(app, titleOf(app), iconOf(app, 20))],
@@ -783,10 +801,12 @@ class _ShellState extends State<Shell> {
         TableRow(children: [
           sortHead(tr('app'), 'app', head),
           if (liveMode) sortHead(tr('now'), 'now', head),
-          sortHead(tr('focused'), 'focused', head),
-          sortHead(tr('open'), 'open', head),
-          sortHead(tr('minimized'), 'minimized', head),
-          sortHead(tr('background'), 'background', head),
+          if (multiState) ...[
+            sortHead(tr('focused'), 'focused', head),
+            sortHead(tr('open'), 'open', head),
+            sortHead(tr('minimized'), 'minimized', head),
+            sortHead(tr('background'), 'background', head),
+          ],
           sortHead(tr('total'), 'total', head),
         ]),
         for (final r in sortedRows())
@@ -813,7 +833,8 @@ class _ShellState extends State<Shell> {
                 ),
               ),
               if (liveMode) hov(r.app, nowCell(r)),
-              for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i]), app: r.app),
+              if (multiState)
+                for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i]), app: r.app),
               cell(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w800), app: r.app),
             ],
           ),
@@ -834,8 +855,10 @@ class _ShellState extends State<Shell> {
         sortHead(tr('app'), 'app', head),
         if (liveMode) sortHead(tr('now'), 'now', head),
         sortHead(tr('total'), 'total', head),
-        sortHead(tr('focused'), 'focused', head),
-        sortHead(tr('open'), 'open', head),
+        if (multiState) ...[
+          sortHead(tr('focused'), 'focused', head),
+          sortHead(tr('open'), 'open', head),
+        ],
       ]),
       for (final r in sortedRows())
         GestureDetector(
@@ -859,12 +882,13 @@ class _ShellState extends State<Shell> {
               Expanded(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
               Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
             ]),
-            Wrap(children: [
-              stat(tr('focused'), r.ms[0]),
-              stat(tr('open'), r.ms[1]),
-              stat(tr('minimized'), r.ms[2]),
-              stat(tr('background'), r.ms[3]),
-            ]),
+            if (multiState)
+              Wrap(children: [
+                stat(tr('focused'), r.ms[0]),
+                stat(tr('open'), r.ms[1]),
+                stat(tr('minimized'), r.ms[2]),
+                stat(tr('background'), r.ms[3]),
+              ]),
           ]),
         ),
         ),
@@ -949,7 +973,18 @@ class _ShellState extends State<Shell> {
       final title = tab == 0 ? tr('navActivity') : tr('navSettings');
       final pad = narrow ? 12.0 : 18.0;
       return Scaffold(
-        body: Column(children: [
+        body: SafeArea(
+          child: ValueListenableBuilder<bool>(
+            valueListenable: chartPinch,
+            builder: (context, pinching, _) => column(narrow, title, pad, pinching),
+          ),
+        ),
+      );
+    });
+  }
+
+  Widget column(bool narrow, String title, double pad, bool pinching) {
+    return Column(children: [
           topbar(narrow),
           Expanded(
             child: Row(children: [
@@ -964,7 +999,12 @@ class _ShellState extends State<Shell> {
                       builder: (_, ok, __) => ok ? const SizedBox.shrink() : accessBanner(),
                     ),
                   Expanded(
-                    child: ListView(padding: EdgeInsets.fromLTRB(pad, pad, pad, 28), children: [
+                    child: NotificationListener<ScrollStartNotification>(
+                      onNotification: (_) {
+                        tipsReset.value++;
+                        return false;
+                      },
+                      child: ListView(physics: pinching ? const NeverScrollableScrollPhysics() : null, padding: EdgeInsets.fromLTRB(pad, pad, pad, 28), children: [
                       Wrap(spacing: 16, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
                         Text(title, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
                         if (tab == 0) statusChip(),
@@ -980,15 +1020,14 @@ class _ShellState extends State<Shell> {
                         },
                       ),
                     ]),
+                    ),
                   ),
                 ]),
               ),
             ]),
           ),
           if (narrow) bottomNav(),
-        ]),
-      );
-    });
+        ]);
   }
 }
 
@@ -1216,11 +1255,12 @@ class _SettingsPageState extends State<SettingsPage> {
         const SizedBox(height: 4),
         Row(children: [
           Expanded(child: SelectableText(dataDir())),
-          IconButton(
-            tooltip: tr('openFolder'),
-            icon: const Icon(Icons.folder_open, size: 18),
-            onPressed: () => openPath(dataDir()),
-          ),
+          if (!Platform.isAndroid)
+            IconButton(
+              tooltip: tr('openFolder'),
+              icon: const Icon(Icons.folder_open, size: 18),
+              onPressed: () => openPath(dataDir()),
+            ),
           IconButton(
             tooltip: tr('copy'),
             icon: const Icon(Icons.copy, size: 18),
@@ -1273,7 +1313,7 @@ class _SettingsPageState extends State<SettingsPage> {
               SelectableText(exportedPath!, style: const TextStyle(color: cMuted, fontSize: 12)),
               const SizedBox(height: 8),
               Wrap(spacing: 8, runSpacing: 8, children: [
-                OutlinedButton(onPressed: () => openPath(exportedPath!, select: true), child: Text(tr('openFolder'))),
+                if (!Platform.isAndroid) OutlinedButton(onPressed: () => openPath(exportedPath!, select: true), child: Text(tr('openFolder'))),
                 OutlinedButton(onPressed: () => openPath(exportedPath!), child: Text(tr('openFile'))),
               ]),
             ]),

@@ -149,7 +149,19 @@ Uint8List _png(Uint8List rgba, int w, int h) {
 final Map<String, Uint8List?> _cache = {};
 
 Uint8List? iconPng(String path) {
-  if (path.isEmpty || !Platform.isWindows) return null;
+  if (path.isEmpty) return null;
+  if (path.endsWith('.png')) {
+    final cached = _cache[path];
+    if (cached != null) return cached;
+    try {
+      final f = File(path);
+      if (!f.existsSync()) return null;
+      return _cache[path] = f.readAsBytesSync();
+    } catch (_) {
+      return null;
+    }
+  }
+  if (!Platform.isWindows) return null;
   if (_cache.containsKey(path)) return _cache[path];
   Uint8List? result;
   try {

@@ -4,169 +4,53 @@
 
 # Wolium
 
-**Private activity tracker for Windows. Everything stays on your computer.**
+**Private activity tracker. Your data stays on your device.**
 
-<a href="https://github.com/arturwo1/trackwolium/releases/latest/download/WoliumSetup.exe"><img src="https://img.shields.io/badge/Download-WoliumSetup.exe-80e0f5?style=for-the-badge&logo=windows&logoColor=111" alt="Download WoliumSetup.exe"></a>
+<a href="https://github.com/arturwo1/trackwolium/releases/latest/download/WoliumSetup.exe"><img src="https://img.shields.io/badge/Windows-WoliumSetup.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
+<a href="https://github.com/arturwo1/trackwolium/releases/latest/download/Wolium.apk"><img src="https://img.shields.io/badge/Android-Wolium.apk-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download for Android"></a>
+<a href="https://github.com/arturwo1/trackwolium/releases/latest/download/Wolium-linux-x86_64.tar.gz"><img src="https://img.shields.io/badge/Linux-tar.gz-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download for Linux"></a>
 
-![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus&logoColor=white)
-![Flutter](https://img.shields.io/badge/Flutter-UI-02569B?logo=flutter&logoColor=white)
-![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)
-![Windows 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows11&logoColor=white)
 ![Disk overhead](https://img.shields.io/badge/Disk%20overhead-0%25-3ba55d)
+![No network](https://img.shields.io/badge/Telemetry-none-3ba55d)
 ![DTSys](https://img.shields.io/badge/DTSys-proprietary-23272a)
 
-<img src="assets/screenshot.png" width="860" alt="Wolium preview (schematic)">
+<img src="assets/screenshot.png" width="860" alt="Wolium preview">
 
 </div>
 
-## Graph controls
+## What it does
+
+Wolium shows how much time you spend in each app: a zoomable activity graph, a per-app table and CSV export. Nothing is recorded until you accept the privacy policy, and nothing leaves your device.
+
+## Install
+
+**Windows 10 / 11.** Run `WoliumSetup.exe`. Windows SmartScreen may warn about an unknown publisher: choose *More info*, then *Run anyway*. Wolium is not code-signed yet.
+
+**Android 8+.** Open `Wolium.apk` and allow installing from this source. On first start grant *Usage access* to Wolium. Android only keeps about a week of history, so open the app at least once a week to keep your statistics complete.
+
+**Linux (X11 / XWayland).** Extract the archive and run `./install.sh`. Windows of pure Wayland apps are not visible to the tracker.
+
+## Using the graph
 
 | Action | Mouse | Touch |
 | --- | --- | --- |
 | Zoom | wheel | pinch |
-| Pan | drag with left button | drag |
-| Reset | middle click or double click | double tap |
-| Tooltip | hover the line, click to pin | tap |
+| Pan | drag | drag |
+| Reset | middle or double click | double tap |
+| Details | hover the line, click to pin | tap |
 
-The graph keeps 150-250 points in view and picks the bucket from the zoom level (days, hours, minutes, seconds). Idle time is drawn as zero. Second-level detail exists for data recorded since sessions were introduced; older data has 5-minute resolution.
+## Platform differences
 
-## Local API
+| | Windows | Linux | Android |
+| --- | --- | --- | --- |
+| Focused / open / minimized / background | yes | yes | focused only |
+| Auto-update | yes | no | no |
+| Local API, Discord activity | yes | no | no |
 
-Off by default. Enable it in Settings (a warning explains that other programs can read your activity). Loopback only, requests with a foreign `Host` header are rejected.
+## Privacy
 
-    GET http://127.0.0.1:9095/v1/current
+Data is stored in a local SQLite file. On Windows it is `%LOCALAPPDATA%\DTSys\Wolium`, on Linux `~/.local/share/DTSys/Wolium`. Updating never touches it, uninstalling asks first. Policy: https://wolium.netlify.app/privacy-policy/
 
-    {"uptime_ms":123456,"apps":[{"app":"code.exe","running":true,"state":"focused","focused_ms":1000,"open_ms":0,"minimized_ms":0,"background_ms":0}]}
+## License
 
-## App states
-
-- focused: the window has focus
-- open: a window is open but not focused
-- minimized: the window is minimized
-- background: the process runs without a window
-
-## Install layout
-
-Users download a single `WoliumSetup.exe` from a GitHub Release. The installer lets you pick the language (English, Russian) and the folder (default `%LOCALAPPDATA%\Programs\Wolium`) and puts everything there:
-
-    <folder>\trackwolium.exe   service with tray icon: tracks time, writes SQLite, tray menu
-    <folder>\wolium.exe        Flutter UI (plus Flutter dlls and data)
-    <folder>\uninstall.exe     uninstaller
-    <folder>\manifest.txt      list of installed files
-    %LOCALAPPDATA%\DTSys\Wolium\   usage.db, lang, consent (outside the install folder, never touched by install or update)
-
-Installing into a folder with existing files replaces the files from the package and keeps everything else, and the data folder.
-
-What lives outside the folder: the Start menu and desktop shortcuts and, if autostart is enabled, a `HKCU\...\Run` value. Deleting the folder by hand removes the program and its data, but leaves those shortcuts and the autostart value (harmless, they just point to nothing). `uninstall.exe` removes them too. It asks whether to remove the data folder as well (Yes: remove everything, No: remove the app and keep my data). It deletes only files listed in `manifest.txt`, so files of your own in the folder survive.
-
-The service keeps counters in RAM and writes them to `usage.db` (WAL) every 3 minutes, on focus change, on exit, and when the UI asks. The heartbeat lives in shared memory, not on disk, and the UI reads it from there. Service flags: `--background`, `--db PATH`, `--no-db`, `--interval MS`.
-
-## Localization
-
-No user-facing text is hardcoded. Every language is one file, `i18n/translations/<code>.json`, holding all native (tray, installer) and UI strings. Missing keys fall back to English. The chosen language is stored in `%LOCALAPPDATA%\DTSys\Wolium\lang`.
-
-    python tools/lang.py add de Deutsch 0x07
-    python tools/lang.py sync
-
-`add` creates the file from the English texts and registers the language everywhere. After translating the values, `sync` regenerates the C++ and Dart tables (CI runs it too). `0x07` is the Windows primary language id used for auto-detection (optional).
-
-## Icon
-
-`tools/make_icon.py` generates `assets/icon/wolium.ico` and PNGs (128, 256, 512) for Android and Linux. The ico is embedded into all exe files (`res/*.rc`, also version info shown in Task Manager) and into the Flutter runner (`ui/tool/patch_windows.py`).
-
-## Build
-
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-    cmake --build build --config Release
-
-`.github/workflows/release.yml` builds a release on a `v*` tag: Flutter UI, service, installer, uninstaller. `tools/pack_installer.py` appends a zip with the files to `WoliumSetup.exe`; extraction uses the `tar.exe` built into Windows 10+.
-
-## Console (for debugging)
-
-`trackwolium-console` shows the same table in a terminal and also works on Linux. Flags: `--interval MS`, `--top N`, `--for SECONDS`, `--no-color`, `--system`, `--all`, `--ignore a.exe,b.exe`, `--db PATH`, `--no-db`, `--history N`, `--standalone`.
-
-Apps that never had a window and Windows shell helpers are hidden by default. `--all` shows everything. Where the platform cannot see windows (Linux for now) the filter is disabled automatically.
-
-## Linux and Android
-
-- Linux (X11 or XWayland): download `Wolium-linux-x86_64.tar.gz` from Releases, extract, run `./install.sh`. Requires GTK 3 and libX11. Pure Wayland windows are not visible to the tracker. The Local API, Discord Rich Presence and self-update are Windows-only.
-- Android 8+: install `Wolium.apk` from Releases and grant Usage access when asked. Only the focused app is tracked, and only history that Android itself keeps is imported.
-- CI checks both on every push: a Linux end-to-end test (Xvfb + window manager) and Android session-logic unit tests. The Linux UI screenshot is attached to each CI run as an artifact.
-
-## SmartScreen
-
-The blue screen appears for unsigned exe files marked as downloaded from the internet. For your own use: right-click the file or zip, Properties, "Unblock" (or `Unblock-File`), or build locally. For distribution see code signing options (Microsoft Store MSIX, Azure Artifact Signing, OV certificate).
-
-## Tests
-
-    ctest --test-dir build --output-on-failure
-
-## Modules
-
-- core: types, Tracker (time per state), Engine (loop), filter, IProbe and ISink interfaces
-- platform: IProbe implementations (windows, linux), data paths
-- storage: SQLite (vendored amalgamation) and SqliteStore
-- i18n: language tables (en, ru) and language selection
-- ipc: named pipe between the service and a console viewer (Windows)
-- ui_console: ConsoleSink, table output
-- capi: C ABI for Flutter FFI, JNI and other languages
-- app: `trackwolium-console`
-- app_win: service with tray icon `trackwolium` (Windows)
-- installer: `WoliumSetup` and `uninstall` (Windows)
-- ui: Flutter interface
-- tests: tests without external libraries
-
-## New platform
-
-Implement IProbe and return it from `make_native_probe`, or feed data from outside through PushProbe (this is how Android works: Kotlin collects UsageEvents and passes them via `tw_add_sample` and `tw_step`).
-
-## Checking Linux and Android without installing them
-
-`.github/workflows/ci.yml` builds and tests the project on windows-latest and ubuntu-latest, and builds the core with the C API for Android arm64 via the NDK.
-
-## Runtime layout
-
-Installed by default to `%LOCALAPPDATA%\Programs\DTSys\Wolium` (any folder can be chosen).
-
-| File | Role |
-|---|---|
-| `trackwolium.exe` | Guard: tray icon + supervisor. Starts at Windows logon (`--background`), restarts the core, notifies if it dies. |
-| `trackwolium-core.exe` | Collector. Runs only after consent. |
-| `wolium.exe` | Flutter UI. Starts the service if it is not running. |
-| `uninstall.exe` | Uninstaller (optionally keeps `userdata`). |
-| `%LOCALAPPDATA%\DTSys\Wolium\` | `consent`, `lang`, `paused`, `usage.db`. |
-
-Privacy: nothing is recorded and no tray is started until the consent file exists
-(created by accepting the policy in the UI/installer, removed by withdrawing it in Settings).
-
-Language: the installer and apps pick the system UI language (Russian or English fallback);
-the choice is stored in `%LOCALAPPDATA%\DTSys\Wolium\lang`. Add a language with a new `i18n/include/tw/lang/<code>.def`.
-
-Tray states: Active, Paused, Updating, Error (a colored dot on the icon).
-
-Tray death watch: the core watches the tray process. If it exits without the clean-exit event (crash, End task), the core shows its own tray icon and a notification; clicking restores the tray.
-Installer: knows the installed version (`version.txt`) and offers Reinstall when the same version is already installed.
-
-Activity graph: the core also stores a 5-minute timeline (`timeline` table, visible states only). The UI draws focus time per 15 minutes as a smooth spline with a tooltip; clicking an app row filters the graph to that app.
-Windows integration: the installer registers `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\DTSys.Wolium` (removed by `uninstall.exe`). Setup has three states: Install, Update (installed version older), Reinstall (same version), plus an Uninstall button when installed.
-
-Graph interaction: wheel zooms time, left-drag pans, middle click or double click resets, hover the line for a cursor-attached tooltip, click to pin it (then rows are clickable and open the session list). On touch: tap shows an anchored tooltip, pinch zooms, one finger pans, double tap resets. App icons come from the exe path stored in the `apps` table.
-Versions: CI builds as `<tag>.<run number>`, so every build is newer than the previous one and the installer offers Update.
-
-Date range: presets (day, week, month, year) and From/To pickers filter both the table and the graph. Long ranges load the timeline pre-aggregated (15 min for 8-31 days, 1 hour above 31 days).
-
-Auto-update: the UI checks the latest GitHub release (assets `version.txt` and `WoliumSetup.exe`) at start and every 6 hours when enabled in Settings (`noupdates` file in the data folder disables it). The banner downloads the installer and runs it with `--silent <install dir>`, which keeps autostart, desktop shortcut and language, then restarts the tray and UI. Release builds must be created from a tag so `version.txt` is uploaded.
-
-## Range, search, export
-
-- One range selector (Day / Week / Month / Year / Custom period) sits next to the chart selectors.
-- The table has a live search by app name; Settings can export the selected range to CSV (`exports` in the data folder).
-- Truncated text shows its full value in a tooltip (hover on desktop, tap on touch devices).
-
-## Local API (opt-in)
-
-Settings toggle creates the `localapi` flag file. Core then serves `GET http://127.0.0.1:9095/v1/current` on loopback only, rejecting any Host header other than 127.0.0.1/localhost.
-
-## Discord Rich Presence (experimental)
-
-The `discordrpc` flag makes core own `\\.\pipe\discord-ipc-0` and forward traffic to the next free pipe, saving SET_ACTIVITY texts into the `presence` table. It works only when Wolium starts before Discord and is untested on real Discord.
+Proprietary, see [LICENSE](LICENSE). Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).

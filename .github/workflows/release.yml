@@ -67,7 +67,7 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
-          (cd ui && flutter create --platforms=linux --project-name wolium . && rm -f test/widget_test.dart && flutter pub get && flutter build linux --release)
+          (cd ui && flutter create --platforms=linux --project-name wolium . && rm -f test/widget_test.dart && flutter pub get && flutter build linux --release --dart-define=WOLIUM_VERSION=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac))
       - name: package
         run: |
           mkdir -p pkg/wolium-linux/app
@@ -106,7 +106,7 @@ jobs:
           python3 tool/patch_android.py . assets/icon/wolium_256.png
           flutter pub get
           flutter test
-          flutter build apk --release
+          flutter build apk --release --dart-define=WOLIUM_VERSION=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac)
           cp build/app/outputs/flutter-apk/app-release.apk ../Wolium.apk
       - uses: actions/upload-artifact@v4
         with:

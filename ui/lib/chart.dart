@@ -36,6 +36,9 @@ int metricOf(List<int> v, Metric m) {
   }
 }
 
+final ValueNotifier<int> tipsReset = ValueNotifier<int>(0);
+final ValueNotifier<bool> chartPinch = ValueNotifier<bool>(false);
+
 const _daySec = 86400;
 const _niceSteps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800, 2592000];
 const _minSpan = 30.0;
@@ -83,7 +86,7 @@ String two(int v) => v.toString().padLeft(2, '0');
 String labelAt(DateTime first, int total, num sec, {bool seconds = false, bool dateOnly = false, bool timeOnly = false}) {
   if (total <= _daySec && sec >= total) return '24:00';
   final d = first.add(Duration(seconds: sec.floor()));
-  final date = '${two(d.day)}.${two(d.month)}';
+  final date = '${two(d.day)}.${two(d.month)}${total > 200 * _daySec ? '.${two(d.year % 100)}' : ''}';
   if (dateOnly) return date;
   final t = '${two(d.hour)}:${two(d.minute)}${seconds ? ':${two(d.second)}' : ''}';
   if (timeOnly || total <= _daySec) return t;
@@ -188,6 +191,10 @@ class _ActivityChartState extends State<ActivityChart> {
   double lastScale = 1;
   bool touch = false;
   bool dragging = false;
+  final tipKey = GlobalKey();
+  final detailKey = GlobalKey();
+  final Map<int, Offset> pts = {};
+  double pinchDist = 0;
 
   int bucket = 300;
   int top = 60000;
@@ -200,7 +207,42 @@ class _ActivityChartState extends State<ActivityChart> {
   void initState() {
     super.initState();
     vx1 = widget.total.toDouble();
+    GestureBinding.instance.pointerRouter.addGlobalRoute(globalPointer);
+    tipsReset.addListener(hideNow);
     scheduleView();
+  }
+
+  bool insideKey(GlobalKey k, Offset p) {
+    final box = k.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached) return false;
+    return (box.localToGlobal(Offset.zero) & box.size).contains(p);
+  }
+
+  void globalPointer(PointerEvent e) {
+    if (e is! PointerDownEvent || tip.value == null) return;
+    if (insideKey(key, e.position) || insideKey(tipKey, e.position) || insideKey(detailKey, e.position)) return;
+    hideNow();
+  }
+
+  void pinchMove(PointerMoveEvent e) {
+    if (!pts.containsKey(e.pointer)) return;
+    final before = pts.values.toList();
+    pts[e.pointer] = e.localPosition;
+    if (pts.length < 2 || before.length < 2) return;
+    final a = pts.values.elementAt(0);
+    final b = pts.values.elementAt(1);
+    final dist = (a - b).distance;
+    final mid = Offset((a.dx + b.dx) / 2, (a.dy + b.dy) / 2);
+    if (pinchDist > 8 && dist > 8) {
+      final ratio = dist / pinchDist;
+      setState(() {
+        zoomX(ratio, vx0 + (mid.dx - _left) / plotW * span);
+        clampView();
+      });
+      hideNow();
+      scheduleView();
+    }
+    pinchDist = dist;
   }
 
   void scheduleView() {
@@ -222,6 +264,8 @@ class _ActivityChartState extends State<ActivityChart> {
 
   @override
   void dispose() {
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(globalPointer);
+    tipsReset.removeListener(hideNow);
     hideTimer?.cancel();
     removeTimer?.cancel();
     viewTimer?.cancel();
@@ -453,7 +497,27 @@ class _ActivityChartState extends State<ActivityChart> {
       plotH = math.max(1.0, widget.height - _top - _bottom);
       rebuildData();
       return Listener(
+        onPointerMove: pinchMove,
+        onPointerUp: (e) {
+          pts.remove(e.pointer);
+          pinchDist = 0;
+          chartPinch.value = pts.length >= 2;
+        },
+        onPointerCancel: (e) {
+          pts.remove(e.pointer);
+          pinchDist = 0;
+          chartPinch.value = pts.length >= 2;
+        },
         onPointerDown: (e) {
+          if (e.kind != PointerDeviceKind.mouse) {
+            pts[e.pointer] = e.localPosition;
+            if (pts.length >= 2) {
+              final a = pts.values.elementAt(0);
+              final b = pts.values.elementAt(1);
+              pinchDist = (a - b).distance;
+              chartPinch.value = true;
+            }
+          }
           touch = e.kind != PointerDeviceKind.mouse;
           if (e.kind == PointerDeviceKind.mouse && e.buttons == kMiddleMouseButton) resetView();
         },
@@ -475,6 +539,7 @@ class _ActivityChartState extends State<ActivityChart> {
             },
             onScaleEnd: (_) => setState(() => dragging = false),
             onScaleUpdate: (d) {
+              if (pts.length >= 2) return;
               final moved = d.focalPointDelta.dx != 0 || d.scale != 1;
               setState(() {
                 if (d.scale != 1) {
@@ -683,6 +748,7 @@ class _ActivityChartState extends State<ActivityChart> {
             child: IgnorePointer(
               ignoring: !t.interactive,
               child: MouseRegion(
+                key: tipKey,
                 onEnter: (_) => cancelHide(),
                 onExit: (_) => scheduleHide(900),
                 child: animated(_mainTip(b, t, rows), t.visible),
@@ -699,6 +765,7 @@ class _ActivityChartState extends State<ActivityChart> {
               child: IgnorePointer(
                 ignoring: !t.interactive || t.detail == null,
                 child: MouseRegion(
+                  key: detailKey,
                   onEnter: (_) => cancelHide(),
                   onExit: (_) => scheduleHide(900),
                   child: animated(_detailTip(shownDetail), t.visible && t.detail != null),
@@ -852,8 +919,11 @@ class _ChartPainter extends CustomPainter {
       tp.paint(canvas, Offset(_left - tp.width - 6, y - tp.height / 2));
     }
     var step = _niceSteps.last;
+    final avail = size.width - _left - _right;
     for (final c in _niceSteps) {
-      if (span / c <= 6) {
+      final yearly = total > 200 * _daySec;
+      final w = c >= _daySec ? (yearly ? 66.0 : 48.0) : (c < 60 ? 62.0 : (total <= _daySec ? 46.0 : 86.0));
+      if (span / c <= math.max(2.0, (avail / w).floorToDouble())) {
         step = c;
         break;
       }

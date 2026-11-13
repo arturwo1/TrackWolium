@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -150,6 +151,11 @@ class UsageBridge {
   }
 
   Future<String> label(String pkg) async => (await _channel.invokeMethod<String>('label', {'pkg': pkg})) ?? pkg;
+
+  Future<Uint8List?> icon(String pkg) async => _channel.invokeMethod<Uint8List>('icon', {'pkg': pkg});
+
+  Future<String?> saveFile(String name, List<int> bytes) async =>
+      _channel.invokeMethod<String>('saveFile', {'name': name, 'bytes': Uint8List.fromList(bytes)});
 }
 
 class AndroidCollector {
@@ -162,21 +168,31 @@ class AndroidCollector {
 
   File get _marker => File('${dataDir()}${Platform.pathSeparator}sync');
 
+  Timer? _quick;
+
   void start() {
     sync();
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => sync());
+    _quick = Timer.periodic(const Duration(seconds: 3), (_) async {
+      final ok = await bridge.hasAccess();
+      final changed = ok != access.value;
+      access.value = ok;
+      if (changed && ok) sync();
+    });
   }
 
-  void stop() => _timer?.cancel();
+  void stop() {
+    _timer?.cancel();
+    _quick?.cancel();
+  }
 
   Future<void> sync() async {
     if (_busy) return;
     _busy = true;
     try {
-      final settings = Settings.load();
-      if (!settings.accepted) return;
       final ok = await bridge.hasAccess();
       access.value = ok;
+      if (!Settings.load().accepted) return;
       if (!ok || File('${dataDir()}${Platform.pathSeparator}paused').existsSync()) return;
       final now = DateTime.now();
       var since = now.subtract(const Duration(days: 7));
@@ -195,12 +211,22 @@ class AndroidCollector {
       try {
         db.execute(_schema);
         storeSessions(db, sessions, firstDay, DateTime(now.year, now.month, now.day));
-        final known = {for (final r in db.select('SELECT app FROM apps')) r['app'] as String};
+        final known = {for (final r in db.select("SELECT app FROM apps WHERE path != ''")) r['app'] as String};
         for (final app in sessions.map((s) => s.app).toSet()) {
           if (known.contains(app)) continue;
           final label = await bridge.label(app);
-          db.execute('INSERT OR REPLACE INTO apps(app, name, path) VALUES(?, ?, ?)', [app, label, '']);
+          var iconPath = '';
+          try {
+            final png = await bridge.icon(app);
+            if (png != null && png.isNotEmpty) {
+              final dir = Directory('${dataDir()}${Platform.pathSeparator}icons')..createSync(recursive: true);
+              iconPath = '${dir.path}${Platform.pathSeparator}$app.png';
+              File(iconPath).writeAsBytesSync(png);
+            }
+          } catch (_) {}
+          db.execute('INSERT OR REPLACE INTO apps(app, name, path) VALUES(?, ?, ?)', [app, label, iconPath]);
         }
+        db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
       } finally {
         db.dispose();
       }
