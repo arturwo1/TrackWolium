@@ -6,7 +6,7 @@
 
 **Private activity tracker. Your data stays on your device.**
 
-<a href="https://github.com/arturwo1/trackwolium/releases/latest/download/WoliumSetup.exe"><img src="https://img.shields.io/badge/Windows-WoliumSetup.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
+<a href="https://github.com/arturwo1/trackwolium/releases/latest/download/WoliumSetup.exe"><img src="https://img.shields.io/badge/Windows-WoliumSetup.exe-0078D4?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0wIDMuNDQ5TDkuNzUgMi4xdjkuNDUxSDBtMTAuOTQ5LTkuNjAyTDI0IDB2MTEuNEgxMC45NDlNMCAxMi42aDkuNzV2OS40NTFMMCAyMC42OTlNMTAuOTQ5IDEyLjZIMjRWMjRsLTEzLjA1MS0xLjg1MSIvPjwvc3ZnPg%3D%3D" alt="Download for Windows"></a>
 <a href="https://github.com/arturwo1/trackwolium/releases/latest/download/Wolium.apk"><img src="https://img.shields.io/badge/Android-Wolium.apk-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download for Android"></a>
 <a href="https://github.com/arturwo1/trackwolium/releases/latest/download/Wolium-linux-x86_64.tar.gz"><img src="https://img.shields.io/badge/Linux-tar.gz-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download for Linux"></a>
 <a href="https://github.com/arturwo1/trackwolium/releases/latest/download/Wolium-macos.dmg"><img src="https://img.shields.io/badge/macOS-Wolium.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS"></a>

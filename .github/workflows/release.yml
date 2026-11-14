@@ -65,7 +65,11 @@ jobs:
           channel: stable
       - name: version
         run: |
-          VER=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac)
+          v="${GITHUB_REF_NAME#v}"
+          case "$v" in
+            [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.1.0.${GITHUB_RUN_NUMBER}" ;;
+          esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
       - name: build
         run: |
@@ -110,7 +114,11 @@ jobs:
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          VER=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac)
+          v="${GITHUB_REF_NAME#v}"
+          case "$v" in
+            [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.1.0.${GITHUB_RUN_NUMBER}" ;;
+          esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
           echo "WOLIUM_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           if [ -n "$KS_B64" ]; then
@@ -146,7 +154,11 @@ jobs:
       - run: python3 tools/lang.py sync
       - name: version
         run: |
-          VER=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac)
+          v="${GITHUB_REF_NAME#v}"
+          case "$v" in
+            [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.1.0.${GITHUB_RUN_NUMBER}" ;;
+          esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
       - run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"

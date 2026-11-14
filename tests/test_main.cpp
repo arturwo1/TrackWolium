@@ -69,7 +69,8 @@ void test_gap_is_ignored() {
   t.tick({{"a.exe", State::Focused}}, at(0));
   t.tick({{"a.exe", State::Focused}}, at(60000));
   t.tick({{"a.exe", State::Focused}}, at(61000));
-  auto* a = find(t.report(), "a.exe");
+  auto rep_a = t.report();
+  auto* a = find(rep_a, "a.exe");
   CHECK(a != nullptr);
   CHECK(a->total() == Duration(1000));
 }
@@ -78,7 +79,8 @@ void test_duplicate_samples_pick_best_state() {
   tw::Tracker t;
   t.tick({{"a.exe", State::Background}, {"a.exe", State::Minimized}, {"a.exe", State::Focused}}, at(0));
   t.tick({{"a.exe", State::Background}}, at(1000));
-  auto* a = find(t.report(), "a.exe");
+  auto rep_a = t.report();
+  auto* a = find(rep_a, "a.exe");
   CHECK(a != nullptr);
   CHECK(a->spent[static_cast<int>(State::Focused)] == Duration(1000));
 }
@@ -108,7 +110,8 @@ void test_engine_with_push_probe() {
   probe->push({{"x", State::Minimized}});
   e.step(at(500));
   CHECK(sink->calls == 2);
-  auto* x = find(e.report(), "x");
+  auto rep_x = e.report();
+  auto* x = find(rep_x, "x");
   CHECK(x != nullptr);
   CHECK(x->spent[static_cast<int>(State::Focused)] == Duration(500));
 }
@@ -368,7 +371,8 @@ void test_engine_seeds_from_store() {
   tw::Engine e(probe, Duration(60000));
   e.set_day_source([] { return std::string("2026-01-01"); });
   e.set_store(store);
-  auto* a = find(e.report(), "a.exe");
+  auto rep_a = e.report();
+  auto* a = find(rep_a, "a.exe");
   CHECK(a != nullptr);
   CHECK(a && a->spent[0] == Duration(5000));
 }
@@ -386,7 +390,8 @@ void test_engine_day_rollover() {
   day = "2026-01-02";
   e.step(at(4000));
   CHECK(store->data["2026-01-01"][{"a.exe", 0}] == 3000);
-  auto* a = find(e.report(), "a.exe");
+  auto rep_a = e.report();
+  auto* a = find(rep_a, "a.exe");
   CHECK(a == nullptr || a->total() <= Duration(1000));
   e.finish();
   CHECK(store->data["2026-01-02"][{"a.exe", 0}] <= 1000);
