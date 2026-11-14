@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import 'l10n.dart';
@@ -388,4 +389,43 @@ Future<void> setAutostart(bool on) async {
   } else {
     await Process.run('reg', ['delete', _runKey, '/v', 'Wolium', '/f']);
   }
+}
+
+class Hidden {
+  static final ValueNotifier<Map<String, String>> apps = ValueNotifier({});
+
+  static File get _file => File('${dataDir()}${Platform.pathSeparator}hidden.txt');
+
+  static void load() {
+    try {
+      final map = <String, String>{};
+      if (_file.existsSync()) {
+        for (final line in _file.readAsLinesSync()) {
+          if (line.isEmpty) continue;
+          final i = line.indexOf('\t');
+          map[i < 0 ? line : line.substring(0, i)] = i < 0 ? line : line.substring(i + 1);
+        }
+      }
+      apps.value = map;
+    } catch (_) {}
+  }
+
+  static void _save() {
+    try {
+      Directory(dataDir()).createSync(recursive: true);
+      _file.writeAsStringSync(apps.value.entries.map((e) => '${e.key}\t${e.value}\n').join());
+    } catch (_) {}
+  }
+
+  static void hide(String app, String title) {
+    apps.value = {...apps.value, app: title};
+    _save();
+  }
+
+  static void show(String app) {
+    apps.value = Map.of(apps.value)..remove(app);
+    _save();
+  }
+
+  static bool has(String app) => apps.value.containsKey(app);
 }

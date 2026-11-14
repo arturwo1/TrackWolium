@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(TW_VERSION "0.1.0" CACHE STRING "Release version")
+set(TW_VERSION "0.9.0" CACHE STRING "Release version")
 project(trackwolium LANGUAGES C CXX)
 if(WIN32)
   enable_language(RC)

@@ -248,3 +248,52 @@ String? saveFileDialog({required String title, required String filter, required 
     calloc.free(dirP);
   }
 }
+
+final _snapshot = _k32?.lookupFunction<IntPtr Function(Uint32, Uint32), int Function(int, int)>('CreateToolhelp32Snapshot');
+final _procFirst = _k32?.lookupFunction<Int32 Function(IntPtr, Pointer<Uint8>), int Function(int, Pointer<Uint8>)>('Process32FirstW');
+final _procNext = _k32?.lookupFunction<Int32 Function(IntPtr, Pointer<Uint8>), int Function(int, Pointer<Uint8>)>('Process32NextW');
+final _openProcess = _k32?.lookupFunction<IntPtr Function(Uint32, Int32, Uint32), int Function(int, int, int)>('OpenProcess');
+final _queryImage = _k32?.lookupFunction<Int32 Function(IntPtr, Uint32, Pointer<Utf16>, Pointer<Uint32>), int Function(int, int, Pointer<Utf16>, Pointer<Uint32>)>('QueryFullProcessImageNameW');
+
+List<String> runningProcessPaths(bool Function(String exeName) match) {
+  if (!Platform.isWindows || _snapshot == null || _procFirst == null || _procNext == null || _openProcess == null || _queryImage == null) return [];
+  const entrySize = 568;
+  final out = <String>[];
+  final seen = <String>{};
+  final snap = _snapshot!(2, 0);
+  if (snap == 0 || snap == -1) return out;
+  final entry = calloc<Uint8>(entrySize);
+  final buf = calloc<Uint16>(32768).cast<Utf16>();
+  final len = calloc<Uint32>();
+  try {
+    entry.cast<Uint32>().value = entrySize;
+    var ok = _procFirst!(snap, entry) != 0;
+    while (ok) {
+      final pid = entry.elementAt(8).cast<Uint32>().value;
+      final name = entry.elementAt(44).cast<Utf16>().toDartString();
+      if (match(name)) {
+        final h = _openProcess!(0x1000, 0, pid);
+        if (h != 0) {
+          len.value = 32768;
+          if (_queryImage!(h, 0, buf, len) != 0) {
+            final path = buf.toDartString(length: len.value);
+            if (seen.add(path.toLowerCase())) out.add(path);
+          }
+          _closeHandle!(h);
+        }
+      }
+      ok = _procNext!(snap, entry) != 0;
+    }
+  } finally {
+    _closeHandle!(snap);
+    calloc.free(entry);
+    calloc.free(buf);
+    calloc.free(len);
+  }
+  return out;
+}
+
+List<String> runningDiscordPaths() => runningProcessPaths((n) {
+      final l = n.toLowerCase();
+      return l.startsWith('discord') && l.endsWith('.exe') && l != 'discord rpc.exe';
+    });

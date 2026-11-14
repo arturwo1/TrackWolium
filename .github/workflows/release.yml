@@ -21,7 +21,7 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}".TrimStart('v')
-          if ($v -notmatch '^\d') { $v = '0.1.0' }
+          if ($v -notmatch '^\d') { $v = '0.9.0' }
           $v = "$v.${{ github.run_number }}"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DTW_VERSION=$v"
           cmake --build build --config Release --target trackwolium_guard trackwolium_core wolium_setup wolium_uninstall tw_tests
@@ -68,14 +68,14 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           case "$v" in
             [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
-            *) VER="0.1.0.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.9.0.${GITHUB_RUN_NUMBER}" ;;
           esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
       - name: build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
-          (cd ui && flutter create --platforms=linux --project-name wolium . && rm -f test/widget_test.dart && flutter pub get && flutter build linux --release --dart-define=WOLIUM_VERSION=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac))
+          (cd ui && flutter create --platforms=linux --project-name wolium . && rm -f test/widget_test.dart && flutter pub get && flutter build linux --release --dart-define=WOLIUM_VERSION=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.9.0.${GITHUB_RUN_NUMBER}";; esac))
       - name: package
         run: |
           mkdir -p pkg/wolium-linux/app
@@ -117,7 +117,7 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           case "$v" in
             [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
-            *) VER="0.1.0.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.9.0.${GITHUB_RUN_NUMBER}" ;;
           esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
           echo "WOLIUM_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
@@ -157,7 +157,7 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           case "$v" in
             [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
-            *) VER="0.1.0.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.9.0.${GITHUB_RUN_NUMBER}" ;;
           esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
       - run: |

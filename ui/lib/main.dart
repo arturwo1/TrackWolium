@@ -240,7 +240,7 @@ class _ShellState extends State<Shell> {
     if (!force && inside && bin == loadBin && useSess == loadSess) return;
     final w0 = math.max(0, viewFrom - sp).floor();
     final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
-    contribs = usage.contribs(from, w0, w1, bin, useSess);
+    contribs = usage.contribs(from, w0, w1, bin, useSess).where((c) => !Hidden.has(c.app)).toList();
     presenceRows = usage.presence(from, w0, w1);
     for (final r in presenceRows) {
       if (r.name.isEmpty && r.clientId.isNotEmpty) resolveRpcName(r.clientId);
@@ -358,6 +358,8 @@ class _ShellState extends State<Shell> {
     from = to;
     requestFlush();
     checkForUpdate();
+    Hidden.load();
+    Hidden.apps.addListener(onHiddenChanged);
     refresh();
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (++ticks % 20 == 0) requestFlush();
@@ -370,9 +372,17 @@ class _ShellState extends State<Shell> {
 
   @override
   void dispose() {
+    Hidden.apps.removeListener(onHiddenChanged);
     timer?.cancel();
     usage.close();
     super.dispose();
+  }
+
+  void onHiddenChanged() {
+    if (!mounted) return;
+    if (only != null && Hidden.has(only!)) only = null;
+    refresh();
+    setState(() => loadChart(force: true));
   }
 
   Future<void> pollAction() async {
@@ -473,7 +483,7 @@ class _ShellState extends State<Shell> {
       beat = b;
       isPaused = usage.paused;
       liveMode = l != null;
-      rows = l ?? usage.range(fk, tk);
+      rows = (l ?? usage.range(fk, tk)).where((r) => !Hidden.has(r.app)).toList();
       final every = dayCount > 1 ? 30 : 5;
       final changed = rangeKey != rk;
       if (changed) {
@@ -824,8 +834,9 @@ class _ShellState extends State<Shell> {
             child: EllipsisText(t, style: style),
           ),
         );
+    final cols = 1 + (liveMode ? 1 : 0) + (multiState ? 4 : 0) + 1;
     return Table(
-      columnWidths: const {0: FlexColumnWidth(3)},
+      columnWidths: {0: const FlexColumnWidth(3), cols: const FixedColumnWidth(44)},
       children: [
         TableRow(children: [
           sortHead(tr('app'), 'app', head),
@@ -837,6 +848,7 @@ class _ShellState extends State<Shell> {
             sortHead(tr('background'), 'background', head),
           ],
           sortHead(tr('total'), 'total', head),
+          const SizedBox.shrink(),
         ]),
         for (final r in sortedRows())
           TableRow(
@@ -847,6 +859,7 @@ class _ShellState extends State<Shell> {
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => toggleOnly(r.app),
+                onSecondaryTap: () => Hidden.hide(r.app, r.title),
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
                   onEnter: (_) => setState(() => hoverApp = r.app),
@@ -865,6 +878,7 @@ class _ShellState extends State<Shell> {
               if (multiState)
                 for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i]), app: r.app),
               cell(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w800), app: r.app),
+              hov(r.app, Align(alignment: Alignment.center, child: hideButton(r))),
             ],
           ),
       ],
@@ -910,6 +924,7 @@ class _ShellState extends State<Shell> {
               const SizedBox(width: 8),
               Expanded(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
               Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
+              hideButton(r),
             ]),
             if (multiState)
               Wrap(children: [
@@ -924,9 +939,49 @@ class _ShellState extends State<Shell> {
     ]);
   }
 
+  Widget leaderCard() {
+    if (rows.isEmpty) return const SizedBox.shrink();
+    AppUsage best = rows.first;
+    int score(AppUsage r) => r.ms[0] > 0 ? r.ms[0] : r.visible > 0 ? r.visible : r.total;
+    for (final r in rows) {
+      if (score(r) > score(best)) best = r;
+    }
+    if (score(best) <= 0) return const SizedBox.shrink();
+    final label = dayCount > 1 ? tr('leaderPeriod') : tr('leaderDay');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Panel(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(children: [
+          AppIcon(title: best.title, path: best.path, size: 24),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text.rich(
+              TextSpan(children: [
+                TextSpan(text: '$label: ', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
+                TextSpan(text: best.title, style: const TextStyle(fontWeight: FontWeight.w800)),
+                TextSpan(text: ' (${formatMs(score(best))})', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800)),
+              ]),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget hideButton(AppUsage r) => IconButton(
+        tooltip: tr('hideApp'),
+        visualDensity: VisualDensity.compact,
+        icon: const Icon(Icons.visibility_off_outlined, size: 18, color: cMuted),
+        onPressed: () => Hidden.hide(r.app, r.title),
+      );
+
   Widget activity(bool narrow) {
     const head = TextStyle(color: cMuted, fontWeight: FontWeight.w800);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      leaderCard(),
       chartPanel(narrow),
       const SizedBox(height: 12),
       if (rows.isEmpty)
@@ -1105,23 +1160,26 @@ class _SettingsPageState extends State<SettingsPage> {
     prefs.setFlag('discordrpc', true);
     setState(() => discord = true);
     try {
-      final found = await Process.run('powershell', [
-        '-NoProfile',
-        '-Command',
-        "Get-Process Discord,DiscordPTB,DiscordCanary,DiscordDevelopment -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path -Unique"
-      ]);
-      final paths = (found.stdout as String).split(RegExp(r'[\r\n]+')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      final paths = runningDiscordPaths();
+      final sep = Platform.pathSeparator;
+      String base(String p) => p.split(sep).last;
       for (final exe in paths) {
-        await Process.run('taskkill', ['/F', '/T', '/IM', exe.split(Platform.pathSeparator).last]);
+        await Process.run('taskkill', ['/F', '/T', '/IM', base(exe)]);
       }
       await Future<void>.delayed(const Duration(seconds: 7));
+      final local = Platform.environment['LOCALAPPDATA'] ?? '';
       for (final exe in paths) {
-        final dir = File(exe).parent.parent.path;
-        final updater = File('$dir${Platform.pathSeparator}Update.exe');
-        if (updater.existsSync()) {
-          await Process.start(updater.path, ['--processStart', exe.split(Platform.pathSeparator).last], mode: ProcessStartMode.detached);
-        } else {
-          await Process.start(exe, [], mode: ProcessStartMode.detached);
+        if (File(exe).existsSync()) {
+          await Process.start(exe, [], workingDirectory: File(exe).parent.path, mode: ProcessStartMode.detached);
+          continue;
+        }
+        final candidates = [File(exe).parent.parent.path, if (local.isNotEmpty) '$local${sep}Discord'];
+        for (final dir in candidates) {
+          final updater = File('$dir${sep}Update.exe');
+          if (updater.existsSync()) {
+            await Process.start(updater.path, ['--processStart', base(exe)], mode: ProcessStartMode.detached);
+            break;
+          }
         }
       }
     } catch (_) {}
@@ -1140,6 +1198,23 @@ class _SettingsPageState extends State<SettingsPage> {
         content: Text(tr('rpcRestartHelp')),
         actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok')))],
       ),
+    );
+  }
+
+  Widget hiddenSection() {
+    return ValueListenableBuilder<Map<String, String>>(
+      valueListenable: Hidden.apps,
+      builder: (context, map, _) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(tr('hiddenApps'), style: const TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 4),
+        Text(map.isEmpty ? tr('hiddenNone') : tr('hiddenHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        for (final e in map.entries)
+          Row(children: [
+            Expanded(child: EllipsisText(e.value.isEmpty ? prettyApp(e.key) : e.value, style: const TextStyle(fontWeight: FontWeight.w600))),
+            TextButton(onPressed: () => Hidden.show(e.key), child: Text(tr('unhide'))),
+          ]),
+        const Divider(height: 28),
+      ]),
     );
   }
 
@@ -1279,6 +1354,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
         const Divider(height: 28),
         ],
+        hiddenSection(),
         Row(children: [
           Expanded(child: Text(tr('language'), style: const TextStyle(fontWeight: FontWeight.w700))),
           LanguagePicker(onChanged: () => setState(() {})),
