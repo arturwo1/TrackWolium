@@ -151,13 +151,15 @@
     "rpcCompeting": "Соревнуется",
     "notifChannel": "Обновления",
     "notifUpdateTitle": "Доступно обновление Wolium",
-    "notifUpdateText": "Версия %s готова. Нажмите, чтобы установить.",
+    "notifUpdateText": "Версия %s готова. Установить сейчас?",
     "backupTitle": "Резервная копия",
     "backupHint": "Android также сам сохраняет Wolium в ваш Google-аккаунт, если включена системная резервная копия. Файловая копия работает независимо: сохраните её в любую папку или Google Диск и восстановите после переустановки.",
     "backupSave": "Сохранить копию",
     "backupRestore": "Восстановить из файла",
     "backupSaved": "Копия сохранена.",
     "backupRestored": "Копия восстановлена.",
-    "backupBad": "Это не резервная копия Wolium."
+    "backupBad": "Это не резервная копия Wolium.",
+    "updateYes": "Обновить",
+    "updateLater": "Позже"
   }
 }

@@ -50,7 +50,7 @@ int? heartbeatAgeMs() {
 
 void requestFlush() {
   if (!Platform.isWindows) {
-    if (Platform.isLinux) posixRequestFlush();
+    if (Platform.isLinux || Platform.isMacOS) posixRequestFlush();
     return;
   }
   if (_openEvent == null) return;
@@ -66,7 +66,7 @@ void requestFlush() {
 }
 
 bool claimSingleInstance() {
-  if (!Platform.isWindows) return Platform.isLinux ? posixClaimSingleInstance() : true;
+  if (!Platform.isWindows) return Platform.isLinux || Platform.isMacOS ? posixClaimSingleInstance() : true;
   if (_openMutex == null) return true;
   final name = r'Local\Wolium.Ui'.toNativeUtf16();
   try {
@@ -99,7 +99,7 @@ void focusExistingWindow() {
 }
 
 String? readLive() {
-  if (!Platform.isWindows) return Platform.isLinux ? posixReadLive() : null;
+  if (!Platform.isWindows) return Platform.isLinux || Platform.isMacOS ? posixReadLive() : null;
   if (_openMapping == null) return null;
   final name = r'Local\TrackWolium.Live'.toNativeUtf16();
   try {

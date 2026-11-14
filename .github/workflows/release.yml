@@ -63,6 +63,10 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: version
+        run: |
+          VER=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac)
+          echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
       - name: build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -74,6 +78,9 @@ jobs:
           cp -r ui/build/linux/x64/release/bundle/. pkg/wolium-linux/app/
           cp build/bin/trackwolium-core pkg/wolium-linux/app/
           cp tools/linux/install.sh tools/linux/uninstall.sh pkg/wolium-linux/
+          cp tools/posix/update-check.sh pkg/wolium-linux/app/
+          python3 tools/posix/make_strings.py pkg/wolium-linux/app/strings.tsv
+          printf '%s' "$WOLIUM_VERSION" > pkg/wolium-linux/app/version.txt
           cp assets/icon/wolium_256.png pkg/wolium-linux/wolium.png
           tar -C pkg -czf Wolium-linux-x86_64.tar.gz wolium-linux
       - uses: actions/upload-artifact@v4
@@ -131,3 +138,57 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: Wolium.apk
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - name: version
+        run: |
+          VER=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.1.0.${GITHUB_RUN_NUMBER}";; esac)
+          echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
+      - run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          cmake --build build
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: ui
+        working-directory: ui
+        run: |
+          python3 -m pip install --break-system-packages pillow
+          flutter create --platforms=macos --org io.github.arturwo1 --project-name wolium .
+          rm -f test/widget_test.dart
+          python3 tool/patch_macos.py . assets/icon/wolium_256.png
+          flutter pub get
+          flutter build macos --release --dart-define=WOLIUM_VERSION=$WOLIUM_VERSION
+      - name: package
+        run: |
+          APP="ui/build/macos/Build/Products/Release/Wolium.app"
+          MACOS="$APP/Contents/MacOS"
+          cp build/bin/trackwolium-core "$MACOS/"
+          cp tools/posix/update-check.sh "$MACOS/"
+          python3 tools/posix/make_strings.py "$MACOS/strings.tsv"
+          printf '%s' "$WOLIUM_VERSION" > "$MACOS/version.txt"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $WOLIUM_VERSION" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$APP/Contents/Info.plist"
+          codesign --force -s - "$MACOS/trackwolium-core"
+          codesign --force --deep -s - "$APP"
+          ditto -c -k --keepParent "$APP" Wolium-macos.zip
+          mkdir dmg
+          cp -R "$APP" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname Wolium -srcfolder dmg -ov -format UDZO Wolium-macos.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolium-macos
+          path: |
+            Wolium-macos.zip
+            Wolium-macos.dmg
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            Wolium-macos.zip
+            Wolium-macos.dmg

@@ -5,6 +5,11 @@
 namespace tw {
 
 std::string default_data_dir() {
+#ifdef __APPLE__
+  const char* mac_home = std::getenv("HOME");
+  if (!mac_home || !*mac_home) return {};
+  return std::string(mac_home) + "/Library/Application Support/DTSys/Wolium";
+#endif
   std::string base;
   const char* xdg = std::getenv("XDG_DATA_HOME");
   if (xdg && *xdg) {

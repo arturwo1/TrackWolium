@@ -22,10 +22,15 @@ class MainActivity : FlutterActivity() {
   private var action: String? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    Thread.setDefaultUncaughtExceptionHandler(CrashLog(applicationContext, Thread.getDefaultUncaughtExceptionHandler()))
     super.onCreate(savedInstanceState)
     action = intent?.getStringExtra("action")
-    val request = PeriodicWorkRequestBuilder<SyncWorker>(6, TimeUnit.HOURS).build()
-    WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.KEEP, request)
+    try {
+      val request = PeriodicWorkRequestBuilder<SyncWorker>(6, TimeUnit.HOURS).build()
+      WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.KEEP, request)
+    } catch (ex: Throwable) {
+      CrashLog.write(applicationContext, ex)
+    }
   }
 
   override fun onNewIntent(intent: Intent) {

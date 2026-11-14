@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -18,8 +18,8 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release
       - run: ctest --test-dir build -C Release --output-on-failure
-      - name: smoke run (linux)
-        if: runner.os == 'Linux'
+      - name: smoke run (unix)
+        if: runner.os != 'Windows'
         run: ./build/bin/trackwolium-console --for 3 --no-color --standalone --db build/ci.db
       - name: smoke run (windows)
         if: runner.os == 'Windows'
@@ -117,3 +117,32 @@ jobs:
         with:
           name: wolium-apk
           path: ui/build/app/outputs/flutter-apk/app-release.apk
+
+  mac-e2e:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build
+      - run: sh tests/e2e_mac.sh build/bin/trackwolium-core
+        continue-on-error: true
+
+  ui-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: build
+        working-directory: ui
+        run: |
+          python3 -m pip install --break-system-packages pillow
+          flutter create --platforms=macos --org io.github.arturwo1 --project-name wolium .
+          rm -f test/widget_test.dart
+          python3 tool/patch_macos.py . assets/icon/wolium_256.png
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter build macos --release --dart-define=WOLIUM_VERSION=0.0.0.${GITHUB_RUN_NUMBER}

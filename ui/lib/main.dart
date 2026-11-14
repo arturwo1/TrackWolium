@@ -37,11 +37,13 @@ AndroidCollector? collector;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (!Platform.isWindows && !Platform.isAndroid) posixTouchAlive();
   if (Platform.isAndroid) androidBase = (await getApplicationSupportDirectory()).path;
   if (!claimSingleInstance()) exit(0);
   migrateLegacyData();
   loadLanguage();
   WidgetsFlutterBinding.ensureInitialized();
+  if (!Platform.isWindows && !Platform.isAndroid) posixTouchAlive();
   WindowState.instance.restore();
   if (Platform.isAndroid) collector = AndroidCollector(UsageBridge())..start();
   runApp(const WoliumApp());
@@ -357,6 +359,7 @@ class _ShellState extends State<Shell> {
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (++ticks % 20 == 0) requestFlush();
       if (ticks % 21600 == 0) checkForUpdate();
+      if (!Platform.isWindows && !Platform.isAndroid && ticks % 3 == 0) posixTouchAlive();
       if (updaterSupported && settings.autoUpdate) pollAction();
       refresh();
     });
@@ -406,7 +409,7 @@ class _ShellState extends State<Shell> {
     final ok = await downloadAndInstall(info, (v) {
       if (mounted) setState(() => updateProgress = v);
     });
-    if (ok && Platform.isWindows) exit(0);
+    if (ok && !Platform.isAndroid) exit(0);
     if (mounted) {
       setState(() {
         updating = false;

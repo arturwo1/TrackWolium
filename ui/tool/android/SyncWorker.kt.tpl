@@ -314,3 +314,27 @@ object Sync {
     prefs.edit().putString("notified", latest).apply()
   }
 }
+
+class CrashLog(private val ctx: Context, private val next: Thread.UncaughtExceptionHandler?) : Thread.UncaughtExceptionHandler {
+  override fun uncaughtException(t: Thread, e: Throwable) {
+    write(ctx, e)
+    next?.uncaughtException(t, e)
+  }
+
+  companion object {
+    fun write(ctx: Context, e: Throwable) {
+      try {
+        val text = android.util.Log.getStackTraceString(e)
+        File(ctx.filesDir, "crash.txt").writeText(text)
+        if (Build.VERSION.SDK_INT >= 29) {
+          val values = android.content.ContentValues()
+          values.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, "wolium_crash.txt")
+          values.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")
+          val uri = ctx.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+          if (uri != null) ctx.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+        }
+      } catch (x: Throwable) {
+      }
+    }
+  }
+}

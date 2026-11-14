@@ -81,6 +81,12 @@ if "WOLIUM_KEYSTORE" not in g:
         g,
         count=1,
     )
+    g = re.sub(
+        r'(signingConfig = if \(System\.getenv\("WOLIUM_KEYSTORE"\)[^\n]*\n)',
+        lambda m: m.group(1) + "            isMinifyEnabled = false\n            isShrinkResources = false\n",
+        g,
+        count=1,
+    )
 g += '\ndependencies {\n    implementation("androidx.work:work-runtime-ktx:2.9.1")\n    implementation("androidx.core:core-ktx:1.13.1")\n}\n'
 app_gradle.write_text(g, encoding="utf-8")
 

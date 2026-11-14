@@ -25,6 +25,10 @@ String? androidBase;
 
 String dataDir() {
   if (Platform.isAndroid && androidBase != null) return '$androidBase${Platform.pathSeparator}Wolium';
+  if (Platform.isMacOS) {
+    final home = Platform.environment['HOME'] ?? installDir();
+    return '$home/Library/Application Support/DTSys/Wolium';
+  }
   if (Platform.isLinux) {
     final x = Platform.environment['XDG_DATA_HOME'];
     final home = Platform.environment['HOME'] ?? installDir();
@@ -341,7 +345,7 @@ class Settings {
 }
 
 Future<void> startService() async {
-  if (Platform.isLinux) return posixStartService();
+  if (Platform.isLinux || Platform.isMacOS) return posixStartService();
   if (!Platform.isWindows) return;
   final exe = '${installDir()}${Platform.pathSeparator}trackwolium.exe';
   if (!File(exe).existsSync()) return;

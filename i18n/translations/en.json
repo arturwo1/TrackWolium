@@ -151,13 +151,15 @@
     "rpcCompeting": "Competing in",
     "notifChannel": "Updates",
     "notifUpdateTitle": "Wolium update available",
-    "notifUpdateText": "Version %s is ready. Tap to install.",
+    "notifUpdateText": "Version %s is ready. Install it now?",
     "backupTitle": "Backup",
     "backupHint": "Android also backs up Wolium to your Google account automatically when system backup is on. A file backup is independent: save it to any folder or Google Drive and restore it after a reinstall.",
     "backupSave": "Save backup",
     "backupRestore": "Restore from file",
     "backupSaved": "Backup saved.",
     "backupRestored": "Backup restored.",
-    "backupBad": "This file is not a Wolium backup."
+    "backupBad": "This file is not a Wolium backup.",
+    "updateYes": "Update",
+    "updateLater": "Later"
   }
 }

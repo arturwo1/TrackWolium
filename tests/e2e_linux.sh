@@ -5,6 +5,7 @@ WORK="$(mktemp -d)"
 export DISPLAY=:97
 Xvfb :97 -screen 0 1024x768x24 >/dev/null 2>&1 &
 XVFB=$!
+trap 'kill $XVFB 2>/dev/null || true; pkill -f "openbox|xclock|xeyes" 2>/dev/null || true' EXIT
 sleep 1
 openbox >/dev/null 2>&1 &
 sleep 1
@@ -14,15 +15,16 @@ xeyes >/dev/null 2>&1 &
 sleep 1
 CLOCK_WIN=$(xdotool search --class xclock | head -n 1)
 EYES_WIN=$(xdotool search --class xeyes | head -n 1)
+sleep 1
 xdotool mousemove 100 100 click 1
-xdotool windowfocus "$CLOCK_WIN"
+xdotool windowfocus "$CLOCK_WIN" 2>/dev/null || xdotool windowactivate "$CLOCK_WIN" || true
 sleep 0.5
 mkdir -p "$WORK/data" "$WORK/run"
 touch "$WORK/data/consent"
 "$CORE" --data-dir "$WORK/data" --runtime-dir "$WORK/run" --interval 300 &
 CORE_PID=$!
 sleep 3
-xdotool windowfocus "$EYES_WIN"
+xdotool windowfocus "$EYES_WIN" 2>/dev/null || xdotool windowactivate "$EYES_WIN" || true
 sleep 3
 xdotool windowminimize "$CLOCK_WIN"
 sleep 3

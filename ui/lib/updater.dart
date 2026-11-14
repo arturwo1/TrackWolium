@@ -13,7 +13,14 @@ class UpdateInfo {
   final String url;
 }
 
-final bool updaterSupported = Platform.isWindows || Platform.isAndroid;
+final bool updaterSupported = Platform.isWindows || Platform.isAndroid || Platform.isLinux || Platform.isMacOS;
+
+String updateAsset() {
+  if (Platform.isAndroid) return 'Wolium.apk';
+  if (Platform.isLinux) return 'Wolium-linux-x86_64.tar.gz';
+  if (Platform.isMacOS) return 'Wolium-macos.zip';
+  return 'WoliumSetup.exe';
+}
 
 const _buildVersion = String.fromEnvironment('WOLIUM_VERSION');
 
@@ -59,7 +66,7 @@ Future<UpdateInfo?> checkUpdate() async {
     for (final a in (json['assets'] as List<dynamic>? ?? [])) {
       final m = a as Map<String, dynamic>;
       if (m['name'] == 'version.txt') versionUrl = m['browser_download_url'] as String?;
-      if (m['name'] == (Platform.isAndroid ? 'Wolium.apk' : 'WoliumSetup.exe')) setupUrl = m['browser_download_url'] as String?;
+      if (m['name'] == updateAsset()) setupUrl = m['browser_download_url'] as String?;
     }
     if (versionUrl == null || setupUrl == null) return null;
     final latest = (await _get(client, Uri.parse(versionUrl))).trim();
@@ -74,7 +81,7 @@ Future<UpdateInfo?> checkUpdate() async {
 
 Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
-  final target = File('${Directory.systemTemp.path}${Platform.pathSeparator}${Platform.isAndroid ? 'Wolium_update.apk' : 'WoliumSetup_update.exe'}');
+  final target = File('${Directory.systemTemp.path}${Platform.pathSeparator}${Platform.isWindows ? 'WoliumSetup_update.exe' : 'Wolium_update_${updateAsset()}'}');
   try {
     final req = await client.getUrl(Uri.parse(info.url));
     req.headers.set('User-Agent', 'Wolium');
@@ -91,6 +98,8 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
     await sink.close();
     if (total > 0 && got != total) return false;
     if (Platform.isAndroid) return await installApk(target.path);
+    if (Platform.isLinux) return await installLinux(target.path);
+    if (Platform.isMacOS) return await installMac(target.path);
     await Process.start(target.path, ['--silent', installDir()], mode: ProcessStartMode.detached);
     return true;
   } catch (_) {
@@ -103,4 +112,27 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
 Future<bool> installApk(String path) async {
   final r = await const MethodChannel('wolium/usage').invokeMethod<String>('installApk', {'path': path});
   return r == 'ok';
+}
+
+Future<bool> installLinux(String archive) async {
+  final work = Directory('${Directory.systemTemp.path}/wolium_update')..createSync(recursive: true);
+  final r = await Process.run('tar', ['-xzf', archive, '-C', work.path]);
+  if (r.exitCode != 0) return false;
+  final script = '${work.path}/wolium-linux/install.sh';
+  if (!File(script).existsSync()) return false;
+  await Process.start('sh', ['-c', 'sleep 1; sh "\$0" --update', script], mode: ProcessStartMode.detached);
+  return true;
+}
+
+Future<bool> installMac(String archive) async {
+  final bundle = File(Platform.resolvedExecutable).parent.parent.parent.path;
+  if (!bundle.endsWith('.app')) return false;
+  final work = Directory('${Directory.systemTemp.path}/wolium_update')..createSync(recursive: true);
+  final r = await Process.run('ditto', ['-x', '-k', archive, work.path]);
+  if (r.exitCode != 0) return false;
+  final fresh = '${work.path}/Wolium.app';
+  if (!Directory(fresh).existsSync()) return false;
+  const script = 'sleep 1; pkill -f "\$2/Contents/MacOS/trackwolium-core"; rm -rf "\$2" && mv "\$1" "\$2" && xattr -dr com.apple.quarantine "\$2"; open "\$2"';
+  await Process.start('sh', ['-c', script, 'wolium', fresh, bundle], mode: ProcessStartMode.detached);
+  return true;
 }

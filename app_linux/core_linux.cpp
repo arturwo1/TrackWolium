@@ -1,7 +1,12 @@
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+#include <spawn.h>
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
@@ -9,12 +14,16 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <sys/wait.h>
 #include <thread>
+#include <ctime>
 #include "tw/engine.hpp"
 #include "tw/platform.hpp"
 #include "tw/serialize.hpp"
 #include "tw/sink.hpp"
 #include "tw/sqlite_store.hpp"
+
+extern char** environ;
 
 namespace fs = std::filesystem;
 
@@ -31,7 +40,19 @@ std::string env(const char* name) {
   return v ? v : "";
 }
 
+std::string home_tag() {
+  std::string home = env("HOME");
+  size_t slash = home.find_last_of('/');
+  std::string tag = slash == std::string::npos ? home : home.substr(slash + 1);
+  return tag.empty() ? "user" : tag;
+}
+
 std::string data_dir() {
+#ifdef __APPLE__
+  std::string mac_home = env("HOME");
+  if (mac_home.empty()) return {};
+  return mac_home + "/Library/Application Support/DTSys/Wolium";
+#endif
   std::string base = env("XDG_DATA_HOME");
   if (base.empty()) {
     std::string home = env("HOME");
@@ -42,6 +63,9 @@ std::string data_dir() {
 }
 
 std::string runtime_dir() {
+#ifdef __APPLE__
+  return "/tmp/wolium-" + home_tag();
+#endif
   std::string base = env("XDG_RUNTIME_DIR");
   if (!base.empty()) return base + "/wolium";
   std::string user = env("USER");
@@ -65,13 +89,47 @@ void write_atomic(const std::string& path, const std::string& text) {
   fs::rename(tmp, path, ec);
 }
 
+std::string exe_dir() {
+#ifdef __APPLE__
+  char buf[4096];
+  uint32_t size = sizeof(buf);
+  if (_NSGetExecutablePath(buf, &size) != 0) return {};
+  return fs::path(buf).parent_path().string();
+#else
+  std::error_code ec;
+  fs::path p = fs::read_symlink("/proc/self/exe", ec);
+  return ec ? std::string() : p.parent_path().string();
+#endif
+}
+
+void run_update_check(const std::string& dir) {
+  std::string script = dir + "/update-check.sh";
+  if (dir.empty() || !exists(script)) return;
+  char* args[] = {const_cast<char*>("sh"), const_cast<char*>(script.c_str()), nullptr};
+  pid_t pid = 0;
+  if (posix_spawn(&pid, "/bin/sh", nullptr, nullptr, args, environ) == 0) {
+    std::thread([pid] {
+      int status = 0;
+      waitpid(pid, &status, 0);
+    }).detach();
+  }
+}
+
 class LiveSink : public tw::ISink {
 public:
-  explicit LiveSink(std::string path) : path_(std::move(path)) {}
-  void render(const tw::Report& report) override { write_atomic(path_, tw::serialize(report)); }
+  LiveSink(std::string path, std::string alive) : path_(std::move(path)), alive_(std::move(alive)) {}
+
+  void render(const tw::Report& report) override {
+#ifdef __APPLE__
+    struct stat st{};
+    if (stat(alive_.c_str(), &st) != 0 || std::time(nullptr) - st.st_mtime > 8) return;
+#endif
+    write_atomic(path_, tw::serialize(report));
+  }
 
 private:
   std::string path_;
+  std::string alive_;
 };
 
 struct Options {
@@ -127,9 +185,11 @@ int main(int argc, char** argv) {
     auto store = tw::SqliteStore::open(path, &err);
     if (store) engine.set_store(std::shared_ptr<tw::IStore>(std::move(store)), tw::Duration(180000));
   }
-  engine.add_sink(std::make_shared<LiveSink>(runtime + "/live"));
+  engine.add_sink(std::make_shared<LiveSink>(runtime + "/live", runtime + "/ui.alive"));
 
   const std::string flush_file = runtime + "/flush";
+  const std::string bin_dir = exe_dir();
+  auto next_check = std::chrono::steady_clock::now() + std::chrono::seconds(90);
   int ticks = 0;
   bool allowed = true;
   bool paused = false;
@@ -140,6 +200,10 @@ int main(int argc, char** argv) {
     }
     ++ticks;
     if (!allowed) break;
+    if (std::chrono::steady_clock::now() >= next_check) {
+      next_check = std::chrono::steady_clock::now() + std::chrono::hours(6);
+      if (!exists(data + "/noupdates")) run_update_check(bin_dir);
+    }
     if (!paused) engine.step(tw::Clock::now());
     for (int waited = 0; waited < opt.interval_ms && !g_stop; waited += 100) {
       if (g_flush || exists(flush_file)) {

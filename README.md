@@ -9,6 +9,7 @@
 <a href="https://github.com/arturwo1/trackwolium/releases/latest/download/WoliumSetup.exe"><img src="https://img.shields.io/badge/Windows-WoliumSetup.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
 <a href="https://github.com/arturwo1/trackwolium/releases/latest/download/Wolium.apk"><img src="https://img.shields.io/badge/Android-Wolium.apk-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download for Android"></a>
 <a href="https://github.com/arturwo1/trackwolium/releases/latest/download/Wolium-linux-x86_64.tar.gz"><img src="https://img.shields.io/badge/Linux-tar.gz-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download for Linux"></a>
+<a href="https://github.com/arturwo1/trackwolium/releases/latest/download/Wolium-macos.dmg"><img src="https://img.shields.io/badge/macOS-Wolium.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS"></a>
 
 ![Disk overhead](https://img.shields.io/badge/Disk%20overhead-0%25-3ba55d)
 ![No network](https://img.shields.io/badge/Telemetry-none-3ba55d)
@@ -39,13 +40,15 @@ Wolium shows how much time you spend in each app: a zoomable activity graph, a p
 | Reset | middle or double click | double tap |
 | Details | hover the line, click to pin | tap |
 
+**macOS 11+.** Open `Wolium-macos.dmg` and drag Wolium to Applications. The app is not signed with a paid Apple certificate, so on first start right-click it and choose *Open* (or allow it in System Settings > Privacy & Security). Wolium reads only app names and window states; it does not need Screen Recording or Accessibility access.
+
 ## Platform differences
 
-| | Windows | Linux | Android |
-| --- | --- | --- | --- |
-| Focused / open / minimized / background | yes | yes | focused only |
-| Auto-update with notification | yes | no | yes |
-| Local API, Discord activity | yes | no | no |
+| | Windows | Linux | macOS | Android |
+| --- | --- | --- | --- | --- |
+| Focused / open / minimized / background | yes | yes | yes | focused only |
+| Auto-update with prompt | yes | yes | yes | yes |
+| Local API, Discord activity | yes | no | no | no |
 
 ## Privacy
 
