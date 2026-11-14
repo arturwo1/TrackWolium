@@ -310,6 +310,7 @@ object Sync {
       .setContentIntent(pending)
       .setAutoCancel(true)
       .build()
+    if (!nm.areNotificationsEnabled()) return
     nm.notify(1, n)
     prefs.edit().putString("notified", latest).apply()
   }

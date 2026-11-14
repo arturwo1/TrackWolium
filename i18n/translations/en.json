@@ -81,6 +81,7 @@
     "updateAvailable": "Update available",
     "updateAction": "Update",
     "updating": "Updating...",
+    "updatePermission": "Allow installing from Wolium in the settings that opened, then press Update again.",
     "updateFailed": "Update failed. Try again later.",
     "autoUpdate": "Check for updates automatically",
     "checkNow": "Check now",

@@ -79,14 +79,25 @@ Future<UpdateInfo?> checkUpdate() async {
   }
 }
 
+String updateNote = '';
+String readyApk = '';
+
 Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress) async {
+  updateNote = '';
+  if (Platform.isAndroid && readyApk.isNotEmpty && File(readyApk).existsSync()) {
+    progress(1);
+    return await installApk(readyApk);
+  }
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
   final target = File('${Directory.systemTemp.path}${Platform.pathSeparator}${Platform.isWindows ? 'WoliumSetup_update.exe' : 'Wolium_update_${updateAsset()}'}');
   try {
     final req = await client.getUrl(Uri.parse(info.url));
     req.headers.set('User-Agent', 'Wolium');
     final res = await req.close();
-    if (res.statusCode != 200) return false;
+    if (res.statusCode != 200) {
+      updateNote = 'HTTP ${res.statusCode}';
+      return false;
+    }
     final total = res.contentLength;
     var got = 0;
     final sink = target.openWrite();
@@ -96,13 +107,20 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
       if (total > 0) progress(got / total);
     }
     await sink.close();
-    if (total > 0 && got != total) return false;
-    if (Platform.isAndroid) return await installApk(target.path);
+    if (total > 0 && got != total) {
+      updateNote = '$got/$total';
+      return false;
+    }
+    if (Platform.isAndroid) {
+      readyApk = target.path;
+      return await installApk(target.path);
+    }
     if (Platform.isLinux) return await installLinux(target.path);
     if (Platform.isMacOS) return await installMac(target.path);
     await Process.start(target.path, ['--silent', installDir()], mode: ProcessStartMode.detached);
     return true;
-  } catch (_) {
+  } catch (e) {
+    updateNote = e.toString();
     return false;
   } finally {
     client.close(force: true);
@@ -110,8 +128,15 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
 }
 
 Future<bool> installApk(String path) async {
-  final r = await const MethodChannel('wolium/usage').invokeMethod<String>('installApk', {'path': path});
-  return r == 'ok';
+  try {
+    final r = await const MethodChannel('wolium/usage').invokeMethod<String>('installApk', {'path': path});
+    if (r == 'ok') return true;
+    updateNote = r == 'permission' ? 'permission' : (r ?? '');
+    return false;
+  } catch (e) {
+    updateNote = e.toString();
+    return false;
+  }
 }
 
 Future<bool> installLinux(String archive) async {

@@ -86,7 +86,10 @@ class _RootState extends State<Root> {
   @override
   void initState() {
     super.initState();
-    if (accepted) startService();
+    if (accepted) {
+      startService();
+      collector?.bridge.requestNotifications();
+    }
   }
 
   void accept() {
@@ -435,7 +438,8 @@ class _ShellState extends State<Shell> {
             child: Text(tr('updateAction')),
           ),
         if (updating) Text(tr('updating'), style: const TextStyle(color: cMuted)),
-        if (updateFailed) Text(tr('updateFailed'), style: const TextStyle(color: cDanger)),
+        if (updateFailed)
+          Text(updateNote == 'permission' ? tr('updatePermission') : (updateNote.isEmpty ? tr('updateFailed') : '${tr('updateFailed')} ($updateNote)'), style: const TextStyle(color: cDanger)),
       ]),
     );
   }
@@ -1228,6 +1232,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             if (checkText != null) Text(checkText!, style: const TextStyle(color: cMuted)),
           ]),
+          if (Platform.isWindows && updateStatus().isNotEmpty) Text(updateStatus(), style: const TextStyle(color: cMuted, fontSize: 12)),
           const Divider(height: 28),
         ],
         if (Platform.isWindows) ...[
@@ -1380,5 +1385,14 @@ class _SettingsPageState extends State<SettingsPage> {
         ]),
       ]),
     );
+  }
+}
+
+String updateStatus() {
+  try {
+    final f = File('${dataDir()}${Platform.pathSeparator}update.status');
+    return f.existsSync() ? f.readAsStringSync().trim() : '';
+  } catch (_) {
+    return '';
   }
 }

@@ -161,7 +161,8 @@ class Usage {
     } catch (_) {
       return [];
     }
-    final list = map.values.where((a) => a.visible > 0).toList();
+    final list = map.values.where((a) => a.total > 0).toList();
+    if (list.any((a) => a.visible > 0)) list.removeWhere((a) => a.visible == 0);
     list.sort((a, b) {
       final c = b.visible.compareTo(a.visible);
       return c != 0 ? c : b.total.compareTo(a.total);
@@ -261,8 +262,9 @@ class Usage {
       for (var i = 0; i < 4; i++) {
         u.ms[i] = int.tryParse(p[3 + i]) ?? 0;
       }
-      if (u.visible > 0) list.add(u);
+      if (u.total > 0) list.add(u);
     }
+    if (list.any((a) => a.visible > 0)) list.removeWhere((a) => a.visible == 0);
     list.sort((a, b) {
       final c = b.visible.compareTo(a.visible);
       return c != 0 ? c : b.total.compareTo(a.total);

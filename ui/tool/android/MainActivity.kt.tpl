@@ -26,8 +26,8 @@ class MainActivity : FlutterActivity() {
     super.onCreate(savedInstanceState)
     action = intent?.getStringExtra("action")
     try {
-      val request = PeriodicWorkRequestBuilder<SyncWorker>(6, TimeUnit.HOURS).build()
-      WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.KEEP, request)
+      val request = PeriodicWorkRequestBuilder<SyncWorker>(3, TimeUnit.HOURS).build()
+      WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.UPDATE, request)
     } catch (ex: Throwable) {
       CrashLog.write(applicationContext, ex)
     }
@@ -125,17 +125,21 @@ class MainActivity : FlutterActivity() {
           result.success(null)
         }
         "installApk" -> {
-          if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
-            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
-            result.success("permission")
-          } else {
-            val file = File(call.argument<String>("path") ?: "")
-            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-            val view = Intent(Intent.ACTION_VIEW)
-              .setDataAndType(uri, "application/vnd.android.package-archive")
-              .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(view)
-            result.success("ok")
+          try {
+            if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+              startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+              result.success("permission")
+            } else {
+              val file = File(call.argument<String>("path") ?: "")
+              val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+              val view = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+              startActivity(view)
+              result.success("ok")
+            }
+          } catch (ex: Exception) {
+            result.success("error: " + ex.toString())
           }
         }
         else -> result.notImplemented()

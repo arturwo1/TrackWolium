@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <algorithm>
 #include <fstream>
 #include <string>
@@ -130,12 +131,26 @@ void notify_update(const std::string& version) {
   g->update_pending = true;
 }
 
+void write_update_status(const std::string& current, const std::string& latest) {
+  SYSTEMTIME t;
+  GetLocalTime(&t);
+  char when[32];
+  snprintf(when, sizeof(when), "%04d-%02d-%02d %02d:%02d", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
+  std::string text = std::string(when) + " | " + (current.empty() ? "?" : current) + " -> " + (latest.empty() ? "?" : latest);
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, app::userdata(L"update.status").c_str(), L"wb") == 0 && f) {
+    fwrite(text.data(), 1, text.size(), f);
+    fclose(f);
+  }
+}
+
 void update_loop(HWND hwnd) {
-  Sleep(60000);
+  Sleep(20000);
   for (;;) {
     if (app::consent_given() && !app::flag(L"noupdates")) {
       std::string current = app::installed_version();
       std::string latest = app::latest_version();
+      write_update_status(current, latest);
       if (!current.empty() && !latest.empty() && app::compare_versions(current, latest) < 0) {
         std::string seen;
         FILE* f = nullptr;
@@ -155,7 +170,7 @@ void update_loop(HWND hwnd) {
         }
       }
     }
-    Sleep(6 * 60 * 60 * 1000);
+    Sleep(3 * 60 * 60 * 1000);
   }
 }
 
