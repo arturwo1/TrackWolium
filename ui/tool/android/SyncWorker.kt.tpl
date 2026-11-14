@@ -27,11 +27,18 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
       Sync.run(applicationContext)
     } catch (ex: Exception) {
     }
-    try {
-      Sync.checkUpdate(applicationContext)
-    } catch (ex: Exception) {
-    }
     return Result.success()
+  }
+}
+
+class UpdateWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+  override fun doWork(): Result {
+    return try {
+      Sync.checkUpdate(applicationContext)
+      Result.success()
+    } catch (ex: Exception) {
+      Result.retry()
+    }
   }
 }
 

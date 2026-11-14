@@ -1,4 +1,6 @@
 #include <cstdio>
+#include <chrono>
+#include <filesystem>
 #include <algorithm>
 #include <fstream>
 #include <string>
@@ -144,6 +146,30 @@ void write_update_status(const std::string& current, const std::string& latest) 
   }
 }
 
+std::string read_small(const std::wstring& path) {
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, path.c_str(), L"rb") != 0 || !f) return "";
+  char buf[64];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  return app::trim(std::string(buf, n));
+}
+
+void write_small(const std::wstring& path, const std::string& text) {
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, path.c_str(), L"wb") == 0 && f) {
+    fwrite(text.data(), 1, text.size(), f);
+    fclose(f);
+  }
+}
+
+bool older_than_hours(const std::wstring& path, int hours) {
+  std::error_code ec;
+  auto t = std::filesystem::last_write_time(std::filesystem::path(path), ec);
+  if (ec) return true;
+  return std::filesystem::file_time_type::clock::now() - t >= std::chrono::hours(hours);
+}
+
 void update_loop(HWND hwnd) {
   Sleep(20000);
   for (;;) {
@@ -152,25 +178,16 @@ void update_loop(HWND hwnd) {
       std::string latest = app::latest_version();
       write_update_status(current, latest);
       if (!current.empty() && !latest.empty() && app::compare_versions(current, latest) < 0) {
-        std::string seen;
-        FILE* f = nullptr;
-        if (_wfopen_s(&f, app::userdata(L"update_notified").c_str(), L"rb") == 0 && f) {
-          char buf[64];
-          size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-          fclose(f);
-          seen = app::trim(std::string(buf, n));
-        }
-        if (seen != latest) {
-          FILE* w = nullptr;
-          if (_wfopen_s(&w, app::userdata(L"update_notified").c_str(), L"wb") == 0 && w) {
-            fwrite(latest.data(), 1, latest.size(), w);
-            fclose(w);
-          }
+        const std::wstring notified = app::userdata(L"update_notified");
+        std::string seen = read_small(notified);
+        bool acted = read_small(app::userdata(L"update_acted")) == latest;
+        if (seen != latest || (!acted && older_than_hours(notified, 2))) {
+          write_small(notified, latest);
           PostMessageW(hwnd, kMsgUpdate, 0, reinterpret_cast<LPARAM>(new std::string(latest)));
         }
       }
     }
-    Sleep(3 * 60 * 60 * 1000);
+    Sleep(60 * 60 * 1000);
   }
 }
 
@@ -359,6 +376,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             restart_from_error();
           } else if (g->update_pending) {
             g->update_pending = false;
+            write_small(app::userdata(L"update_acted"), read_small(app::userdata(L"update_notified")));
             std::ofstream(std::filesystem::path(app::userdata(L"update_request"))) << "1";
             launch_viewer();
           }

@@ -7,7 +7,9 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import io.flutter.embedding.android.FlutterActivity
@@ -28,6 +30,10 @@ class MainActivity : FlutterActivity() {
     try {
       val request = PeriodicWorkRequestBuilder<SyncWorker>(3, TimeUnit.HOURS).build()
       WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.UPDATE, request)
+      val check = PeriodicWorkRequestBuilder<UpdateWorker>(2, TimeUnit.HOURS)
+        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+        .build()
+      WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-update", ExistingPeriodicWorkPolicy.UPDATE, check)
     } catch (ex: Throwable) {
       CrashLog.write(applicationContext, ex)
     }

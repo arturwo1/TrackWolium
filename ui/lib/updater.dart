@@ -1,3 +1,4 @@
+import 'package:path_provider/path_provider.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
@@ -89,7 +90,8 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
     return await installApk(readyApk);
   }
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
-  final target = File('${Directory.systemTemp.path}${Platform.pathSeparator}${Platform.isWindows ? 'WoliumSetup_update.exe' : 'Wolium_update_${updateAsset()}'}');
+  final tempDir = Platform.isAndroid ? (await getTemporaryDirectory()).path : Directory.systemTemp.path;
+  final target = File('$tempDir${Platform.pathSeparator}${Platform.isWindows ? 'WoliumSetup_update.exe' : 'Wolium_update_${updateAsset()}'}');
   try {
     final req = await client.getUrl(Uri.parse(info.url));
     req.headers.set('User-Agent', 'Wolium');

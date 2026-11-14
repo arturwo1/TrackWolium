@@ -40,7 +40,7 @@ final ValueNotifier<int> tipsReset = ValueNotifier<int>(0);
 final ValueNotifier<bool> chartPinch = ValueNotifier<bool>(false);
 
 const _daySec = 86400;
-const _niceSteps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800, 2592000];
+const _niceSteps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800, 2592000, 7776000, 15552000, 31536000, 63072000];
 const _minSpan = 30.0;
 const _left = 54.0;
 const _right = 10.0;
@@ -734,7 +734,8 @@ class _ActivityChartState extends State<ActivityChart> {
           ..sort((a, c) => metricOf(c.value, widget.metric).compareTo(metricOf(a.value, widget.metric)));
         final visibleRows = math.min(rows.length, 6);
         final marks = presenceIn(t.bucket);
-        final height = 70.0 + math.max(1, visibleRows) * 40.0 + marks.length * 150.0;
+        final maxH = math.max(120.0, screen.height - 16);
+        final height = math.min(maxH, 70.0 + math.max(1, visibleRows) * 40.0 + marks.length * 190.0);
         double left;
         double topPos;
         if (t.follow) {
@@ -788,7 +789,7 @@ class _ActivityChartState extends State<ActivityChart> {
                 key: tipKey,
                 onEnter: (_) => cancelHide(),
                 onExit: (_) => scheduleHide(900),
-                child: animated(_mainTip(b, t, rows), t.visible),
+                child: animated(_mainTip(b, t, rows, maxH), t.visible),
               ),
             ),
           ),
@@ -821,13 +822,18 @@ class _ActivityChartState extends State<ActivityChart> {
         boxShadow: const [BoxShadow(color: Color(0x80000000), blurRadius: 16, offset: Offset(0, 4))],
       );
 
-  Widget _mainTip(Bucket b, _Tip t, List<MapEntry<String, List<int>>> rows) {
+  Widget _mainTip(Bucket b, _Tip t, List<MapEntry<String, List<int>>> rows, double maxH) {
     return Material(
       type: MaterialType.transparency,
-      child: Container(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxH),
+        child: Container(
         padding: const EdgeInsets.all(10),
         decoration: _tipDecoration,
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        child: ListView(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        children: [Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(rangeText(t.bucket), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 2),
           Text('${metricLabel(widget.metric)}: ${formatMs(b.value)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w900, fontSize: 15)),
@@ -870,7 +876,9 @@ class _ActivityChartState extends State<ActivityChart> {
             ),
           if (!t.interactive && rows.isNotEmpty)
             Padding(padding: const EdgeInsets.only(top: 4), child: Text(tr('clickToPin'), style: const TextStyle(color: cMuted, fontSize: 11))),
-        ]),
+        ])],
+        ),
+        ),
       ),
     );
   }
@@ -966,6 +974,7 @@ class _ChartPainter extends CustomPainter {
       }
     }
     final firstTick = (vx0 / step).ceil() * step;
+    var lastEnd = -1000.0;
     for (var sec = firstTick; sec <= vx1; sec += step) {
       final x = xOf(sec.toDouble());
       canvas.drawLine(Offset(x, _top), Offset(x, _top + plotH), grid..color = cBorder.withValues(alpha: 0.5));
@@ -974,6 +983,8 @@ class _ChartPainter extends CustomPainter {
       var dx = x - tp.width / 2;
       if (dx + tp.width > size.width) dx = size.width - tp.width;
       if (dx < _left - 10) dx = _left - 10;
+      if (dx < lastEnd + 8) continue;
+      lastEnd = dx + tp.width;
       tp.paint(canvas, Offset(dx, size.height - tp.height));
     }
     if (buckets.isEmpty) return;

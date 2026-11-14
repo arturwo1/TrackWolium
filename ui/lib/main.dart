@@ -501,15 +501,11 @@ class _ShellState extends State<Shell> {
 
   Future<void> pickRange() async {
     final today = dateOnly(DateTime.now());
-    var first = DateTime(2020);
-    if (days.isNotEmpty) {
-      final parsed = DateTime.tryParse(days.last);
-      if (parsed != null) first = dateOnly(parsed);
-    }
     final picked = await showDateRangePicker(
       context: context,
-      firstDate: first.isAfter(from) ? from : first,
+      firstDate: DateTime(2000),
       lastDate: today,
+      initialEntryMode: DatePickerEntryMode.calendarOnly,
       initialDateRange: DateTimeRange(start: from, end: to.isAfter(today) ? today : to),
     );
     if (picked == null) return;
@@ -547,15 +543,11 @@ class _ShellState extends State<Shell> {
 
   Future<String?> exportCsv() async {
     final today = dateOnly(DateTime.now());
-    var first = DateTime(2020);
-    if (days.isNotEmpty) {
-      final parsed = DateTime.tryParse(days.last);
-      if (parsed != null) first = dateOnly(parsed);
-    }
     final picked = await showDateRangePicker(
       context: context,
-      firstDate: first.isAfter(from) ? from : first,
+      firstDate: DateTime(2000),
       lastDate: today,
+      initialEntryMode: DatePickerEntryMode.calendarOnly,
       helpText: tr('exportRange'),
       initialDateRange: DateTimeRange(start: from, end: to.isAfter(today) ? today : to),
     );
@@ -942,7 +934,9 @@ class _ShellState extends State<Shell> {
   Widget leaderCard() {
     if (rows.isEmpty) return const SizedBox.shrink();
     AppUsage best = rows.first;
-    int score(AppUsage r) => r.ms[0] > 0 ? r.ms[0] : r.visible > 0 ? r.visible : r.total;
+    final useFocus = rows.any((r) => r.ms[0] > 0);
+    final useVisible = !useFocus && rows.any((r) => r.visible > 0);
+    int score(AppUsage r) => useFocus ? r.ms[0] : (useVisible ? r.visible : r.total);
     for (final r in rows) {
       if (score(r) > score(best)) best = r;
     }

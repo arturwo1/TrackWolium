@@ -27,4 +27,11 @@ No code needs to be edited by hand.
 - keep background disk activity at zero: no periodic writes outside the batched flush
 - run the tests before opening a pull request: `cmake -S . -B build && cmake --build build && ctest --test-dir build`
 
-Technical notes for contributors: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+## Android release signing (maintainers)
+
+Android refuses to update an app signed with another key, so create one permanent key and keep it safe:
+
+    keytool -genkeypair -v -keystore wolium.jks -alias wolium -keyalg RSA -keysize 2048 -validity 36500
+    base64 -w0 wolium.jks
+
+Add repository secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS`. Releases are built from a `v*` tag; the version is `<tag>.<run number>`.
