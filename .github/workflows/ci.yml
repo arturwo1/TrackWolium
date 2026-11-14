@@ -47,6 +47,7 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: sh tests/e2e_linux.sh build/bin/trackwolium-core
+      - run: python3 tests/e2e_rpc.py build/bin/trackwolium-core
 
   ui-linux:
     runs-on: ubuntu-latest

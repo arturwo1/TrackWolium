@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'data.dart';
+import 'haptics.dart';
 import 'l10n.dart';
 import 'theme.dart';
 
@@ -394,6 +395,7 @@ class _ActivityChartState extends State<ActivityChart> {
   }
 
   void resetView() {
+    buzz(1);
     setState(() {
       vx0 = 0;
       vx1 = widget.total.toDouble();
@@ -415,6 +417,7 @@ class _ActivityChartState extends State<ActivityChart> {
     final box = key.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) return;
     final i = bucketAt(local.dx);
+    if (scrub && tip.value?.bucket != i) buzz(0);
     final Offset anchor;
     if (touchMode) {
       final y = yOf(valueAt(i).toDouble()).clamp(_top, _top + plotH).toDouble();
@@ -544,7 +547,7 @@ class _ActivityChartState extends State<ActivityChart> {
                 scrub = true;
                 scrubbed = true;
                 chartPinch.value = true;
-                HapticFeedback.selectionClick();
+                buzz(2);
                 show(downPos, touchMode: true);
               });
             }
@@ -664,6 +667,7 @@ class _ActivityChartState extends State<ActivityChart> {
       final e = now - startSec;
       if (e >= 0) elapsed = '${e ~/ 3600 > 0 ? '${e ~/ 3600}:' : ''}${two(e % 3600 ~/ 60)}:${two(e % 60)}';
     }
+    Widget hover(String text, Widget child) => text.isEmpty ? child : Tooltip(message: text, waitDuration: const Duration(milliseconds: 250), child: child);
     final buttons = d['buttons'] is List ? (d['buttons'] as List).whereType<Map>().toList() : <Map>[];
     Widget art(String? url, double size, {double radius = 8}) => ClipRRect(
           borderRadius: BorderRadius.circular(radius),
@@ -686,8 +690,8 @@ class _ActivityChartState extends State<ActivityChart> {
             width: 52,
             height: 52,
             child: Stack(clipBehavior: Clip.none, children: [
-              art(large, 48),
-              if (small != null) Positioned(right: 0, bottom: 0, child: Container(decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: cPanel, width: 2)), child: ClipOval(child: art(small, 20, radius: 10)))),
+              hover(str(assets['large_text']), art(large, 48)),
+              if (small != null) Positioned(right: 0, bottom: 0, child: Container(decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: cPanel, width: 2)), child: ClipOval(child: hover(str(assets['small_text']), art(small, 20, radius: 10))))),
             ]),
           ),
           const SizedBox(width: 8),
@@ -830,19 +834,25 @@ class _ActivityChartState extends State<ActivityChart> {
         child: Container(
         padding: const EdgeInsets.all(10),
         decoration: _tipDecoration,
-        child: ListView(
-        shrinkWrap: true,
-        padding: EdgeInsets.zero,
-        children: [Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(rangeText(t.bucket), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 2),
           Text('${metricLabel(widget.metric)}: ${formatMs(b.value)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w900, fontSize: 15)),
           const SizedBox(height: 6),
-          for (final m in presenceIn(t.bucket)) _presenceCard(m),
+          if (presenceIn(t.bucket).isNotEmpty)
+            Flexible(
+              flex: 2,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 340),
+                child: ListView(shrinkWrap: true, padding: EdgeInsets.zero, children: [for (final m in presenceIn(t.bucket)) _presenceCard(m)]),
+              ),
+            ),
           if (rows.isEmpty)
             Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text(tr('noData'), style: const TextStyle(color: cMuted, fontSize: 12)))
           else
-            ConstrainedBox(
+            Flexible(
+              flex: 3,
+              child: ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 240),
               child: ListView(
                 shrinkWrap: true,
@@ -874,10 +884,10 @@ class _ActivityChartState extends State<ActivityChart> {
                 ],
               ),
             ),
+            ),
           if (!t.interactive && rows.isNotEmpty)
             Padding(padding: const EdgeInsets.only(top: 4), child: Text(tr('clickToPin'), style: const TextStyle(color: cMuted, fontSize: 11))),
-        ])],
-        ),
+        ]),
         ),
       ),
     );

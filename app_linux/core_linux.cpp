@@ -17,8 +17,11 @@
 #include <sys/wait.h>
 #include <thread>
 #include <ctime>
+#include "net_posix.hpp"
 #include "tw/engine.hpp"
 #include "tw/platform.hpp"
+#include "tw/localapi.hpp"
+#include "tw/rpc.hpp"
 #include "tw/serialize.hpp"
 #include "tw/sink.hpp"
 #include "tw/sqlite_store.hpp"
@@ -117,9 +120,10 @@ void run_update_check(const std::string& dir) {
 
 class LiveSink : public tw::ISink {
 public:
-  LiveSink(std::string path, std::string alive) : path_(std::move(path)), alive_(std::move(alive)) {}
+  LiveSink(std::string path, std::string alive, app::LocalApi& api) : path_(std::move(path)), alive_(std::move(alive)), api_(api) {}
 
   void render(const tw::Report& report) override {
+    if (api_.running()) api_.set_body(tw::current_json(report));
 #ifdef __APPLE__
     struct stat st{};
     if (stat(alive_.c_str(), &st) != 0 || std::time(nullptr) - st.st_mtime > 8) return;
@@ -130,6 +134,7 @@ public:
 private:
   std::string path_;
   std::string alive_;
+  app::LocalApi& api_;
 };
 
 struct Options {
@@ -185,7 +190,16 @@ int main(int argc, char** argv) {
     auto store = tw::SqliteStore::open(path, &err);
     if (store) engine.set_store(std::shared_ptr<tw::IStore>(std::move(store)), tw::Duration(180000));
   }
-  engine.add_sink(std::make_shared<LiveSink>(runtime + "/live", runtime + "/ui.alive"));
+  app::LocalApi api;
+  tw::PresenceQueue presence;
+  app::DiscordProxy proxy(presence);
+  std::unique_ptr<tw::SqliteStore> presence_db;
+  if (!opt.no_db) {
+    std::string perr;
+    presence_db = tw::SqliteStore::open(opt.db.empty() ? data + "/usage.db" : opt.db, &perr);
+  }
+  std::string last_rpc = "off";
+  engine.add_sink(std::make_shared<LiveSink>(runtime + "/live", runtime + "/ui.alive", api));
 
   const std::string flush_file = runtime + "/flush";
   const std::string bin_dir = exe_dir();
@@ -197,6 +211,19 @@ int main(int argc, char** argv) {
     if (ticks % 2 == 0) {
       allowed = exists(data + "/consent");
       paused = exists(data + "/paused");
+      if (exists(data + "/localapi")) api.start();
+      else api.stop();
+      if (exists(data + "/discordrpc")) proxy.start();
+      else if (proxy.running()) proxy.stop();
+      const char* rs = proxy.state() == 3 ? "active" : (proxy.state() == 2 ? "busy" : (proxy.state() == 1 ? "listening" : "off"));
+      if (last_rpc != rs) {
+        last_rpc = rs;
+        write_atomic(data + "/discordrpc.status", rs);
+      }
+    }
+    if (presence_db) {
+      auto items = presence.drain();
+      if (!items.empty()) presence_db->add_presence(static_cast<std::int64_t>(std::time(nullptr)), items);
     }
     ++ticks;
     if (!allowed) break;
@@ -215,6 +242,8 @@ int main(int argc, char** argv) {
     }
   }
 
+  api.stop();
+  proxy.stop();
   engine.finish();
   fs::remove(runtime + "/live", ec);
   return 0;

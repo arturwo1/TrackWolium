@@ -1,9 +1,12 @@
 package __PACKAGE__
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.os.Bundle
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -128,6 +131,21 @@ class MainActivity : FlutterActivity() {
         }
         "requestNotifications" -> {
           if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 77)
+          result.success(null)
+        }
+        "vibrate" -> {
+          try {
+            val ms = (call.argument<Int>("ms") ?: 10).toLong()
+            val amp = call.argument<Int>("amp") ?: 80
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= 26) {
+              val strength = if (vibrator.hasAmplitudeControl()) amp.coerceIn(1, 255) else VibrationEffect.DEFAULT_AMPLITUDE
+              vibrator.vibrate(VibrationEffect.createOneShot(ms, strength))
+            } else {
+              vibrator.vibrate(ms)
+            }
+          } catch (ex: Exception) {
+          }
           result.success(null)
         }
         "installApk" -> {

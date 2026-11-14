@@ -18,6 +18,7 @@ perms = [
     '<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>',
     '<uses-permission android:name="android.permission.INTERNET"/>',
     '<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>',
+    '<uses-permission android:name="android.permission.VIBRATE"/>',
     '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>',
 ]
 for p in perms:

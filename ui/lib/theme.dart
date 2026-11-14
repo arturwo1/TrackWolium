@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'haptics.dart';
 
 const cPrimary = Color(0xFF80E0F5);
 const cMuted = Color(0xFFADB0B3);
@@ -100,7 +101,16 @@ class _HoverBoxState extends State<HoverBox> {
       cursor: widget.onTap == null ? MouseCursor.defer : SystemMouseCursors.click,
       onEnter: (_) => setState(() => hovered = true),
       onExit: (_) => setState(() => hovered = false),
-      child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: widget.onTap, child: widget.builder(hovered)),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap == null
+            ? null
+            : () {
+                buzz(0);
+                widget.onTap!();
+              },
+        child: widget.builder(hovered),
+      ),
     );
   }
 }
@@ -156,7 +166,10 @@ class SelectBox<T> extends StatelessWidget {
         child: DropdownButton<T>(
           value: value,
           items: items,
-          onChanged: onChanged,
+          onChanged: (v) {
+            buzz(0);
+            onChanged(v);
+          },
           dropdownColor: cBg,
           borderRadius: BorderRadius.circular(rMd),
           iconEnabledColor: cMuted,

@@ -19,6 +19,7 @@ import 'updater.dart';
 import 'android_collector.dart';
 import 'package:path_provider/path_provider.dart';
 import 'posix.dart';
+import 'haptics.dart';
 import 'win.dart';
 
 const appName = 'Wolium';
@@ -359,6 +360,7 @@ class _ShellState extends State<Shell> {
     requestFlush();
     checkForUpdate();
     Hidden.load();
+    loadHaptics();
     Hidden.apps.addListener(onHiddenChanged);
     refresh();
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -419,9 +421,11 @@ class _ShellState extends State<Shell> {
       updateFailed = false;
       updateProgress = 0;
     });
+    buzz(1);
     final ok = await downloadAndInstall(info, (v) {
       if (mounted) setState(() => updateProgress = v);
     });
+    buzz(ok ? 2 : 1);
     if (ok && !Platform.isAndroid) exit(0);
     if (mounted) {
       setState(() {
@@ -505,7 +509,9 @@ class _ShellState extends State<Shell> {
       context: context,
       firstDate: DateTime(2000),
       lastDate: today,
-      initialEntryMode: DatePickerEntryMode.calendarOnly,
+      errorFormatText: tr('dateFormatError'),
+      errorInvalidText: tr('dateOutOfRange'),
+      errorInvalidRangeText: tr('dateRangeError'),
       initialDateRange: DateTimeRange(start: from, end: to.isAfter(today) ? today : to),
     );
     if (picked == null) return;
@@ -547,7 +553,9 @@ class _ShellState extends State<Shell> {
       context: context,
       firstDate: DateTime(2000),
       lastDate: today,
-      initialEntryMode: DatePickerEntryMode.calendarOnly,
+      errorFormatText: tr('dateFormatError'),
+      errorInvalidText: tr('dateOutOfRange'),
+      errorInvalidRangeText: tr('dateRangeError'),
       helpText: tr('exportRange'),
       initialDateRange: DateTimeRange(start: from, end: to.isAfter(today) ? today : to),
     );
@@ -751,6 +759,7 @@ class _ShellState extends State<Shell> {
   }
 
   void toggleOnly(String app) {
+    buzz(1);
     setState(() => only = only == app ? null : app);
   }
 
@@ -969,7 +978,10 @@ class _ShellState extends State<Shell> {
         tooltip: tr('hideApp'),
         visualDensity: VisualDensity.compact,
         icon: const Icon(Icons.visibility_off_outlined, size: 18, color: cMuted),
-        onPressed: () => Hidden.hide(r.app, r.title),
+        onPressed: () {
+          buzz(1);
+          Hidden.hide(r.app, r.title);
+        },
       );
 
   Widget activity(bool narrow) {
@@ -1275,6 +1287,7 @@ class _SettingsPageState extends State<SettingsPage> {
             Switch(
               value: autoUpdate,
               onChanged: (v) {
+                buzz(0);
                 prefs.autoUpdate = v;
                 setState(() => autoUpdate = v);
               },
@@ -1304,7 +1317,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (Platform.isWindows && updateStatus().isNotEmpty) Text(updateStatus(), style: const TextStyle(color: cMuted, fontSize: 12)),
           const Divider(height: 28),
         ],
-        if (Platform.isWindows) ...[
+        if (!Platform.isAndroid) ...[
           Row(children: [
             Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
             Switch(value: localApi, onChanged: toggleApi),
@@ -1338,7 +1351,8 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             const SizedBox(height: 8),
             Row(children: [
-              OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
+              if (Platform.isWindows) OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
+              if (!Platform.isWindows) Expanded(child: Text(tr('rpcManualRestart'), style: const TextStyle(color: cMuted, fontSize: 12))),
               IconButton(
                 tooltip: tr('helpTitle'),
                 icon: const Icon(Icons.help_outline, size: 20, color: cMuted),
@@ -1347,6 +1361,26 @@ class _SettingsPageState extends State<SettingsPage> {
             ]),
         ],
         const Divider(height: 28),
+        ],
+        if (Platform.isAndroid) ...[
+          Row(children: [
+            Expanded(child: Text(tr('hapticsTitle'), style: const TextStyle(fontWeight: FontWeight.w700))),
+            SelectBox<int>(
+              value: hapticLevel,
+              items: [
+                DropdownMenuItem(value: 0, child: Text(tr('hapticsOff'))),
+                DropdownMenuItem(value: 1, child: Text(tr('hapticsLight'))),
+                DropdownMenuItem(value: 2, child: Text(tr('hapticsMedium'))),
+                DropdownMenuItem(value: 3, child: Text(tr('hapticsStrong'))),
+              ],
+              onChanged: (v) {
+                saveHaptics(v ?? 1);
+                buzz(1);
+                setState(() {});
+              },
+            ),
+          ]),
+          const Divider(height: 28),
         ],
         hiddenSection(),
         Row(children: [
