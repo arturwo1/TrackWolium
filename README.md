@@ -37,7 +37,7 @@ Wolium is not code-signed, which is why Windows and macOS show a warning on firs
 - Date ranges: day, week, month, year or any custom period
 - Hide apps you do not want to see; restore them in Settings
 - CSV export and, on Android, backup and restore as a file
-- Local API and Discord activity cards (Windows, Linux, macOS, off by default)
+- Local API (all platforms) and Discord activity cards (desktop), both off by default
 - Update notifications with one-click update
 - Languages: English, Russian
 
@@ -54,7 +54,8 @@ Wolium is not code-signed, which is why Windows and macOS show a warning on firs
 | --- | --- | --- | --- | --- |
 | Focused / open / minimized / background | yes | yes | yes | focused only |
 | Update notification | yes | yes | yes | yes |
-| Local API, Discord activity | yes | yes | yes | no |
+| Local API | yes | yes | yes | yes (foreground service, persistent notification) |
+| Discord activity, Discord restart button | yes | yes | yes | no |
 
 ## Android
 

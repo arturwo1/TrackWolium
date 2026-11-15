@@ -20,6 +20,7 @@ import 'android_collector.dart';
 import 'package:path_provider/path_provider.dart';
 import 'posix.dart';
 import 'haptics.dart';
+import 'discord_posix.dart';
 import 'win.dart';
 
 const appName = 'Wolium';
@@ -90,6 +91,7 @@ class _RootState extends State<Root> {
     if (accepted) {
       startService();
       collector?.bridge.requestNotifications();
+      if (Platform.isAndroid && settings.flag('localapi')) collector?.bridge.setApiService(true);
     }
   }
 
@@ -103,6 +105,7 @@ class _RootState extends State<Root> {
 
   void withdraw() {
     settings.accepted = false;
+    if (Platform.isAndroid) collector?.bridge.setApiService(false);
     setState(() => accepted = false);
   }
 
@@ -1165,6 +1168,16 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => rpcRestarting = true);
     prefs.setFlag('discordrpc', true);
     setState(() => discord = true);
+    if (!Platform.isWindows) {
+      final found = await restartDiscordPosix();
+      if (!mounted) return;
+      if (!found) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('rpcNotRunning'))));
+      setState(() {
+        rpcRestarting = false;
+        rpcStatus = readRpcStatus();
+      });
+      return;
+    }
     try {
       final paths = runningDiscordPaths();
       final sep = Platform.pathSeparator;
@@ -1240,6 +1253,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (ok != true) return;
     }
     prefs.setFlag('localapi', v);
+    if (Platform.isAndroid) collector?.bridge.setApiService(v);
     setState(() => localApi = v);
   }
 
@@ -1317,13 +1331,14 @@ class _SettingsPageState extends State<SettingsPage> {
           if (Platform.isWindows && updateStatus().isNotEmpty) Text(updateStatus(), style: const TextStyle(color: cMuted, fontSize: 12)),
           const Divider(height: 28),
         ],
+        Row(children: [
+          Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
+          Switch(value: localApi, onChanged: toggleApi),
+        ]),
+        Text(tr('localApiHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        if (Platform.isAndroid) Text(tr('localApiAndroid'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        const Divider(height: 28),
         if (!Platform.isAndroid) ...[
-          Row(children: [
-            Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
-            Switch(value: localApi, onChanged: toggleApi),
-          ]),
-          Text(tr('localApiHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
-          const Divider(height: 28),
           Row(children: [
             Expanded(child: Text(tr('discordRpc'), style: const TextStyle(fontWeight: FontWeight.w700))),
             Switch(
@@ -1351,8 +1366,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             const SizedBox(height: 8),
             Row(children: [
-              if (Platform.isWindows) OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
-              if (!Platform.isWindows) Expanded(child: Text(tr('rpcManualRestart'), style: const TextStyle(color: cMuted, fontSize: 12))),
+              OutlinedButton(onPressed: rpcRestarting ? null : restartRpc, child: Text(rpcRestarting ? tr('rpcRestarting') : tr('rpcRestart'))),
               IconButton(
                 tooltip: tr('helpTitle'),
                 icon: const Icon(Icons.help_outline, size: 20, color: cMuted),

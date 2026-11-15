@@ -235,7 +235,7 @@ private:
         srv = listen_own(path);
         if (srv < 0) {
           state_ = 2;
-          for (int i = 0; i < 50 && running_; ++i) usleep(100000);
+          for (int i = 0; i < 10 && running_; ++i) usleep(100000);
           continue;
         }
         state_ = 1;

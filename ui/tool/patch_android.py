@@ -19,6 +19,9 @@ perms = [
     '<uses-permission android:name="android.permission.INTERNET"/>',
     '<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>',
     '<uses-permission android:name="android.permission.VIBRATE"/>',
+    '<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>',
+    '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>',
+    '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>',
     '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>',
 ]
 for p in perms:
@@ -36,6 +39,16 @@ if "FileProvider" not in text:
         "        </provider>\n"
     )
     text = text.replace("</application>", provider + "    </application>", 1)
+if "ApiService" not in text:
+    api = (
+        '        <service android:name=".ApiService" android:exported="false" android:foregroundServiceType="specialUse">\n'
+        '            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="local_loopback_api"/>\n'
+        "        </service>\n"
+        '        <receiver android:name=".BootReceiver" android:exported="true">\n'
+        '            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>\n'
+        "        </receiver>\n"
+    )
+    text = text.replace("</application>", api + "    </application>", 1)
 manifest.write_text(text, encoding="utf-8")
 
 xml_dir = main_dir / "res" / "xml"
@@ -48,6 +61,7 @@ xml_dir.mkdir(parents=True, exist_ok=True)
 kt = next(main_dir.glob("kotlin/**/MainActivity.kt"))
 package = re.search(r"^package\s+(\S+)", kt.read_text(encoding="utf-8"), re.M).group(1)
 kt.write_text((here / "android" / "MainActivity.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
+(kt.parent / "ApiService.kt").write_text((here / "android" / "ApiService.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
 (kt.parent / "SyncWorker.kt").write_text((here / "android" / "SyncWorker.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
 
 merged = {}

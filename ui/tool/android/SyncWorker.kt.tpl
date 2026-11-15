@@ -270,7 +270,7 @@ object Sync {
     return 0
   }
 
-  private fun text(ctx: Context, key: String): String {
+  fun text(ctx: Context, key: String): String {
     return try {
       val lang = try {
         File(dir(ctx), "lang").readText().trim()

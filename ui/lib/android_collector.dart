@@ -156,6 +156,8 @@ class UsageBridge {
 
   Future<void> requestNotifications() async => _channel.invokeMethod('requestNotifications');
 
+  Future<void> setApiService(bool on) async => _channel.invokeMethod('apiService', {'on': on});
+
   Future<Uint8List?> icon(String pkg) async => _channel.invokeMethod<Uint8List>('icon', {'pkg': pkg});
 
   Future<String?> saveFile(String name, List<int> bytes, {String mime = 'text/csv'}) async =>

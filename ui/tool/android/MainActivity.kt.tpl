@@ -133,6 +133,15 @@ class MainActivity : FlutterActivity() {
           if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 77)
           result.success(null)
         }
+        "apiService" -> {
+          var outcome = "ok"
+          try {
+            ApiService.apply(applicationContext, call.argument<Boolean>("on") ?: false)
+          } catch (ex: Exception) {
+            outcome = "error: " + ex.toString()
+          }
+          result.success(outcome)
+        }
         "vibrate" -> {
           try {
             val ms = (call.argument<Int>("ms") ?: 10).toLong()
