@@ -204,3 +204,34 @@ jobs:
           files: |
             Wolium-macos.zip
             Wolium-macos.dmg
+
+  provenance:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, linux, android, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: download assets
+        run: |
+          mkdir dist
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir dist --pattern WoliumSetup.exe --pattern Wolium.apk --pattern Wolium-linux-x86_64.tar.gz --pattern Wolium-macos.dmg --pattern Wolium-macos.zip
+      - name: checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/WoliumSetup.exe
+            dist/Wolium.apk
+            dist/Wolium-linux-x86_64.tar.gz
+            dist/Wolium-macos.dmg
+            dist/Wolium-macos.zip
+      - name: upload checksums
+        run: gh release upload "${{ github.ref_name }}" dist/SHA256SUMS.txt --repo "${{ github.repository }}" --clobber

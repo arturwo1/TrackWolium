@@ -41,6 +41,8 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
   const char* schema =
       "PRAGMA journal_mode=WAL;"
       "PRAGMA synchronous=NORMAL;"
+      "PRAGMA temp_store=MEMORY;"
+      "PRAGMA mmap_size=67108864;"
       "CREATE TABLE IF NOT EXISTS usage("
       "day TEXT NOT NULL,"
       "app TEXT NOT NULL,"

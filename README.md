@@ -25,10 +25,12 @@ Wolium shows how much time you spend in each app: an interactive activity graph,
 | --- | --- |
 | Windows 10 / 11 | Run `WoliumSetup.exe`. SmartScreen may warn about an unknown publisher: choose *More info*, then *Run anyway*. |
 | Android 8+ | Open `Wolium.apk`, allow installing from this source, then grant *Usage access* on first start. |
-| Linux (X11 / XWayland) | Extract the archive and run `./install.sh`. Windows of pure Wayland apps are not visible, so only background time is shown for them. |
+| Linux | Extract the archive and run `./install.sh`. Windows are tracked on X11 and XWayland, and natively on Hyprland and Sway. On GNOME and KDE Wayland only background time is shown for pure Wayland apps. |
 | macOS 11+ | Open `Wolium-macos.dmg` and drag Wolium to Applications. On first start right-click it and choose *Open*. No Screen Recording or Accessibility access is needed. |
 
-Wolium is not code-signed, which is why Windows and macOS show a warning on first start.
+Wolium is not code-signed, which is why Windows and macOS show a warning on first start. Every release ships `SHA256SUMS.txt` and a GitHub build attestation proving the file was built from this repository. To verify a download:
+
+    gh attestation verify WoliumSetup.exe --repo arturwo1/trackwolium
 
 ## Features
 

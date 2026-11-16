@@ -4,7 +4,7 @@ elseif(APPLE)
   set(TW_PLATFORM_SRC macos/mac_probe.mm linux/paths_posix.cpp)
   set_source_files_properties(macos/mac_probe.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 else()
-  set(TW_PLATFORM_SRC linux/linux_probe.cpp linux/x11_windows.cpp linux/paths_posix.cpp)
+  set(TW_PLATFORM_SRC linux/linux_probe.cpp linux/x11_windows.cpp linux/wayland_windows.cpp linux/paths_posix.cpp)
 endif()
 
 add_library(tw_platform STATIC ${TW_PLATFORM_SRC})

@@ -171,6 +171,23 @@ class Usage {
     return list;
   }
 
+  int maxSpan = -1;
+  int maxSpanAt = 0;
+
+  int sessionLowerSlack(dynamic db) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (maxSpan < 0 || now - maxSpanAt > 600) {
+      try {
+        final r = db.select('SELECT MAX(stop - start) AS m FROM sessions');
+        maxSpan = r.isNotEmpty && r.first['m'] != null ? r.first['m'] as int : 0;
+      } catch (_) {
+        maxSpan = 0;
+      }
+      maxSpanAt = now;
+    }
+    return maxSpan + (now - maxSpanAt) + 60;
+  }
+
   List<Contrib> contribs(DateTime first, int w0, int w1, int bin, bool sessions) {
     final db = _open();
     if (db == null) return [];
@@ -201,7 +218,8 @@ class Usage {
     } catch (_) {}
     if (cutoff != null) {
       try {
-        for (final r in db.select('SELECT app, state, start, stop FROM sessions WHERE stop >= ?1 AND start <= ?2', [firstUnix + w0, firstUnix + w1])) {
+        final lowest = firstUnix + w0 - sessionLowerSlack(db);
+        for (final r in db.select('SELECT app, state, start, stop FROM sessions WHERE start >= ?3 AND start <= ?2 AND stop >= ?1', [firstUnix + w0, firstUnix + w1, lowest])) {
           final start = (r['start'] as int) - firstUnix;
           final end = (r['stop'] as int) - firstUnix;
           out.add(Contrib(start, end, r['app'] as String, r['state'] as int, (end - start) * 1000));

@@ -17,6 +17,9 @@
 #include "tw/rpc.hpp"
 #include "tw/serialize.hpp"
 #include "tw/sqlite_store.hpp"
+#if defined(__linux__)
+#include "wayland_windows.hpp"
+#endif
 
 namespace {
 
@@ -515,6 +518,30 @@ void test_local_api() {
   CHECK(tw::http_response(200, j).find("Content-Length: " + std::to_string(j.size())) != std::string::npos);
 }
 
+#if defined(__linux__)
+void test_wayland_parsers() {
+  const std::string clients =
+      "[{\"address\":\"0xa\",\"mapped\":true,\"hidden\":false,\"pid\":10,\"class\":\"firefox\",\"initialClass\":\"firefox\"},"
+      "{\"address\":\"0xb\",\"mapped\":true,\"hidden\":true,\"pid\":11,\"class\":\"kitty\"},"
+      "{\"address\":\"0xc\",\"mapped\":false,\"pid\":12,\"class\":\"ghost\"}]";
+  auto h = tw::parse_hyprland(clients, "{\"address\":\"0xa\"}");
+  CHECK(h.size() == 2);
+  CHECK(h[0].active && h[0].wm_class == "firefox" && h[0].pid == 10);
+  CHECK(!h[1].active && h[1].hidden);
+  const std::string tree =
+      "{\"type\":\"root\",\"nodes\":[{\"type\":\"workspace\",\"name\":\"1\",\"nodes\":["
+      "{\"type\":\"con\",\"pid\":20,\"app_id\":\"foot\",\"focused\":true,\"nodes\":[]},"
+      "{\"type\":\"con\",\"pid\":21,\"app_id\":null,\"window_properties\":{\"class\":\"Steam\"},\"focused\":false,\"nodes\":[]}]},"
+      "{\"type\":\"workspace\",\"name\":\"__i3_scratch\",\"floating_nodes\":[{\"type\":\"floating_con\",\"pid\":22,\"app_id\":\"mpv\",\"nodes\":[]}]}]}";
+  auto sw = tw::parse_sway(tree);
+  CHECK(sw.size() == 3);
+  CHECK(sw[0].active && sw[0].wm_class == "foot");
+  CHECK(sw[1].wm_class == "Steam" && !sw[1].hidden);
+  CHECK(sw[2].hidden && sw[2].wm_class == "mpv");
+  CHECK(tw::parse_hyprland("garbage", "").empty());
+}
+#endif
+
 void test_presence_store() {
   std::string err;
   auto store = tw::SqliteStore::open(":memory:", &err);
@@ -551,6 +578,9 @@ int main() {
   test_engine_day_rollover();
   test_sqlite_store();
   test_rpc_parser();
+#if defined(__linux__)
+  test_wayland_parsers();
+#endif
   test_local_api();
   test_presence_store();
 #ifdef _WIN32

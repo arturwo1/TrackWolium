@@ -7,6 +7,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include "wayland_windows.hpp"
 #include "x11_windows.hpp"
 
 namespace fs = std::filesystem;
@@ -44,7 +45,7 @@ class LinuxProbe : public IProbe {
 public:
   explicit LinuxProbe(bool include_system) : include_system_(include_system) {}
 
-  bool reports_windows() const override { return windows_.available(); }
+  bool reports_windows() const override { return wayland_.available() || windows_.available(); }
 
   std::string display_name(const std::string& app) override {
     auto it = labels_.find(app);
@@ -70,7 +71,9 @@ public:
       if (name.empty()) continue;
       best.emplace(std::move(name), State::Background);
     }
-    for (const auto& w : windows_.list()) {
+    std::vector<X11Window> listed = wayland_.available() ? wayland_.list() : windows_.list();
+    if (wayland_.available() && listed.empty()) listed = windows_.list();
+    for (const auto& w : listed) {
       std::string name;
       if (w.pid > 0) name = process_name(fs::path("/proc") / std::to_string(w.pid));
       if (name.empty() && !w.wm_instance.empty()) {
@@ -104,6 +107,7 @@ public:
 private:
   bool include_system_;
   X11Windows windows_;
+  WaylandWindows wayland_;
   std::map<std::string, std::string> labels_;
   std::map<std::string, std::string> paths_;
 };
