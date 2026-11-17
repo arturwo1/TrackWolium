@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <atomic>
 #include <memory>
+#include <ctime>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -24,6 +25,11 @@ public:
   void set_body(std::string body) {
     std::lock_guard<std::mutex> lock(mtx_);
     body_ = std::move(body);
+  }
+
+  void set_data(tw::ApiData* data) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    data_ = data;
   }
 
   bool running() const { return running_; }
@@ -72,10 +78,10 @@ private:
       std::string path;
       std::string out;
       if (!tw::parse_api_request(req, tw::kLocalApiPort, path)) out = tw::http_response(400, "{\"error\":\"bad request\"}");
-      else if (path != "/v1/current") out = tw::http_response(404, "{\"error\":\"not found\"}");
       else {
         std::lock_guard<std::mutex> lock(mtx_);
-        out = tw::http_response(200, body_.empty() ? "{\"apps\":[]}" : body_);
+        tw::ApiReply reply = tw::route_api(path, body_, data_, static_cast<long long>(std::time(nullptr)));
+        out = tw::http_response(reply.status, reply.body, reply.type);
       }
       send(s, out.data(), static_cast<int>(out.size()), 0);
       closesocket(s);
@@ -87,6 +93,7 @@ private:
   std::thread thread_;
   std::mutex mtx_;
   std::string body_;
+  tw::ApiData* data_ = nullptr;
 };
 
 class DiscordProxy {

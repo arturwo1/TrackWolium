@@ -1,3 +1,5 @@
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <chrono>
 #include <filesystem>
@@ -24,6 +26,22 @@ constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT kTrayId = 1;
 constexpr UINT_PTR kTimer = 1;
 constexpr UINT kMsgUpdate = WM_APP + 4;
+constexpr UINT kMsgBadge = WM_APP + 5;
+constexpr UINT kCmdUpdate = 1005;
+constexpr UINT kWmPowerBroadcast = 0x0218;
+constexpr UINT kWmSessionChange = 0x02B1;
+constexpr WPARAM kResumeAutomatic = 0x12;
+constexpr WPARAM kResumeSuspend = 0x7;
+constexpr WPARAM kPowerSettingChange = 0x8013;
+constexpr WPARAM kSessionUnlock = 0x8;
+const GUID kDisplayState = {0x6fe69556, 0x704a, 0x47a0, {0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47}};
+const GUID kPowerSource = {0x5d3e9a59, 0xe9d5, 0x4b00, {0xa6, 0xbd, 0xff, 0x34, 0xff, 0x51, 0x65, 0x48}};
+
+struct PowerSetting {
+  GUID guid;
+  DWORD length;
+  UCHAR data[1];
+};
 constexpr UINT kCmdOpen = 1001;
 constexpr UINT kCmdExit = 1002;
 constexpr UINT kCmdPause = 1003;
@@ -48,6 +66,10 @@ struct Guard {
   HANDLE clean = nullptr;
   app::Heartbeat beat;
   bool update_pending = false;
+  bool update_ready = false;
+  std::string update_version;
+  HICON badged[5] = {};
+  HANDLE check_event = nullptr;
 };
 
 Guard* g = nullptr;
@@ -68,18 +90,80 @@ void load_icons(HINSTANCE inst) {
   }
 }
 
-HICON current_icon() {
+int icon_index() {
   switch (g->state) {
-    case State::Error: return g->icons[4];
-    case State::Paused: return g->icons[2];
-    default: return g->icons[1];
+    case State::Error: return 4;
+    case State::Paused: return 2;
+    default: return 1;
   }
+}
+
+HICON make_badged(HICON base) {
+  int n = GetSystemMetrics(SM_CXSMICON);
+  BITMAPINFO bi{};
+  bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bi.bmiHeader.biWidth = n;
+  bi.bmiHeader.biHeight = -n;
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  bi.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  HDC dc = CreateCompatibleDC(nullptr);
+  HBITMAP color = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  if (!color || !bits) {
+    DeleteDC(dc);
+    return base;
+  }
+  HGDIOBJ old = SelectObject(dc, color);
+  memset(bits, 0, static_cast<size_t>(n) * n * 4);
+  DrawIconEx(dc, 0, 0, base, n, n, 0, nullptr, DI_NORMAL);
+  GdiFlush();
+  uint32_t* px = static_cast<uint32_t*>(bits);
+  float r = n * 0.31f;
+  float cx = n - r - 0.5f;
+  float cy = r + 0.5f;
+  for (int y = 0; y < n; ++y) {
+    for (int x = 0; x < n; ++x) {
+      float dx = x + 0.5f - cx;
+      float dy = y + 0.5f - cy;
+      float d = std::sqrt(dx * dx + dy * dy);
+      if (d > r + 1.2f) continue;
+      if (d > r) {
+        px[y * n + x] = 0xFF0B0F14;
+        continue;
+      }
+      float ux = dx / r;
+      float uy = dy / r;
+      bool head = uy >= -0.62f && uy <= 0.05f && std::fabs(ux) <= (uy + 0.62f) * 0.95f;
+      bool stem = uy > 0.0f && uy <= 0.58f && std::fabs(ux) <= 0.2f;
+      px[y * n + x] = (head || stem) ? 0xFFFFFFFF : 0xFF1E88E5;
+    }
+  }
+  HBITMAP mask = CreateBitmap(n, n, 1, 1, nullptr);
+  ICONINFO ii{};
+  ii.fIcon = TRUE;
+  ii.hbmMask = mask;
+  ii.hbmColor = color;
+  HICON out = CreateIconIndirect(&ii);
+  SelectObject(dc, old);
+  DeleteObject(mask);
+  DeleteObject(color);
+  DeleteDC(dc);
+  return out ? out : base;
+}
+
+HICON current_icon() {
+  int i = icon_index();
+  if (!g->update_ready) return g->icons[i];
+  if (!g->badged[i]) g->badged[i] = make_badged(g->icons[i]);
+  return g->badged[i];
 }
 
 std::wstring tooltip() {
   std::wstring t = L"Wolium";
   if (g->state == State::Paused) t += std::wstring(L" (") + tr(Key::TipPaused) + L")";
   if (g->state == State::Error) t += std::wstring(L" (") + tr(Key::TipError) + L")";
+  if (g->update_ready) t += std::wstring(L" - ") + tr(Key::TipUpdate);
   return t;
 }
 
@@ -133,12 +217,12 @@ void notify_update(const std::string& version) {
   g->update_pending = true;
 }
 
-void write_update_status(const std::string& current, const std::string& latest) {
+void write_update_status(const std::string& current, const std::string& latest, const char* note) {
   SYSTEMTIME t;
   GetLocalTime(&t);
   char when[32];
   snprintf(when, sizeof(when), "%04d-%02d-%02d %02d:%02d", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
-  std::string text = std::string(when) + " | " + (current.empty() ? "?" : current) + " -> " + (latest.empty() ? "?" : latest);
+  std::string text = std::string(when) + " | " + (current.empty() ? "?" : current) + " -> " + (latest.empty() ? "?" : latest) + " | " + note;
   FILE* f = nullptr;
   if (_wfopen_s(&f, app::userdata(L"update.status").c_str(), L"wb") == 0 && f) {
     fwrite(text.data(), 1, text.size(), f);
@@ -170,25 +254,98 @@ bool older_than_hours(const std::wstring& path, int hours) {
   return std::filesystem::file_time_type::clock::now() - t >= std::chrono::hours(hours);
 }
 
-void update_loop(HWND hwnd) {
-  Sleep(20000);
-  for (;;) {
-    if (app::consent_given() && !app::flag(L"noupdates")) {
-      std::string current = app::installed_version();
-      std::string latest = app::latest_version();
-      write_update_status(current, latest);
-      if (!current.empty() && !latest.empty() && app::compare_versions(current, latest) < 0) {
-        const std::wstring notified = app::userdata(L"update_notified");
-        std::string seen = read_small(notified);
-        bool acted = read_small(app::userdata(L"update_acted")) == latest;
-        if (seen != latest || (!acted && older_than_hours(notified, 2))) {
-          write_small(notified, latest);
-          PostMessageW(hwnd, kMsgUpdate, 0, reinterpret_cast<LPARAM>(new std::string(latest)));
-        }
-      }
-    }
-    Sleep(60 * 60 * 1000);
+void launch_viewer();
+
+void post_badge(HWND hwnd, bool ready, const std::string& version) {
+  PostMessageW(hwnd, kMsgBadge, ready ? 1 : 0, reinterpret_cast<LPARAM>(new std::string(version)));
+}
+
+bool check_once(HWND hwnd) {
+  if (!app::consent_given()) {
+    write_update_status("", "", "no consent");
+    return true;
   }
+  if (app::flag(L"noupdates")) {
+    write_update_status("", "", "updates disabled");
+    post_badge(hwnd, false, "");
+    return true;
+  }
+  std::string current = app::installed_version();
+  std::string latest = app::latest_version();
+  if (latest.empty()) {
+    write_update_status(current, latest, "check failed");
+    return false;
+  }
+  if (current.empty()) {
+    write_update_status(current, latest, "installed version unknown");
+    return true;
+  }
+  if (app::compare_versions(current, latest) >= 0) {
+    write_update_status(current, latest, "up to date");
+    post_badge(hwnd, false, "");
+    return true;
+  }
+  write_update_status(current, latest, "update available");
+  post_badge(hwnd, true, latest);
+  const std::wstring notified = app::userdata(L"update_notified");
+  std::string seen = read_small(notified);
+  bool acted = read_small(app::userdata(L"update_acted")) == latest;
+  if (seen != latest || (!acted && older_than_hours(notified, 2))) {
+    write_small(notified, latest);
+    PostMessageW(hwnd, kMsgUpdate, 0, reinterpret_cast<LPARAM>(new std::string(latest)));
+  }
+  return true;
+}
+
+void update_loop(HWND hwnd) {
+  WaitForSingleObject(g->check_event, 20000);
+  int failures = 0;
+  for (;;) {
+    bool ok = check_once(hwnd);
+    failures = ok ? 0 : (failures < 4 ? failures + 1 : failures);
+    DWORD wait = ok ? 15 * 60 * 1000 : (60 * 1000) << (failures - 1 > 3 ? 3 : failures - 1);
+    DWORD r = WaitForSingleObject(g->check_event, wait);
+    if (r == WAIT_OBJECT_0) {
+      Sleep(8000);
+      ResetEvent(g->check_event);
+    }
+  }
+}
+
+void network_watch() {
+  HMODULE lib = LoadLibraryW(L"iphlpapi.dll");
+  if (!lib) return;
+  using Notify = DWORD(WINAPI*)(HANDLE*, OVERLAPPED*);
+  auto notify = reinterpret_cast<Notify>(reinterpret_cast<void*>(GetProcAddress(lib, "NotifyAddrChange")));
+  if (!notify) return;
+  for (;;) {
+    if (notify(nullptr, nullptr) != NO_ERROR) {
+      Sleep(60000);
+      continue;
+    }
+    SetEvent(g->check_event);
+  }
+}
+
+void register_triggers(HWND hwnd) {
+  HMODULE user = GetModuleHandleW(L"user32.dll");
+  using Register = HANDLE(WINAPI*)(HANDLE, LPCGUID, DWORD);
+  auto reg = user ? reinterpret_cast<Register>(reinterpret_cast<void*>(GetProcAddress(user, "RegisterPowerSettingNotification"))) : nullptr;
+  if (reg) {
+    reg(hwnd, &kDisplayState, 0);
+    reg(hwnd, &kPowerSource, 0);
+  }
+  HMODULE wts = LoadLibraryW(L"wtsapi32.dll");
+  using Session = BOOL(WINAPI*)(HWND, DWORD);
+  auto session = wts ? reinterpret_cast<Session>(reinterpret_cast<void*>(GetProcAddress(wts, "WTSRegisterSessionNotification"))) : nullptr;
+  if (session) session(hwnd, 0);
+}
+
+void request_update() {
+  g->update_pending = false;
+  write_small(app::userdata(L"update_acted"), read_small(app::userdata(L"update_notified")));
+  std::ofstream(std::filesystem::path(app::userdata(L"update_request"))) << "1";
+  launch_viewer();
 }
 
 void set_state(State s) {
@@ -317,6 +474,10 @@ void show_menu() {
   AppendMenuW(menu, MF_STRING, kCmdOpen, tr(Key::TrayOpen));
   AppendMenuW(menu, MF_STRING, kCmdPause, g->state == State::Paused ? tr(Key::TrayResume) : tr(Key::TrayPause));
   if (g->state == State::Error) AppendMenuW(menu, MF_STRING, kCmdRestart, tr(Key::TrayRestart));
+  if (g->update_ready) {
+    std::wstring label = std::wstring(tr(Key::TrayUpdate)) + L" (" + std::wstring(g->update_version.begin(), g->update_version.end()) + L")";
+    AppendMenuW(menu, MF_STRING, kCmdUpdate, label.c_str());
+  }
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kCmdExit, tr(Key::TrayExit));
   SetMenuDefaultItem(menu, kCmdOpen, FALSE);
@@ -329,6 +490,7 @@ void show_menu() {
   if (cmd == kCmdOpen) launch_viewer();
   else if (cmd == kCmdPause) toggle_pause();
   else if (cmd == kCmdRestart) restart_from_error();
+  else if (cmd == kCmdUpdate) request_update();
   else if (cmd == kCmdExit) {
     mark_clean();
     DestroyWindow(g->hwnd);
@@ -374,11 +536,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case NIN_BALLOONUSERCLICK:
           if (g->state == State::Error) {
             restart_from_error();
-          } else if (g->update_pending) {
-            g->update_pending = false;
-            write_small(app::userdata(L"update_acted"), read_small(app::userdata(L"update_notified")));
-            std::ofstream(std::filesystem::path(app::userdata(L"update_request"))) << "1";
-            launch_viewer();
+          } else if (g->update_pending || g->update_ready) {
+            request_update();
           }
           break;
       }
@@ -398,6 +557,30 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g->state != State::Error) notify_update(*v);
         delete v;
       }
+      return 0;
+    }
+    if (msg == kMsgBadge) {
+      std::string* v = reinterpret_cast<std::string*>(lp);
+      bool ready = wp != 0;
+      if (ready != g->update_ready || (v && *v != g->update_version)) {
+        g->update_ready = ready;
+        g->update_version = v ? *v : std::string();
+        tray_update(false);
+      }
+      delete v;
+      return 0;
+    }
+    if (msg == kWmPowerBroadcast) {
+      bool trigger = wp == kResumeAutomatic || wp == kResumeSuspend;
+      if (wp == kPowerSettingChange && lp) {
+        const PowerSetting* ps = reinterpret_cast<const PowerSetting*>(lp);
+        if (ps->length > 0 && (IsEqualGUID(ps->guid, kDisplayState) || IsEqualGUID(ps->guid, kPowerSource))) trigger = true;
+      }
+      if (trigger && g->check_event) SetEvent(g->check_event);
+      return TRUE;
+    }
+    if (msg == kWmSessionChange) {
+      if (wp == kSessionUnlock && g->check_event) SetEvent(g->check_event);
       return 0;
     }
     if (msg == app::kMsgOpenUi) {
@@ -482,7 +665,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   tray_update(true);
   SetTimer(guard.hwnd, kTimer, 1000, nullptr);
   if (!guard.background) launch_viewer();
+  guard.check_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  register_triggers(guard.hwnd);
   std::thread(update_loop, guard.hwnd).detach();
+  std::thread(network_watch).detach();
 
   MSG m;
   while (GetMessageW(&m, nullptr, 0, 0) > 0) {

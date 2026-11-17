@@ -4,7 +4,7 @@
 
 namespace tw {
 
-enum class Compositor { None, Hyprland, Sway };
+enum class Compositor { None, Hyprland, Sway, Gnome, Kde };
 
 Compositor detect_compositor();
 
@@ -12,7 +12,7 @@ class WaylandWindows {
 public:
   WaylandWindows();
 
-  bool available() const { return compositor_ != Compositor::None; }
+  bool available() const;
   Compositor compositor() const { return compositor_; }
   std::vector<X11Window> list();
 

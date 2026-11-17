@@ -60,18 +60,9 @@ Future<UpdateInfo?> checkUpdate() async {
   if (current.isEmpty || !updaterSupported) return null;
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
   try {
-    final body = await _get(client, Uri.parse('https://api.github.com/repos/$repository/releases/latest'));
-    final json = jsonDecode(body) as Map<String, dynamic>;
-    String? versionUrl;
-    String? setupUrl;
-    for (final a in (json['assets'] as List<dynamic>? ?? [])) {
-      final m = a as Map<String, dynamic>;
-      if (m['name'] == 'version.txt') versionUrl = m['browser_download_url'] as String?;
-      if (m['name'] == updateAsset()) setupUrl = m['browser_download_url'] as String?;
-    }
-    if (versionUrl == null || setupUrl == null) return null;
-    final latest = (await _get(client, Uri.parse(versionUrl))).trim();
-    if (latest.isEmpty || compareVersions(current, latest) >= 0) return null;
+    final latest = (await _get(client, Uri.parse('https://github.com/$repository/releases/latest/download/version.txt'))).trim();
+    if (latest.isEmpty || !RegExp(r'^[0-9]+(\.[0-9]+)*$').hasMatch(latest) || compareVersions(current, latest) >= 0) return null;
+    final setupUrl = 'https://github.com/$repository/releases/latest/download/${updateAsset()}';
     return UpdateInfo(current, latest, setupUrl);
   } catch (_) {
     return null;

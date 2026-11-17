@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wolium</title>
+<style>
+:root{--bg:rgba(14,18,24,.82);--fg:#f2f5f8;--dim:#8d99a8;--accent:#4aa3ff;--bar:rgba(255,255,255,.08)}
+*{box-sizing:border-box}
+html,body{margin:0;background:transparent;font-family:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;color:var(--fg)}
+.card{width:380px;padding:18px 20px;border-radius:18px;background:var(--bg);backdrop-filter:blur(8px)}
+.head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
+.title{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.total{font-size:26px;font-weight:700}
+.row{margin:10px 0}
+.line{display:flex;justify-content:space-between;font-size:15px;margin-bottom:5px}
+.line span:last-child{color:var(--dim);font-variant-numeric:tabular-nums}
+.track{height:8px;border-radius:4px;background:var(--bar);overflow:hidden}
+.fill{height:100%;border-radius:4px;background:var(--accent);transition:width .6s ease}
+.empty{color:var(--dim);font-size:14px;padding:8px 0}
+.week{display:flex;gap:6px;align-items:flex-end;height:46px;margin-top:16px}
+.week div{flex:1;border-radius:3px;background:var(--accent);opacity:.75;min-height:2px;transition:height .6s ease}
+.sub{display:flex;justify-content:space-between;color:var(--dim);font-size:12px;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="card" id="card">
+<div class="head"><div class="title" id="title"></div><div class="total" id="total"></div></div>
+<div id="list"></div>
+<div class="week" id="week"></div>
+<div class="sub"><span id="wl"></span><span id="wr"></span></div>
+</div>
+<script>
+const q = new URLSearchParams(location.search);
+const ru = (q.get("lang") || navigator.language || "en").toLowerCase().startsWith("ru");
+const L = ru
+  ? {title: "Wolium — сегодня", none: "Пока нет данных", week: "7 дней", h: "ч", m: "мин"}
+  : {title: "Wolium — today", none: "No data yet", week: "7 days", h: "h", m: "min"};
+const days = Math.min(90, Math.max(1, parseInt(q.get("days") || "1", 10) || 1));
+const limit = Math.min(10, Math.max(1, parseInt(q.get("limit") || "5", 10) || 5));
+const metric = q.get("metric") || "focused";
+const key = metric === "all" ? "total_ms" : metric + "_ms";
+if (q.get("accent")) document.documentElement.style.setProperty("--accent", "#" + q.get("accent").replace(/[^0-9a-fA-F]/g, "").slice(0, 6));
+if (q.get("bg") === "none") document.documentElement.style.setProperty("--bg", "transparent");
+document.getElementById("title").textContent = days === 1 ? L.title : "Wolium — " + days;
+document.getElementById("wl").textContent = L.week;
+
+function fmt(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return m + " " + L.m;
+  return Math.floor(m / 60) + " " + L.h + " " + String(m % 60).padStart(2, "0") + " " + L.m;
+}
+
+function text(tag, cls, value) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  e.textContent = value;
+  return e;
+}
+
+async function get(path) {
+  const r = await fetch(path, {cache: "no-store"});
+  return r.json();
+}
+
+async function tick() {
+  try {
+    const top = await get("/v1/apps/top?days=" + days + "&limit=" + limit + "&metric=" + metric);
+    const sum = await get("/v1/summary?days=7");
+    const list = document.getElementById("list");
+    list.replaceChildren();
+    const apps = top.apps || [];
+    const max = apps.length ? apps[0][key] : 1;
+    let total = 0;
+    for (const a of apps) total += a[key];
+    document.getElementById("total").textContent = fmt(total);
+    if (!apps.length) list.appendChild(text("div", "empty", L.none));
+    for (const a of apps) {
+      const row = text("div", "row", "");
+      const line = text("div", "line", "");
+      line.append(text("span", "", a.name), text("span", "", fmt(a[key])));
+      const track = text("div", "track", "");
+      const fill = text("div", "fill", "");
+      fill.style.width = Math.max(2, Math.round(a[key] / max * 100)) + "%";
+      track.appendChild(fill);
+      row.append(line, track);
+      list.appendChild(row);
+    }
+    const week = document.getElementById("week");
+    week.replaceChildren();
+    const by = sum.by_day || [];
+    const peak = Math.max(1, ...by.map(d => d[key]));
+    for (const d of by) {
+      const bar = document.createElement("div");
+      bar.style.height = Math.max(2, Math.round(d[key] / peak * 100)) + "%";
+      bar.title = d.day + " " + fmt(d[key]);
+      week.appendChild(bar);
+    }
+    document.getElementById("wr").textContent = fmt(sum[key]);
+  } catch (e) {
+  }
+}
+
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>

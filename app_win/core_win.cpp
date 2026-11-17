@@ -216,6 +216,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   if (!opt.no_db) {
     std::string perr;
     presence_db = tw::SqliteStore::open(opt.db.empty() ? tw::to_utf8(app::userdata(L"usage.db")) : opt.db, &perr);
+    api.set_data(presence_db.get());
   }
   std::string last_rpc = "off";
   engine.add_sink(std::make_shared<LiveSink>(live, api));

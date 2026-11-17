@@ -289,19 +289,8 @@ object Sync {
     val dir = dir(ctx)
     if (!File(dir, "consent").exists() || File(dir, "noupdates").exists()) return
     val current = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: return
-    val assets = JSONObject(http("https://api.github.com/repos/$REPO/releases/latest")).getJSONArray("assets")
-    var versionUrl: String? = null
-    var hasApk = false
-    for (i in 0 until assets.length()) {
-      val a = assets.getJSONObject(i)
-      when (a.getString("name")) {
-        "version.txt" -> versionUrl = a.getString("browser_download_url")
-        "Wolium.apk" -> hasApk = true
-      }
-    }
-    if (versionUrl == null || !hasApk) return
-    val latest = http(versionUrl).trim()
-    if (latest.isEmpty() || compare(current, latest) >= 0) return
+    val latest = http("https://github.com/$REPO/releases/latest/download/version.txt").trim()
+    if (!Regex("^[0-9]+(\\.[0-9]+)*$").matches(latest) || compare(current, latest) >= 0) return
     val prefs = ctx.getSharedPreferences("wolium", Context.MODE_PRIVATE)
     if (prefs.getString("notified", "") == latest) return
     val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

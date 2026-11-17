@@ -14,13 +14,8 @@ esac
 [ -f "$data/noupdates" ] && exit 0
 current=$(tr -d ' \r\n' < "$dir/version.txt" 2>/dev/null)
 [ -n "$current" ] || exit 0
-json=$(curl -fsS --max-time 20 -H 'User-Agent: Wolium' -H 'Accept: application/vnd.github+json' https://api.github.com/repos/arturwo1/trackwolium/releases/latest) || exit 0
-assets=$(printf '%s' "$json" | tr ',' '\n')
-printf '%s' "$assets" | grep -q "\"name\": *\"$asset\"" || exit 0
-url=$(printf '%s' "$assets" | grep 'browser_download_url' | grep 'version.txt' | head -n 1 | sed 's/.*"\(https[^"]*\)".*/\1/')
-[ -n "$url" ] || exit 0
-latest=$(curl -fsSL --max-time 20 "$url" | tr -d ' \r\n')
-[ -n "$latest" ] || exit 0
+latest=$(curl -fsSL --max-time 20 -H 'User-Agent: Wolium' https://github.com/arturwo1/trackwolium/releases/latest/download/version.txt | tr -d ' \r\n')
+printf '%s' "$latest" | grep -Eq '^[0-9]+(\.[0-9]+)*$' || exit 0
 [ "$current" != "$latest" ] || exit 0
 top=$(printf '%s\n%s\n' "$current" "$latest" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -n 1)
 [ "$top" = "$latest" ] || exit 0

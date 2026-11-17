@@ -33,7 +33,7 @@ class MainActivity : FlutterActivity() {
     try {
       val request = PeriodicWorkRequestBuilder<SyncWorker>(3, TimeUnit.HOURS).build()
       WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.UPDATE, request)
-      val check = PeriodicWorkRequestBuilder<UpdateWorker>(2, TimeUnit.HOURS)
+      val check = PeriodicWorkRequestBuilder<UpdateWorker>(15, TimeUnit.MINUTES)
         .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
         .build()
       WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-update", ExistingPeriodicWorkPolicy.UPDATE, check)

@@ -100,6 +100,26 @@ CREATE TABLE IF NOT EXISTS presence(ts INTEGER NOT NULL, client_id TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;
 ''';
 
+int _maxSpan = -1;
+int _maxSpanAt = 0;
+
+int sessionSlack(Database db, List<SessionSpan> fresh) {
+  final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  if (_maxSpan < 0 || now - _maxSpanAt > 600) {
+    try {
+      final r = db.select('SELECT MAX(stop - start) AS m FROM sessions');
+      _maxSpan = r.isNotEmpty && r.first['m'] != null ? r.first['m'] as int : 0;
+    } catch (_) {
+      _maxSpan = 0;
+    }
+    _maxSpanAt = now;
+  }
+  for (final s in fresh) {
+    if (s.stop - s.start > _maxSpan) _maxSpan = s.stop - s.start;
+  }
+  return _maxSpan + (now - _maxSpanAt) + 60;
+}
+
 void storeSessions(Database db, List<SessionSpan> sessions, DateTime firstDay, DateTime lastDay) {
   db.execute('BEGIN');
   try {
@@ -111,7 +131,8 @@ void storeSessions(Database db, List<SessionSpan> sessions, DateTime firstDay, D
     }
     put.dispose();
     final all = <SessionSpan>[];
-    for (final r in db.select('SELECT app, start, stop FROM sessions WHERE stop > ?1 AND start < ?2', [from, to])) {
+    final lowest = from - sessionSlack(db, sessions);
+    for (final r in db.select('SELECT app, start, stop FROM sessions WHERE start >= ?3 AND start < ?2 AND stop > ?1', [from, to, lowest])) {
       all.add(SessionSpan(r['app'] as String, r['start'] as int, r['stop'] as int));
     }
     final putUsage = db.prepare('INSERT INTO usage(day, app, state, ms) VALUES(?, ?, 0, ?)');

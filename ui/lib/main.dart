@@ -1402,28 +1402,30 @@ class _SettingsPageState extends State<SettingsPage> {
           LanguagePicker(onChanged: () => setState(() {})),
         ]),
         const Divider(height: 28),
-        Text(tr('dataFolder'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 4),
-        Row(children: [
-          Expanded(child: SelectableText(dataDir())),
-          if (!Platform.isAndroid)
+        if (!Platform.isAndroid) ...[
+          Text(tr('dataFolder'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Row(children: [
+            Expanded(child: SelectableText(dataDir())),
+            if (!Platform.isAndroid)
+              IconButton(
+                tooltip: tr('openFolder'),
+                icon: const Icon(Icons.folder_open, size: 18),
+                onPressed: () => openPath(dataDir()),
+              ),
             IconButton(
-              tooltip: tr('openFolder'),
-              icon: const Icon(Icons.folder_open, size: 18),
-              onPressed: () => openPath(dataDir()),
+              tooltip: tr('copy'),
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: dataDir()));
+                ScaffoldMessenger.of(context)
+                  ..clearSnackBars()
+                  ..showSnackBar(SnackBar(content: Text(tr('copied')), duration: const Duration(seconds: 2)));
+              },
             ),
-          IconButton(
-            tooltip: tr('copy'),
-            icon: const Icon(Icons.copy, size: 18),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: dataDir()));
-              ScaffoldMessenger.of(context)
-                ..clearSnackBars()
-                ..showSnackBar(SnackBar(content: Text(tr('copied')), duration: const Duration(seconds: 2)));
-            },
-          ),
-        ]),
-        const Divider(height: 28),
+          ]),
+          const Divider(height: 28),
+        ],
         Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           OutlinedButton(
             onPressed: () async {

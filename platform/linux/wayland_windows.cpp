@@ -3,10 +3,12 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include "dbus_bridge.hpp"
 #include "mini_json.hpp"
 
 namespace tw {
@@ -133,10 +135,22 @@ Compositor detect_compositor() {
   if (env("WAYLAND_DISPLAY").empty()) return Compositor::None;
   if (!env("HYPRLAND_INSTANCE_SIGNATURE").empty()) return Compositor::Hyprland;
   if (!env("SWAYSOCK").empty()) return Compositor::Sway;
+  std::string desktop = env("XDG_CURRENT_DESKTOP");
+  for (auto& c : desktop) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  if (desktop.find("GNOME") != std::string::npos) return Compositor::Gnome;
+  if (desktop.find("KDE") != std::string::npos) return Compositor::Kde;
   return Compositor::None;
 }
 
-WaylandWindows::WaylandWindows() : compositor_(detect_compositor()) {}
+WaylandWindows::WaylandWindows() : compositor_(detect_compositor()) {
+  if (compositor_ == Compositor::Gnome || compositor_ == Compositor::Kde) dbus_bridge();
+}
+
+bool WaylandWindows::available() const {
+  if (compositor_ == Compositor::None) return false;
+  if (compositor_ == Compositor::Gnome || compositor_ == Compositor::Kde) return dbus_bridge().fresh();
+  return true;
+}
 
 std::vector<X11Window> parse_hyprland(const std::string& clients_json, const std::string& active_json) {
   std::vector<X11Window> out;
@@ -171,6 +185,7 @@ std::vector<X11Window> parse_sway(const std::string& tree_json) {
 std::vector<X11Window> WaylandWindows::list() {
   if (compositor_ == Compositor::Hyprland) return parse_hyprland(hypr_request("j/clients"), hypr_request("j/activewindow"));
   if (compositor_ == Compositor::Sway) return parse_sway(sway_request(4));
+  if (compositor_ == Compositor::Gnome || compositor_ == Compositor::Kde) return dbus_bridge().windows();
   return {};
 }
 

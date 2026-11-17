@@ -102,23 +102,14 @@ inline int compare_versions(const std::string& a, const std::string& b) {
 }
 
 inline std::string latest_version() {
-  std::string api;
-  if (!http_get(L"https://api.github.com/repos/arturwo1/trackwolium/releases/latest", api)) return "";
-  size_t pos = 0;
-  std::string name;
-  std::string version_url;
-  bool has_setup = false;
-  while (json_value(api, "name", pos, name)) {
-    if (name == "WoliumSetup.exe") has_setup = true;
-    if (name == "version.txt") {
-      size_t at = pos;
-      json_value(api, "browser_download_url", at, version_url);
-    }
-  }
-  if (!has_setup || version_url.empty()) return "";
   std::string body;
-  if (!http_get(std::wstring(version_url.begin(), version_url.end()), body)) return "";
-  return trim(body);
+  if (!http_get(L"https://github.com/arturwo1/trackwolium/releases/latest/download/version.txt", body)) return "";
+  body = trim(body);
+  if (body.empty() || body.size() > 32) return "";
+  for (char c : body) {
+    if (!(c == '.' || (c >= '0' && c <= '9'))) return "";
+  }
+  return body;
 }
 
 inline std::string installed_version() {

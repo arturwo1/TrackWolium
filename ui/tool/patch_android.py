@@ -70,6 +70,7 @@ for f in sorted((repo / "i18n" / "translations").glob("*.json")):
 assets = main_dir / "assets"
 assets.mkdir(parents=True, exist_ok=True)
 (assets / "strings.json").write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+(assets / "widget.html").write_text((repo / "core" / "src" / "widget.html").read_text(encoding="utf-8"), encoding="utf-8")
 
 app_gradle = root / "android" / "app" / "build.gradle.kts"
 g = app_gradle.read_text(encoding="utf-8")

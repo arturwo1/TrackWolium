@@ -1,0 +1,7 @@
+{
+  "uuid": "wolium-bridge@dtsys",
+  "name": "Wolium",
+  "description": "Reports the list of open windows (class and process id only) to the local Wolium collector.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1
+}

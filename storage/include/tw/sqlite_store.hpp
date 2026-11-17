@@ -3,6 +3,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "tw/localapi.hpp"
 #include "tw/rpc.hpp"
 #include "tw/store.hpp"
 
@@ -10,7 +11,7 @@ struct sqlite3;
 
 namespace tw {
 
-class SqliteStore : public IStore {
+class SqliteStore : public IStore, public ApiData {
 public:
   static std::unique_ptr<SqliteStore> open(const std::string& utf8_path, std::string* error);
   ~SqliteStore() override;
@@ -24,6 +25,8 @@ public:
   std::vector<SessionRec> load_sessions(long long from, long long to);
   bool add_presence(std::int64_t ts, const std::vector<Presence>& items);
   std::vector<Presence> load_presence(std::int64_t from_ts, std::int64_t to_ts);
+  std::vector<UsageRow> usage(const std::string& from_day, const std::string& to_day) override;
+  std::vector<SessionRow> sessions(long long from, long long to, int limit) override;
   std::string last_error() const;
 
 private:

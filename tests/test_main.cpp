@@ -18,6 +18,9 @@
 #include "tw/serialize.hpp"
 #include "tw/sqlite_store.hpp"
 #if defined(__linux__)
+#include "dbus_bridge.hpp"
+#endif
+#if defined(__linux__)
 #include "wayland_windows.hpp"
 #endif
 
@@ -516,6 +519,31 @@ void test_local_api() {
   std::string j = tw::current_json(r);
   CHECK(j.find("\"app\":\"a\\\"b\"") != std::string::npos);
   CHECK(tw::http_response(200, j).find("Content-Length: " + std::to_string(j.size())) != std::string::npos);
+
+  struct Fake : tw::ApiData {
+    std::vector<tw::UsageRow> usage(const std::string& a, const std::string& b) override {
+      from = a;
+      to = b;
+      return {{b, "x.exe", "X", 0, 60000}, {b, "y.exe", "", 0, 120000}, {a, "x.exe", "X", 3, 5000}};
+    }
+    std::vector<tw::SessionRow> sessions(long long, long long, int) override { return {{"x.exe", "X", 0, 10, 20}}; }
+    std::string from, to;
+  } fake;
+  long long now = 1700000000;
+  auto top = tw::route_api("/v1/apps/top?days=2&limit=1", "", &fake, now);
+  CHECK(top.status == 200);
+  CHECK(top.body.find("\"app\":\"y.exe\"") != std::string::npos);
+  CHECK(top.body.find("x.exe") == std::string::npos);
+  CHECK(fake.to == tw::day_string(now));
+  auto sum = tw::route_api("/v1/summary?days=7", "", &fake, now);
+  CHECK(sum.body.find("\"apps_count\":2") != std::string::npos);
+  CHECK(sum.body.find("\"background_ms\":5000") != std::string::npos);
+  CHECK(tw::route_api("/v1/summary?days=abc", "", &fake, now).body.find("\"days\":7") != std::string::npos);
+  CHECK(tw::route_api("/v1/sessions?hours=2", "", &fake, now).body.find("\"stop\":20") != std::string::npos);
+  CHECK(tw::route_api("/v1/nope", "", &fake, now).status == 404);
+  auto w = tw::route_api("/widget", "", nullptr, now);
+  CHECK(w.type.find("text/html") == 0 && w.body.find("<html>") != std::string::npos);
+  CHECK(tw::route_api("/v1/apps/top", "", nullptr, now).body.find("\"apps\":[]") != std::string::npos);
 }
 
 #if defined(__linux__)
@@ -539,6 +567,11 @@ void test_wayland_parsers() {
   CHECK(sw[1].wm_class == "Steam" && !sw[1].hidden);
   CHECK(sw[2].hidden && sw[2].wm_class == "mpv");
   CHECK(tw::parse_hyprland("garbage", "").empty());
+  auto br = tw::parse_bridge_report("{\"windows\":[{\"pid\":5,\"class\":\"org.gnome.Nautilus\",\"active\":true,\"minimized\":false},{\"pid\":6,\"class\":\"Steam\",\"minimized\":true}]}");
+  CHECK(br.size() == 2);
+  CHECK(br[0].active && br[0].wm_class == "org.gnome.Nautilus" && br[0].pid == 5);
+  CHECK(br[1].hidden && !br[1].active);
+  CHECK(tw::parse_bridge_report("nope").empty());
 }
 #endif
 

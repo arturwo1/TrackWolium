@@ -1,0 +1,12 @@
+{
+  "KPlugin": {
+    "Id": "wolium-bridge",
+    "Name": "Wolium",
+    "Description": "Reports the list of open windows (class and process id only) to the local Wolium collector.",
+    "Version": "1",
+    "Authors": [{"Name": "DTSys"}]
+  },
+  "KPackageStructure": "KWin/Script",
+  "X-Plasma-API": "declarativescript",
+  "X-Plasma-MainScript": "ui/main.qml"
+}

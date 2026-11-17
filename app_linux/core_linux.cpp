@@ -197,6 +197,7 @@ int main(int argc, char** argv) {
   if (!opt.no_db) {
     std::string perr;
     presence_db = tw::SqliteStore::open(opt.db.empty() ? data + "/usage.db" : opt.db, &perr);
+    api.set_data(presence_db.get());
   }
   std::string last_rpc = "off";
   engine.add_sink(std::make_shared<LiveSink>(runtime + "/live", runtime + "/ui.alive", api));
@@ -228,7 +229,7 @@ int main(int argc, char** argv) {
     ++ticks;
     if (!allowed) break;
     if (std::chrono::steady_clock::now() >= next_check) {
-      next_check = std::chrono::steady_clock::now() + std::chrono::hours(6);
+      next_check = std::chrono::steady_clock::now() + std::chrono::minutes(20);
       if (!exists(data + "/noupdates")) run_update_check(bin_dir);
     }
     if (!paused) engine.step(tw::Clock::now());

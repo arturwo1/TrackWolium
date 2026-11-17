@@ -39,7 +39,7 @@ Wolium is not code-signed, which is why Windows and macOS show a warning on firs
 - Date ranges: day, week, month, year or any custom period
 - Hide apps you do not want to see; restore them in Settings
 - CSV export and, on Android, backup and restore as a file
-- Local API (all platforms) and Discord activity cards (desktop), both off by default
+- Local API (all platforms; `/v1/current`, `/v1/summary?days=7`, `/v1/apps/top?days=1&limit=5&metric=focused`, `/v1/sessions?hours=24`, and an OBS browser-source widget at `http://127.0.0.1:9095/widget`, accepts `?days=&limit=&metric=&accent=&lang=&bg=none`) and Discord activity cards (desktop), both off by default
 - Update notifications with one-click update
 - Languages: English, Russian
 
@@ -79,3 +79,7 @@ Updating never touches your data, uninstalling asks first. Policy: https://woliu
 ## License
 
 Proprietary, see [LICENSE](LICENSE). Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Wayland
+
+Window tracking on Wayland works on Hyprland and Sway out of the box. On GNOME and KDE Plasma 6 the installer adds a small bridge (a GNOME Shell extension or a KWin script) that sends only the window class and process id to the local collector over the session D-Bus. On GNOME, log out and back in once after installing, then enable the extension with `gnome-extensions enable wolium-bridge@dtsys`. The bridge scripts are not tested on real GNOME and KDE sessions yet; if no report arrives, the collector falls back to X11 and process data.

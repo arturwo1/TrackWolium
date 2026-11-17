@@ -117,8 +117,7 @@ class ApiService : Service() {
       val response = when {
         parts.size < 3 || parts[0] != "GET" || !parts[2].startsWith("HTTP/1.") || (host != "127.0.0.1:$PORT" && host != "localhost:$PORT") ->
           http(400, "{\"error\":\"bad request\"}")
-        parts[1] != "/v1/current" -> http(404, "{\"error\":\"not found\"}")
-        else -> http(200, current())
+        else -> route(parts[1])
       }
       c.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
       c.getOutputStream().flush()
@@ -131,14 +130,156 @@ class ApiService : Service() {
     }
   }
 
-  private fun http(status: Int, body: String): String {
+  private fun queryInt(query: String, key: String, fallback: Int, lo: Int, hi: Int): Int {
+    for (part in query.split("&")) {
+      val i = part.indexOf('=')
+      if (i > 0 && part.substring(0, i) == key) {
+        val v = part.substring(i + 1)
+        if (v.isNotEmpty() && v.length <= 9 && v.all { it in '0'..'9' }) return maxOf(lo, minOf(hi, v.toInt()))
+      }
+    }
+    return fallback
+  }
+
+  private fun queryText(query: String, key: String): String {
+    for (part in query.split("&")) {
+      val i = part.indexOf('=')
+      if (i > 0 && part.substring(0, i) == key) return part.substring(i + 1)
+    }
+    return ""
+  }
+
+  private fun withDb(block: (SQLiteDatabase) -> Unit) {
+    try {
+      val file = File(Sync.dir(applicationContext), "usage.db")
+      if (file.exists()) {
+        val db = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY)
+        try {
+          block(db)
+        } finally {
+          db.close()
+        }
+      }
+    } catch (ex: Exception) {
+    }
+  }
+
+  private fun totalsJson(ms: LongArray): String =
+    "\"focused_ms\":${ms[0]},\"open_ms\":${ms[1]},\"minimized_ms\":${ms[2]},\"background_ms\":${ms[3]},\"total_ms\":${ms.sum()}"
+
+  private fun topJson(apps: Map<String, LongArray>, names: Map<String, String>, metric: String, limit: Int): String {
+    fun key(t: LongArray): Long = when (metric) {
+      "open" -> t[1]
+      "minimized" -> t[2]
+      "background" -> t[3]
+      "all" -> t.sum()
+      else -> t[0]
+    }
+    val list = apps.entries.sortedWith(compareByDescending<Map.Entry<String, LongArray>> { key(it.value) }.thenBy { it.key })
+    val o = StringBuilder("[")
+    var n = 0
+    for (e in list) {
+      if (n >= limit || key(e.value) <= 0) break
+      if (n++ > 0) o.append(',')
+      val name = names[e.key]?.takeIf { it.isNotEmpty() } ?: e.key
+      o.append("{\"app\":\"").append(esc(e.key)).append("\",\"name\":\"").append(esc(name)).append("\",").append(totalsJson(e.value)).append('}')
+    }
+    return o.append(']').toString()
+  }
+
+  private fun route(target: String): String {
+    val qm = target.indexOf('?')
+    var path = if (qm < 0) target else target.substring(0, qm)
+    val query = if (qm < 0) "" else target.substring(qm + 1)
+    if (path.length > 1 && path.endsWith("/")) path = path.dropLast(1)
+    if (path == "/widget") {
+      val html = try {
+        assets.open("widget.html").use { String(it.readBytes(), Charsets.UTF_8) }
+      } catch (ex: Exception) {
+        return http(404, "{\"error\":\"not found\"}")
+      }
+      return http(200, html, "text/html; charset=utf-8")
+    }
+    if (path == "/v1/current") return http(200, current())
+    val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val now = System.currentTimeMillis()
+    if (path == "/v1/summary" || path == "/v1/stats" || path == "/v1/apps/top") {
+      val top = path == "/v1/apps/top"
+      val days = queryInt(query, "days", if (top) 1 else 7, 1, 90)
+      val to = fmt.format(Date(now))
+      val from = fmt.format(Date(now - (days - 1) * 86400000L))
+      val metric = queryText(query, "metric").let { if (it == "open" || it == "minimized" || it == "background" || it == "all") it else "focused" }
+      val apps = LinkedHashMap<String, LongArray>()
+      val byDay = java.util.TreeMap<String, LongArray>()
+      val names = HashMap<String, String>()
+      val all = LongArray(4)
+      withDb { db ->
+        db.rawQuery("SELECT day, app, state, ms FROM usage WHERE day >= ? AND day <= ?", arrayOf(from, to)).use { c ->
+          while (c.moveToNext()) {
+            val st = c.getInt(2)
+            if (st !in 0..3) continue
+            val ms = c.getLong(3)
+            apps.getOrPut(c.getString(1)) { LongArray(4) }[st] += ms
+            byDay.getOrPut(c.getString(0)) { LongArray(4) }[st] += ms
+            all[st] += ms
+          }
+        }
+        try {
+          db.rawQuery("SELECT app, name FROM apps", null).use { c ->
+            while (c.moveToNext()) names[c.getString(0)] = c.getString(1)
+          }
+        } catch (ex: Exception) {
+        }
+      }
+      if (top) {
+        val limit = queryInt(query, "limit", 5, 1, 50)
+        return http(200, "{\"from\":\"$from\",\"to\":\"$to\",\"days\":$days,\"metric\":\"$metric\",\"apps\":${topJson(apps, names, metric, limit)}}")
+      }
+      val o = StringBuilder("{\"from\":\"$from\",\"to\":\"$to\",\"days\":$days,\"apps_count\":${apps.size},")
+      o.append(totalsJson(all)).append(",\"by_day\":[")
+      var first = true
+      for ((d, ms) in byDay) {
+        if (!first) o.append(',')
+        first = false
+        o.append("{\"day\":\"").append(d).append("\",").append(totalsJson(ms)).append('}')
+      }
+      o.append("],\"top\":").append(topJson(apps, names, metric, 5)).append('}')
+      return http(200, o.toString())
+    }
+    if (path == "/v1/sessions") {
+      val hours = queryInt(query, "hours", 24, 1, 24 * 90)
+      val limit = queryInt(query, "limit", 100, 1, 500)
+      val states = arrayOf("focused", "open", "minimized", "background")
+      val o = StringBuilder("{\"hours\":$hours,\"sessions\":[")
+      var first = true
+      withDb { db ->
+        val to = now / 1000
+        val sql = "SELECT s.app, COALESCE(a.name, ''), s.state, s.start, s.stop FROM sessions s LEFT JOIN apps a ON a.app = s.app WHERE s.start >= ${to - hours * 3600L} AND s.start <= $to ORDER BY s.start DESC LIMIT $limit"
+        db.rawQuery(sql, null).use { c ->
+          while (c.moveToNext()) {
+            if (!first) o.append(',')
+            first = false
+            val app = c.getString(0)
+            val name = c.getString(1).ifEmpty { app }
+            o.append("{\"app\":\"").append(esc(app)).append("\",\"name\":\"").append(esc(name)).append("\",\"state\":\"")
+              .append(states[c.getInt(2).coerceIn(0, 3)]).append("\",\"start\":").append(c.getLong(3)).append(",\"stop\":").append(c.getLong(4)).append('}')
+          }
+        }
+      }
+      o.append("]}")
+      return http(200, o.toString())
+    }
+    return http(404, "{\"error\":\"not found\"}")
+  }
+
+  private fun http(status: Int, body: String, type: String = "application/json; charset=utf-8"): String {
     val text = when (status) {
       200 -> "OK"
       404 -> "Not Found"
       else -> "Bad Request"
     }
     val bytes = body.toByteArray(Charsets.UTF_8).size
-    return "HTTP/1.1 $status $text\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: $bytes\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n$body"
+    return "HTTP/1.1 $status $text\r\nContent-Type: $type\r\nContent-Length: $bytes\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n$body"
   }
 
   private fun esc(s: String): String {

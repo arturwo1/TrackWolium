@@ -281,3 +281,36 @@ std::string SqliteStore::last_error() const {
 }
 
 }
+
+namespace tw {
+
+std::vector<UsageRow> SqliteStore::usage(const std::string& from_day, const std::string& to_day) {
+  std::vector<UsageRow> out;
+  std::lock_guard<std::mutex> lock(mtx_);
+  sqlite3_stmt* st = nullptr;
+  const char* sql = "SELECT u.day, u.app, COALESCE(a.name, ''), u.state, u.ms FROM usage u LEFT JOIN apps a ON a.app = u.app WHERE u.day >= ?1 AND u.day <= ?2";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) return out;
+  sqlite3_bind_text(st, 1, from_day.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 2, to_day.c_str(), -1, SQLITE_TRANSIENT);
+  while (sqlite3_step(st) == SQLITE_ROW) out.push_back({column_text(st, 0), column_text(st, 1), column_text(st, 2), sqlite3_column_int(st, 3), sqlite3_column_int64(st, 4)});
+  sqlite3_finalize(st);
+  return out;
+}
+
+std::vector<SessionRow> SqliteStore::sessions(long long from, long long to, int limit) {
+  std::vector<SessionRow> out;
+  std::lock_guard<std::mutex> lock(mtx_);
+  sqlite3_stmt* st = nullptr;
+  const char* sql =
+      "SELECT s.app, COALESCE(a.name, ''), s.state, s.start, s.stop FROM sessions s LEFT JOIN apps a ON a.app = s.app "
+      "WHERE s.start >= ?1 AND s.start <= ?2 ORDER BY s.start DESC LIMIT ?3";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) return out;
+  sqlite3_bind_int64(st, 1, from);
+  sqlite3_bind_int64(st, 2, to);
+  sqlite3_bind_int(st, 3, limit);
+  while (sqlite3_step(st) == SQLITE_ROW) out.push_back({column_text(st, 0), column_text(st, 1), sqlite3_column_int(st, 2), sqlite3_column_int64(st, 3), sqlite3_column_int64(st, 4)});
+  sqlite3_finalize(st);
+  return out;
+}
+
+}

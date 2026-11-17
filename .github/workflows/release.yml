@@ -52,7 +52,6 @@ jobs:
         with:
           files: |
             WoliumSetup.exe
-            version.txt
 
   linux:
     runs-on: ubuntu-latest
@@ -82,6 +81,7 @@ jobs:
           cp -r ui/build/linux/x64/release/bundle/. pkg/wolium-linux/app/
           cp build/bin/trackwolium-core pkg/wolium-linux/app/
           cp tools/linux/install.sh tools/linux/uninstall.sh pkg/wolium-linux/
+          cp -r tools/linux/bridge pkg/wolium-linux/bridge
           cp tools/posix/update-check.sh pkg/wolium-linux/app/
           python3 tools/posix/make_strings.py pkg/wolium-linux/app/strings.tsv
           printf '%s' "$WOLIUM_VERSION" > pkg/wolium-linux/app/version.txt
@@ -220,6 +220,15 @@ jobs:
         run: |
           mkdir dist
           gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir dist --pattern WoliumSetup.exe --pattern Wolium.apk --pattern Wolium-linux-x86_64.tar.gz --pattern Wolium-macos.dmg --pattern Wolium-macos.zip
+      - name: version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          case "$v" in
+            [0-9]*) ;;
+            *) v=0.9.0 ;;
+          esac
+          printf '%s' "$v.${{ github.run_number }}" > version.txt
+          cat version.txt
       - name: checksums
         run: |
           cd dist
@@ -233,5 +242,13 @@ jobs:
             dist/Wolium-linux-x86_64.tar.gz
             dist/Wolium-macos.dmg
             dist/Wolium-macos.zip
-      - name: upload checksums
+      - name: publish checksums and version
         run: gh release upload "${{ github.ref_name }}" dist/SHA256SUMS.txt --repo "${{ github.repository }}" --clobber
+      - name: publish version last
+        run: gh release upload "${{ github.ref_name }}" version.txt --repo "${{ github.repository }}" --clobber
+      - name: notify
+        if: env.NTFY_TOPIC != ''
+        env:
+          NTFY_TOPIC: ${{ vars.NTFY_TOPIC }}
+        run: |
+          curl -fsS -H "Title: Wolium $(cat version.txt)" -H "Tags: arrow_up" -H "Click: https://github.com/${{ github.repository }}/releases/latest" -d "Update is ready" "https://ntfy.sh/$NTFY_TOPIC" || true
