@@ -46,6 +46,97 @@ inline bool http_get(const std::wstring& url, std::string& out) {
   return ok;
 }
 
+inline bool http_download(const std::wstring& url, const std::wstring& target, unsigned long long min_size) {
+  URL_COMPONENTSW uc{};
+  uc.dwStructSize = sizeof(uc);
+  wchar_t host[256] = {};
+  wchar_t path[2048] = {};
+  uc.lpszHostName = host;
+  uc.dwHostNameLength = 256;
+  uc.lpszUrlPath = path;
+  uc.dwUrlPathLength = 2048;
+  if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc)) return false;
+  HINTERNET session = WinHttpOpen(L"Wolium", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!session) return false;
+  WinHttpSetTimeouts(session, 10000, 10000, 20000, 30000);
+  std::wstring part = target + L".part";
+  bool ok = false;
+  HINTERNET con = WinHttpConnect(session, host, uc.nPort, 0);
+  if (con) {
+    DWORD flags = uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET req = WinHttpOpenRequest(con, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (req) {
+      if (WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(req, nullptr)) {
+        DWORD code = 0;
+        DWORD size = sizeof(code);
+        WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &size, WINHTTP_NO_HEADER_INDEX);
+        wchar_t lenText[32] = {};
+        DWORD lenSize = sizeof(lenText);
+        unsigned long long expected = 0;
+        if (WinHttpQueryHeaders(req, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, lenText, &lenSize, WINHTTP_NO_HEADER_INDEX)) expected = _wcstoui64(lenText, nullptr, 10);
+        FILE* f = nullptr;
+        if (code == 200 && _wfopen_s(&f, part.c_str(), L"wb") == 0 && f) {
+          unsigned long long got = 0;
+          std::vector<char> buf(65536);
+          DWORD n = 0;
+          bool clean = true;
+          while (WinHttpReadData(req, buf.data(), static_cast<DWORD>(buf.size()), &n) && n > 0) {
+            if (fwrite(buf.data(), 1, n, f) != n) {
+              clean = false;
+              break;
+            }
+            got += n;
+          }
+          fclose(f);
+          ok = clean && got >= min_size && (expected == 0 || got == expected);
+        }
+      }
+      WinHttpCloseHandle(req);
+    }
+    WinHttpCloseHandle(con);
+  }
+  WinHttpCloseHandle(session);
+  if (ok) ok = MoveFileExW(part.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+  if (!ok) DeleteFileW(part.c_str());
+  return ok;
+}
+
+inline std::wstring widen(const std::string& s) { return std::wstring(s.begin(), s.end()); }
+
+inline bool ui_window_open() {
+  HWND h = nullptr;
+  while ((h = FindWindowExW(nullptr, h, L"FLUTTER_RUNNER_WIN32_WINDOW", nullptr)) != nullptr) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!p) continue;
+    wchar_t name[MAX_PATH] = {};
+    DWORD n = MAX_PATH;
+    bool match = false;
+    if (QueryFullProcessImageNameW(p, 0, name, &n)) {
+      std::wstring full(name, n);
+      size_t slash = full.find_last_of(L"\\/");
+      std::wstring leaf = slash == std::wstring::npos ? full : full.substr(slash + 1);
+      for (auto& c : leaf) c = static_cast<wchar_t>(towlower(c));
+      match = leaf == L"wolium.exe";
+    }
+    CloseHandle(p);
+    if (match) return true;
+  }
+  return false;
+}
+
+inline bool do_not_disturb() {
+  HMODULE lib = LoadLibraryW(L"shell32.dll");
+  if (!lib) return false;
+  using Query = HRESULT(WINAPI*)(int*);
+  auto query = reinterpret_cast<Query>(reinterpret_cast<void*>(GetProcAddress(lib, "SHQueryUserNotificationState")));
+  int state = 5;
+  bool busy = false;
+  if (query && SUCCEEDED(query(&state))) busy = state == 2 || state == 3 || state == 4 || state == 6;
+  return busy;
+}
+
 inline bool json_value(const std::string& s, const std::string& key, size_t& pos, std::string& value) {
   std::string needle = "\"" + key + "\"";
   size_t p = s.find(needle, pos);

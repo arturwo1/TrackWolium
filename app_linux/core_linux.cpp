@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -205,6 +206,8 @@ int main(int argc, char** argv) {
   const std::string flush_file = runtime + "/flush";
   const std::string bin_dir = exe_dir();
   auto next_check = std::chrono::steady_clock::now() + std::chrono::seconds(90);
+  auto last_wall = std::chrono::system_clock::now();
+  auto last_steady = std::chrono::steady_clock::now();
   int ticks = 0;
   bool allowed = true;
   bool paused = false;
@@ -228,8 +231,15 @@ int main(int argc, char** argv) {
     }
     ++ticks;
     if (!allowed) break;
-    if (std::chrono::steady_clock::now() >= next_check) {
-      next_check = std::chrono::steady_clock::now() + std::chrono::minutes(20);
+    auto steady_now = std::chrono::steady_clock::now();
+    auto wall_now = std::chrono::system_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>((wall_now - last_wall) - (steady_now - last_steady)).count() > 60) {
+      next_check = std::min(next_check, steady_now + std::chrono::seconds(30));
+    }
+    last_wall = wall_now;
+    last_steady = steady_now;
+    if (steady_now >= next_check) {
+      next_check = steady_now + std::chrono::hours(6);
       if (!exists(data + "/noupdates")) run_update_check(bin_dir);
     }
     if (!paused) engine.step(tw::Clock::now());

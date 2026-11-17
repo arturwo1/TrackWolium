@@ -9,6 +9,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'chart.dart';
 import 'data.dart';
+import 'device.dart';
 import 'icons.dart';
 import 'l10n.dart';
 import 'mark.dart';
@@ -44,6 +45,8 @@ Future<void> main() async {
   if (!claimSingleInstance()) exit(0);
   migrateLegacyData();
   loadLanguage();
+  await loadDefaultDeviceName();
+  deviceId();
   WidgetsFlutterBinding.ensureInitialized();
   if (!Platform.isWindows && !Platform.isAndroid) posixTouchAlive();
   WindowState.instance.restore();
@@ -403,6 +406,8 @@ class _ShellState extends State<Shell> {
         action = 'update';
       }
     }
+    final pending = update;
+    if (pending != null && !pending.ready && readyInstaller(pending.latest) != null && mounted) setState(() => pending.ready = true);
     if (action != 'update' || !mounted || updating) return;
     final info = await checkUpdate();
     if (!mounted || info == null) return;
@@ -445,14 +450,14 @@ class _ShellState extends State<Shell> {
       color: cPrimary.withValues(alpha: 0.14),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       child: Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        Text('${tr('updateAvailable')}: ${info.current} \u2192 ${info.latest}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w700)),
+        Text('${tr(info.ready ? 'updateReady' : 'updateAvailable')}: ${info.current} \u2192 ${info.latest}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w700)),
         if (updating)
           SizedBox(width: 160, child: LinearProgressIndicator(value: updateProgress > 0 ? updateProgress : null, color: cPrimary, backgroundColor: cBorder))
         else
           FilledButton(
             style: FilledButton.styleFrom(minimumSize: const Size(0, 34)),
             onPressed: runUpdate,
-            child: Text(tr('updateAction')),
+            child: Text(tr(info.ready ? 'updateRestart' : 'updateAction')),
           ),
         if (updating) Text(tr('updating'), style: const TextStyle(color: cMuted)),
         if (updateFailed)
@@ -1144,6 +1149,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String? backupText;
   String? exportError;
   bool checking = false;
+  String deviceLabel = deviceName();
   late bool localApi = prefs.flag('localapi');
   late bool discord = prefs.flag('discordrpc');
   String rpcStatus = '';
@@ -1237,6 +1243,32 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Future<void> renameDevice() async {
+    final controller = TextEditingController(text: deviceLabel);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(tr('thisDevice')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 64,
+          decoration: InputDecoration(hintText: tr('deviceNameHint')),
+          onSubmitted: (v) => Navigator.pop(c, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, ''), child: Text(tr('deviceReset'))),
+          TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('cancel'))),
+          TextButton(onPressed: () => Navigator.pop(c, controller.text), child: Text(tr('save'))),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null) return;
+    saveDeviceName(result);
+    if (mounted) setState(() => deviceLabel = deviceName());
+  }
+
   Future<void> toggleApi(bool v) async {
     if (v) {
       final ok = await showDialog<bool>(
@@ -1295,6 +1327,17 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
           const Divider(height: 28),
         ],
+        Row(children: [
+          Expanded(child: Text(tr('thisDevice'), style: const TextStyle(fontWeight: FontWeight.w700))),
+          Flexible(child: Text(deviceLabel, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cMuted))),
+          IconButton(
+            tooltip: tr('deviceEdit'),
+            icon: const Icon(Icons.edit_outlined, size: 20),
+            onPressed: renameDevice,
+          ),
+        ]),
+        Text('${tr('deviceId')}: ${deviceId()}', style: const TextStyle(color: cMuted, fontSize: 12)),
+        const Divider(height: 28),
         if (updaterSupported) ...[
           Row(children: [
             Expanded(child: Text(tr('autoUpdate'), style: const TextStyle(fontWeight: FontWeight.w700))),

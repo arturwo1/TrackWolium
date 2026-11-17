@@ -59,7 +59,9 @@
     "UnAction": "Удалить",
     "UnFolder": "Установлено в",
     "NotifUpdateTitle": "Доступно обновление Wolium",
-    "NotifUpdateBody": "Версия {version} готова. Нажмите, чтобы обновить."
+    "NotifUpdateBody": "Версия {version} готова. Нажмите, чтобы обновить.",
+    "NotifUpdatedTitle": "Wolium обновлён",
+    "NotifUpdatedBody": "Обновлено до версии {version}."
   },
   "ui": {
     "brandSub": "Трекер активности",
@@ -182,6 +184,18 @@
     "backupRestored": "Копия восстановлена.",
     "backupBad": "Это не резервная копия Wolium.",
     "updateYes": "Обновить",
-    "updateLater": "Позже"
+    "updateLater": "Позже",
+    "notifReadyTitle": "Обновление Wolium готово",
+    "notifReadyText": "Обновление v%s готово к установке",
+    "notifUpdatedTitle": "Wolium обновлён",
+    "notifUpdatedText": "Обновлено до версии %s",
+    "updateReady": "Обновление готово",
+    "updateRestart": "Перезапустить и применить",
+    "thisDevice": "Это устройство",
+    "deviceEdit": "Переименовать",
+    "deviceNameHint": "Название устройства",
+    "deviceReset": "Сбросить на стандартное",
+    "deviceId": "ID устройства",
+    "save": "Сохранить"
   }
 }

@@ -12,6 +12,21 @@ class UpdateInfo {
   final String current;
   final String latest;
   final String url;
+  bool ready = false;
+}
+
+String? readyInstaller(String version) {
+  if (Platform.isAndroid) return null;
+  try {
+    final f = File('${dataDir()}${Platform.pathSeparator}update.ready');
+    if (!f.existsSync()) return null;
+    final lines = f.readAsStringSync().split('\n').map((e) => e.trim()).toList();
+    if (lines.length < 2 || lines[0] != version) return null;
+    final file = File(lines[1]);
+    return file.existsSync() && file.lengthSync() > 1024 * 1024 ? file.path : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 final bool updaterSupported = Platform.isWindows || Platform.isAndroid || Platform.isLinux || Platform.isMacOS;
@@ -63,7 +78,9 @@ Future<UpdateInfo?> checkUpdate() async {
     final latest = (await _get(client, Uri.parse('https://github.com/$repository/releases/latest/download/version.txt'))).trim();
     if (latest.isEmpty || !RegExp(r'^[0-9]+(\.[0-9]+)*$').hasMatch(latest) || compareVersions(current, latest) >= 0) return null;
     final setupUrl = 'https://github.com/$repository/releases/latest/download/${updateAsset()}';
-    return UpdateInfo(current, latest, setupUrl);
+    final info = UpdateInfo(current, latest, setupUrl);
+    info.ready = readyInstaller(latest) != null;
+    return info;
   } catch (_) {
     return null;
   } finally {
@@ -76,9 +93,31 @@ String readyApk = '';
 
 Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress) async {
   updateNote = '';
-  if (Platform.isAndroid && readyApk.isNotEmpty && File(readyApk).existsSync()) {
+  if (Platform.isAndroid) {
+    try {
+      final path = await const MethodChannel('wolium/usage').invokeMethod<String>('readyApk');
+      if (path != null && path.contains('Wolium-${info.latest}.apk') && File(path).existsSync()) {
+        progress(1);
+        return await installApk(path);
+      }
+    } catch (_) {}
+    if (readyApk.isNotEmpty && File(readyApk).existsSync()) {
+      progress(1);
+      return await installApk(readyApk);
+    }
+  }
+  final preloaded = readyInstaller(info.latest);
+  if (preloaded != null) {
     progress(1);
-    return await installApk(readyApk);
+    try {
+      if (Platform.isLinux) return await installLinux(preloaded);
+      if (Platform.isMacOS) return await installMac(preloaded);
+      await Process.start(preloaded, ['--silent', installDir()], mode: ProcessStartMode.detached);
+      return true;
+    } catch (e) {
+      updateNote = e.toString();
+      return false;
+    }
   }
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
   final tempDir = Platform.isAndroid ? (await getTemporaryDirectory()).path : Directory.systemTemp.path;

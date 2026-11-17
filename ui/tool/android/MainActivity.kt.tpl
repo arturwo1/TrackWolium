@@ -33,8 +33,14 @@ class MainActivity : FlutterActivity() {
     try {
       val request = PeriodicWorkRequestBuilder<SyncWorker>(3, TimeUnit.HOURS).build()
       WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.UPDATE, request)
-      val check = PeriodicWorkRequestBuilder<UpdateWorker>(15, TimeUnit.MINUTES)
-        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+      val builder = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.UNMETERED)
+        .setRequiresCharging(true)
+      if (Build.VERSION.SDK_INT >= 23) builder.setRequiresDeviceIdle(true)
+      val constraints = builder.build()
+      val check = PeriodicWorkRequestBuilder<UpdateWorker>(24, TimeUnit.HOURS)
+        .setConstraints(constraints)
+        .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.MINUTES)
         .build()
       WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-update", ExistingPeriodicWorkPolicy.UPDATE, check)
     } catch (ex: Throwable) {
@@ -128,6 +134,19 @@ class MainActivity : FlutterActivity() {
           val a = action
           action = null
           result.success(a)
+        }
+        "deviceName" -> {
+          val maker = Build.MANUFACTURER ?: ""
+          val model = Build.MODEL ?: ""
+          val brand = if (maker.isEmpty()) "" else maker.substring(0, 1).uppercase() + maker.substring(1)
+          result.success(if (model.lowercase().startsWith(maker.lowercase())) model else "$brand $model".trim())
+        }
+        "readyApk" -> {
+          result.success(try {
+            Sync.readyApk(applicationContext)?.path
+          } catch (ex: Exception) {
+            null
+          })
         }
         "requestNotifications" -> {
           if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 77)

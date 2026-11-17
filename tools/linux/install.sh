@@ -2,7 +2,7 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 dest="${XDG_DATA_HOME:-$HOME/.local/share}/wolium-app"
-if [ "${1:-}" = "--update" ]; then
+if [ "${1:-}" = "--update" ] || [ "${1:-}" = "--silent" ]; then
   pkill -f "$dest/trackwolium-core" 2>/dev/null || true
   sleep 1
 fi
@@ -45,7 +45,14 @@ if [ -d "$here/bridge" ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
   esac
 fi
 echo "Wolium installed: $dest"
-if [ "${1:-}" = "--update" ]; then
+if [ "${1:-}" = "--update" ] || [ "${1:-}" = "--silent" ]; then
   nohup "$dest/trackwolium-core" >/dev/null 2>&1 &
-  nohup "$dest/wolium" >/dev/null 2>&1 &
+  if [ "${1:-}" = "--update" ]; then
+    nohup "$dest/wolium" >/dev/null 2>&1 &
+    mode=ui
+  else
+    mode=silent
+  fi
+  sleep 2
+  sh "$dest/update-check.sh" --done "$mode" >/dev/null 2>&1 || true
 fi

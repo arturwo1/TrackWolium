@@ -285,24 +285,98 @@ object Sync {
     }
   }
 
+  fun updateDir(ctx: Context): File = File(ctx.cacheDir, "update")
+
+  fun readyApk(ctx: Context): File? {
+    val prefs = ctx.getSharedPreferences("wolium", Context.MODE_PRIVATE)
+    val version = prefs.getString("ready_version", "") ?: ""
+    val file = File(updateDir(ctx), "Wolium-$version.apk")
+    val current = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: ""
+    if (version.isEmpty() || !file.exists() || compare(current, version) >= 0) {
+      cleanUpdates(ctx)
+      return null
+    }
+    return file
+  }
+
+  fun cleanUpdates(ctx: Context) {
+    try {
+      updateDir(ctx).listFiles()?.forEach { it.delete() }
+      ctx.getSharedPreferences("wolium", Context.MODE_PRIVATE).edit().remove("ready_version").apply()
+    } catch (ex: Exception) {
+    }
+  }
+
+  private fun download(url: String, target: File): Boolean {
+    target.parentFile?.mkdirs()
+    val part = File(target.path + ".part")
+    val c = URL(url).openConnection() as HttpURLConnection
+    c.connectTimeout = 15000
+    c.readTimeout = 30000
+    c.setRequestProperty("User-Agent", "Wolium")
+    try {
+      if (c.responseCode != 200) return false
+      val total = c.contentLengthLong
+      var got = 0L
+      c.inputStream.use { input ->
+        part.outputStream().use { out ->
+          val buf = ByteArray(65536)
+          while (true) {
+            val n = input.read(buf)
+            if (n <= 0) break
+            out.write(buf, 0, n)
+            got += n
+          }
+        }
+      }
+      if ((total > 0 && got != total) || got < 1024 * 1024) {
+        part.delete()
+        return false
+      }
+      if (target.exists()) target.delete()
+      return part.renameTo(target)
+    } finally {
+      c.disconnect()
+      if (part.exists() && !target.exists()) part.delete()
+    }
+  }
+
   fun checkUpdate(ctx: Context) {
     val dir = dir(ctx)
     if (!File(dir, "consent").exists() || File(dir, "noupdates").exists()) return
     val current = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: return
     val latest = http("https://github.com/$REPO/releases/latest/download/version.txt").trim()
-    if (!Regex("^[0-9]+(\\.[0-9]+)*$").matches(latest) || compare(current, latest) >= 0) return
+    if (!Regex("^[0-9]+(\\.[0-9]+)*$").matches(latest) || compare(current, latest) >= 0) {
+      cleanUpdates(ctx)
+      return
+    }
     val prefs = ctx.getSharedPreferences("wolium", Context.MODE_PRIVATE)
+    val file = File(updateDir(ctx), "Wolium-$latest.apk")
+    if (!(file.exists() && prefs.getString("ready_version", "") == latest)) {
+      updateDir(ctx).listFiles()?.forEach { it.delete() }
+      if (!download("https://github.com/$REPO/releases/latest/download/Wolium.apk", file)) throw java.io.IOException("download")
+      prefs.edit().putString("ready_version", latest).apply()
+    }
     if (prefs.getString("notified", "") == latest) return
     val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     if (Build.VERSION.SDK_INT >= 26) {
       nm.createNotificationChannel(NotificationChannel("updates", text(ctx, "notifChannel"), NotificationManager.IMPORTANCE_DEFAULT))
     }
-    val intent = Intent(ctx, MainActivity::class.java).putExtra("action", "update").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-    val pending = PendingIntent.getActivity(ctx, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    val canInstall = Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()
+    val pending = if (canInstall) {
+      val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+      val view = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(uri, "application/vnd.android.package-archive")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+      PendingIntent.getActivity(ctx, 0, view, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    } else {
+      val intent = Intent(ctx, MainActivity::class.java).putExtra("action", "update").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+      PendingIntent.getActivity(ctx, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
     val n = NotificationCompat.Builder(ctx, "updates")
       .setSmallIcon(ctx.applicationInfo.icon)
-      .setContentTitle(text(ctx, "notifUpdateTitle"))
-      .setContentText(String.format(text(ctx, "notifUpdateText"), latest))
+      .setContentTitle(text(ctx, "notifReadyTitle"))
+      .setContentText(String.format(text(ctx, "notifReadyText"), latest))
       .setContentIntent(pending)
       .setAutoCancel(true)
       .build()

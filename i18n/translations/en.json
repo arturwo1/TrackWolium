@@ -59,7 +59,9 @@
     "UnAction": "Uninstall",
     "UnFolder": "Installed in",
     "NotifUpdateTitle": "Wolium update available",
-    "NotifUpdateBody": "Version {version} is ready. Click to update."
+    "NotifUpdateBody": "Version {version} is ready. Click to update.",
+    "NotifUpdatedTitle": "Wolium updated",
+    "NotifUpdatedBody": "Updated to version {version}."
   },
   "ui": {
     "brandSub": "Activity tracker",
@@ -182,6 +184,18 @@
     "backupRestored": "Backup restored.",
     "backupBad": "This file is not a Wolium backup.",
     "updateYes": "Update",
-    "updateLater": "Later"
+    "updateLater": "Later",
+    "notifReadyTitle": "Wolium update ready",
+    "notifReadyText": "Update v%s is ready to install",
+    "notifUpdatedTitle": "Wolium updated",
+    "notifUpdatedText": "Updated to version %s",
+    "updateReady": "Update ready",
+    "updateRestart": "Restart and apply",
+    "thisDevice": "This device",
+    "deviceEdit": "Rename",
+    "deviceNameHint": "Device name",
+    "deviceReset": "Reset to default",
+    "deviceId": "Device ID",
+    "save": "Save"
   }
 }

@@ -83,3 +83,9 @@ Proprietary, see [LICENSE](LICENSE). Contributions: see [CONTRIBUTING.md](CONTRI
 ## Wayland
 
 Window tracking on Wayland works on Hyprland and Sway out of the box. On GNOME and KDE Plasma 6 the installer adds a small bridge (a GNOME Shell extension or a KWin script) that sends only the window class and process id to the local collector over the session D-Bus. On GNOME, log out and back in once after installing, then enable the extension with `gnome-extensions enable wolium-bridge@dtsys`. The bridge scripts are not tested on real GNOME and KDE sessions yet; if no report arrives, the collector falls back to X11 and process data.
+
+## Updates
+
+- Android: once a day, only while charging, idle and on an unmetered network, Wolium checks for a release, downloads the APK into its cache and posts a "ready to install" notification. Tapping it opens the installer at once.
+- Windows, Linux, macOS: the background part checks every 6 hours and after wake-up, unlock, network or power changes, and downloads the installer quietly. If the Wolium window is closed, the update is installed silently and a notification confirms it. If the window is open, a banner offers "Restart and apply". On Windows nothing is shown or installed while a full-screen app or Focus Assist is active.
+- Each device gets a random `device_id` (UUIDv4, no hardware identifiers) and an editable name in Settings, stored in the data folder.

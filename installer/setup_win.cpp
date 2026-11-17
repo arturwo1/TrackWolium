@@ -180,6 +180,7 @@ struct Job {
   bool desktop;
   int lang;
   HWND hwnd;
+  bool quiet = false;
 };
 
 bool do_install(Job job) {
@@ -228,7 +229,7 @@ bool do_install(Job job) {
     }
     std::wstring exe = job.dir + L"\\wolium.exe";
     std::wstring cmd = L"\"" + exe + L"\"";
-    if (CreateProcessW(exe.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, job.dir.c_str(), &si, &pi)) {
+    if (!job.quiet && CreateProcessW(exe.c_str(), &cmd[0], nullptr, nullptr, FALSE, 0, nullptr, job.dir.c_str(), &si, &pi)) {
       CloseHandle(pi.hThread);
       CloseHandle(pi.hProcess);
     }
@@ -424,6 +425,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   if (argv && argc >= 3 && std::wstring(argv[1]) == L"--silent") {
     Job job{argv[2], inst::autostart_enabled(), std::filesystem::exists(inst::desktop_link()), -1, nullptr};
+    job.quiet = argc >= 4 && std::wstring(argv[3]) == L"--background";
     LocalFree(argv);
     bool ok = do_install(job);
     return ok ? 0 : 1;

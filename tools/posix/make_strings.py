@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 repo = Path(__file__).resolve().parent.parent.parent
-keys = ["notifUpdateTitle", "notifUpdateText", "updateYes", "updateLater"]
+keys = ["notifUpdateTitle", "notifUpdateText", "notifReadyTitle", "notifReadyText", "notifUpdatedTitle", "notifUpdatedText", "updateYes", "updateLater"]
 lines = []
 for f in sorted((repo / "i18n" / "translations").glob("*.json")):
     ui = json.loads(f.read_text(encoding="utf-8"))["ui"]

@@ -260,32 +260,92 @@ void post_badge(HWND hwnd, bool ready, const std::string& version) {
   PostMessageW(hwnd, kMsgBadge, ready ? 1 : 0, reinterpret_cast<LPARAM>(new std::string(version)));
 }
 
-bool check_once(HWND hwnd) {
+std::wstring temp_installer() {
+  wchar_t tmp[MAX_PATH];
+  DWORD n = GetTempPathW(MAX_PATH, tmp);
+  return std::wstring(tmp, n) + L"WoliumSetup_update.exe";
+}
+
+bool installer_ready(const std::string& latest) {
+  const std::wstring path = temp_installer();
+  std::string marker = read_small(app::userdata(L"update.ready"));
+  std::error_code ec;
+  return marker.substr(0, marker.find('\n')) == latest && std::filesystem::exists(path, ec) && std::filesystem::file_size(path, ec) > 1024 * 1024;
+}
+
+bool predownload(const std::string& latest) {
+  if (installer_ready(latest)) return true;
+  const std::wstring path = temp_installer();
+  DeleteFileW(app::userdata(L"update.ready").c_str());
+  if (!app::http_download(L"https://github.com/arturwo1/trackwolium/releases/latest/download/WoliumSetup.exe", path, 1024 * 1024)) return false;
+  std::string text = latest + "\n";
+  for (wchar_t c : path) text += c < 128 ? static_cast<char>(c) : '?';
+  std::ofstream(std::filesystem::path(app::userdata(L"update.ready")), std::ios::binary) << text;
+  return true;
+}
+
+bool apply_silently(const std::string& latest) {
+  const std::wstring path = temp_installer();
+  write_small(app::userdata(L"update_silent"), latest);
+  std::wstring cmd = L"\"" + path + L"\" --silent \"" + app::exe_dir() + L"\" --background";
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(path.c_str(), &cmd[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi)) {
+    DeleteFileW(app::userdata(L"update_silent").c_str());
+    return false;
+  }
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return true;
+}
+
+int check_once(HWND hwnd) {
   if (!app::consent_given()) {
     write_update_status("", "", "no consent");
-    return true;
+    return 1;
   }
   if (app::flag(L"noupdates")) {
     write_update_status("", "", "updates disabled");
     post_badge(hwnd, false, "");
-    return true;
+    return 1;
   }
   std::string current = app::installed_version();
   std::string latest = app::latest_version();
   if (latest.empty()) {
     write_update_status(current, latest, "check failed");
-    return false;
+    return 0;
   }
   if (current.empty()) {
     write_update_status(current, latest, "installed version unknown");
-    return true;
+    return 1;
   }
   if (app::compare_versions(current, latest) >= 0) {
     write_update_status(current, latest, "up to date");
     post_badge(hwnd, false, "");
-    return true;
+    DeleteFileW(app::userdata(L"update.ready").c_str());
+    DeleteFileW(temp_installer().c_str());
+    return 1;
   }
-  write_update_status(current, latest, "update available");
+  if (!predownload(latest)) {
+    write_update_status(current, latest, "download failed");
+    post_badge(hwnd, true, latest);
+    return 0;
+  }
+  if (app::do_not_disturb()) {
+    write_update_status(current, latest, "ready, deferred (do not disturb)");
+    post_badge(hwnd, true, latest);
+    return 2;
+  }
+  if (!app::ui_window_open()) {
+    if (apply_silently(latest)) {
+      write_update_status(current, latest, "installing silently");
+      return 1;
+    }
+    write_update_status(current, latest, "silent install failed");
+  } else {
+    write_update_status(current, latest, "ready, waiting for the window");
+  }
   post_badge(hwnd, true, latest);
   const std::wstring notified = app::userdata(L"update_notified");
   std::string seen = read_small(notified);
@@ -294,22 +354,44 @@ bool check_once(HWND hwnd) {
     write_small(notified, latest);
     PostMessageW(hwnd, kMsgUpdate, 0, reinterpret_cast<LPARAM>(new std::string(latest)));
   }
-  return true;
+  return 1;
 }
 
 void update_loop(HWND hwnd) {
   WaitForSingleObject(g->check_event, 20000);
   int failures = 0;
   for (;;) {
-    bool ok = check_once(hwnd);
-    failures = ok ? 0 : (failures < 4 ? failures + 1 : failures);
-    DWORD wait = ok ? 15 * 60 * 1000 : (60 * 1000) << (failures - 1 > 3 ? 3 : failures - 1);
+    int result = check_once(hwnd);
+    failures = result == 0 ? (failures < 4 ? failures + 1 : failures) : 0;
+    DWORD wait = 6 * 60 * 60 * 1000;
+    if (result == 0) wait = (60 * 1000) << (failures - 1);
+    if (result == 2) wait = 5 * 60 * 1000;
     DWORD r = WaitForSingleObject(g->check_event, wait);
     if (r == WAIT_OBJECT_0) {
       Sleep(8000);
       ResetEvent(g->check_event);
     }
   }
+}
+
+void notify_updated() {
+  std::wstring marker = app::userdata(L"update_silent");
+  std::string version = read_small(marker);
+  if (version.empty()) return;
+  DeleteFileW(marker.c_str());
+  if (app::installed_version() != version) return;
+  DeleteFileW(app::userdata(L"update.ready").c_str());
+  DeleteFileW(temp_installer().c_str());
+  std::wstring body = tr(Key::NotifUpdatedBody);
+  std::wstring v(version.begin(), version.end());
+  size_t at = body.find(L"{version}");
+  if (at != std::wstring::npos) body.replace(at, 9, v);
+  NOTIFYICONDATAW nid = base_nid();
+  nid.uFlags = NIF_INFO;
+  nid.dwInfoFlags = NIIF_INFO;
+  wcsncpy_s(nid.szInfoTitle, tr(Key::NotifUpdatedTitle), _TRUNCATE);
+  wcsncpy_s(nid.szInfo, body.c_str(), _TRUNCATE);
+  Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
 void network_watch() {
@@ -663,6 +745,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   guard.state = app::paused() ? State::Paused : State::Running;
   attach_or_start_core();
   tray_update(true);
+  notify_updated();
   SetTimer(guard.hwnd, kTimer, 1000, nullptr);
   if (!guard.background) launch_viewer();
   guard.check_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
