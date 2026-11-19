@@ -260,7 +260,8 @@ class _ResPainter extends CustomPainter {
       final t = from + span * i / 4;
       label.text = TextSpan(text: timeText(t), style: const TextStyle(color: cMuted, fontSize: 10));
       label.layout();
-      final x = (w * i / 4 - (i == 4 ? label.width : (i == 0 ? 0 : label.width / 2))).clamp(0.0, math.max(0.0, w - label.width));
+      final shift = i == 4 ? label.width : (i == 0 ? 0.0 : label.width / 2);
+      final x = (w * i / 4 - shift).clamp(0.0, math.max(0.0, w - label.width)).toDouble();
       label.paint(canvas, Offset(x, h + 4));
     }
     canvas.save();
