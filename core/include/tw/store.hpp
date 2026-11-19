@@ -26,6 +26,24 @@ struct SessionRec {
   long long stop;
 };
 
+struct ResEntry {
+  int slot = 0;
+  std::string app;
+  long long cpu_ms = 0;
+  long long ram_sum_kb = 0;
+  long long ram_n = 0;
+  long long peak_kb = 0;
+  long long io_read = 0;
+  long long io_write = 0;
+};
+
+struct SysEntry {
+  long long ts = 0;
+  std::string kind;
+  long long a = 0;
+  long long b = 0;
+};
+
 class IStore {
 public:
   virtual ~IStore() = default;
@@ -35,6 +53,8 @@ public:
   virtual bool add_timeline(const std::string&, const std::vector<SlotEntry>&) { return true; }
   virtual bool add_sessions(const std::vector<SessionRec>&) { return true; }
   virtual bool set_names(const std::vector<AppMeta>&) { return true; }
+  virtual bool add_resources(const std::string&, const std::vector<ResEntry>&) { return true; }
+  virtual bool add_system(const std::vector<SysEntry>&) { return true; }
 };
 
 }

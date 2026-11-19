@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'data.dart';
+import 'l10n.dart';
 
 const repository = 'arturwo1/trackwolium';
 
@@ -70,18 +71,63 @@ Future<String> _get(HttpClient client, Uri uri) async {
   return utf8.decode(await res.fold<List<int>>([], (a, b) => a..addAll(b)));
 }
 
+String lastUpdateStatus = '';
+
+void _status(String current, String latest, String code) {
+  final t = DateTime.now();
+  String two(int v) => v.toString().padLeft(2, '0');
+  lastUpdateStatus = '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)} | ${current.isEmpty ? '?' : current} -> ${latest.isEmpty ? '?' : latest} | $code';
+}
+
+const _statusKeys = {
+  'no consent': 'usNoConsent',
+  'updates disabled': 'usDisabled',
+  'check failed': 'usCheckFailed',
+  'installed version unknown': 'usUnknownVersion',
+  'up to date': 'usUpToDate',
+  'download failed': 'usDownloadFailed',
+  'ready, deferred (do not disturb)': 'usDeferred',
+  'installing silently': 'usInstalling',
+  'silent install failed': 'usSilentFailed',
+  'ready, waiting for the window': 'usWaitingWindow',
+  'update available': 'usAvailable',
+};
+
+String translateUpdateStatus(String raw) {
+  final text = raw.trim();
+  if (text.isEmpty) return '';
+  final parts = text.split(' | ');
+  if (parts.length < 3) return text;
+  final code = parts.sublist(2).join(' | ').trim();
+  final key = _statusKeys[code];
+  return '${parts[0]} | ${parts[1]} | ${key == null ? code : tr(key)}';
+}
+
 Future<UpdateInfo?> checkUpdate() async {
   final current = installedVersion();
-  if (current.isEmpty || !updaterSupported) return null;
+  if (current.isEmpty || !updaterSupported) {
+    _status(current, '', 'installed version unknown');
+    return null;
+  }
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  var latest = '';
   try {
-    final latest = (await _get(client, Uri.parse('https://github.com/$repository/releases/latest/download/version.txt'))).trim();
-    if (latest.isEmpty || !RegExp(r'^[0-9]+(\.[0-9]+)*$').hasMatch(latest) || compareVersions(current, latest) >= 0) return null;
+    latest = (await _get(client, Uri.parse('https://github.com/$repository/releases/latest/download/version.txt'))).trim();
+    if (latest.isEmpty || !RegExp(r'^[0-9]+(\.[0-9]+)*$').hasMatch(latest)) {
+      _status(current, '', 'check failed');
+      return null;
+    }
+    if (compareVersions(current, latest) >= 0) {
+      _status(current, latest, 'up to date');
+      return null;
+    }
     final setupUrl = 'https://github.com/$repository/releases/latest/download/${updateAsset()}';
     final info = UpdateInfo(current, latest, setupUrl);
     info.ready = readyInstaller(latest) != null;
+    _status(current, latest, 'update available');
     return info;
   } catch (_) {
+    _status(current, latest, 'check failed');
     return null;
   } finally {
     client.close(force: true);

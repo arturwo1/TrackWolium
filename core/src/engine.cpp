@@ -1,3 +1,4 @@
+#include <set>
 #include "tw/engine.hpp"
 #include <algorithm>
 #include <ctime>
@@ -40,6 +41,23 @@ void Engine::set_wall_source(std::function<long long()> wall) {
   wall_fn_ = std::move(wall);
 }
 
+void Engine::set_metrics(const MetricsConfig& cfg) {
+  if (cfg == metrics_) return;
+  bool had_proc = metrics_.any_proc();
+  bool had_sys = metrics_.any_sys();
+  metrics_ = cfg;
+  if (!cfg.any_proc() || !had_proc) {
+    proc_tracker_.reset();
+    proc_started_ = false;
+  }
+  if (!cfg.any_sys() || !had_sys) sys_started_ = false;
+}
+
+void Engine::set_metrics_intervals(Duration proc, Duration sys) {
+  proc_every_ = proc;
+  sys_every_ = sys;
+}
+
 void Engine::add_sink(std::shared_ptr<ISink> sink) {
   sinks_.push_back(std::move(sink));
 }
@@ -59,6 +77,17 @@ void Engine::set_store(std::shared_ptr<IStore> store, Duration flush_every) {
 
 void Engine::flush_pending() {
   if (!store_) return;
+  if (!pending_res_.empty()) {
+    std::vector<ResEntry> rows;
+    rows.reserve(pending_res_.size());
+    for (const auto& kv : pending_res_) {
+      const ResAgg& a = kv.second;
+      if (a.cpu_ms == 0 && a.ram_n == 0 && a.peak_kb == 0 && a.io_read == 0 && a.io_write == 0) continue;
+      rows.push_back({kv.first.first, kv.first.second, a.cpu_ms, a.ram_sum_kb, a.ram_n, a.peak_kb, a.io_read, a.io_write});
+    }
+    if (rows.empty() || store_->add_resources(day_, rows)) pending_res_.clear();
+  }
+  if (!pending_sys_.empty() && store_->add_system(pending_sys_)) pending_sys_.clear();
   if (!pending_sessions_.empty()) {
     std::vector<SessionRec> recs;
     recs.reserve(pending_sessions_.size());
@@ -106,6 +135,44 @@ void Engine::note_session(const Interval& iv) {
   pending_sessions_[{iv.app, it->second.start}] = {iv.app, it->second.state, it->second.start, it->second.stop};
 }
 
+void Engine::sample_metrics(TimePoint now, const std::vector<AppSample>& samples) {
+  if (metrics_.any_proc() && probe_->supports_metrics() && (!proc_started_ || now - last_proc_ >= proc_every_)) {
+    proc_started_ = true;
+    last_proc_ = now;
+    auto res = proc_tracker_.update(probe_->proc_snapshot());
+    int slot = slot_fn_();
+    std::set<std::string> visible;
+    for (const auto& sm : samples) {
+      if (sm.state != State::Background) visible.insert(sm.app);
+    }
+    for (const auto& kv : res) {
+      if (!visible.count(kv.first)) continue;
+      const AppRes& r = kv.second;
+      ResAgg& a = pending_res_[{slot, kv.first}];
+      if (metrics_.cpu) a.cpu_ms += r.cpu_ms;
+      if (metrics_.ram && r.rss_kb > 0) {
+        a.ram_sum_kb += r.rss_kb;
+        ++a.ram_n;
+      }
+      if (metrics_.peak) a.peak_kb = std::max(a.peak_kb, r.peak_kb);
+      if (metrics_.io_read) a.io_read += r.io_read;
+      if (metrics_.io_write) a.io_write += r.io_write;
+    }
+  }
+  if (metrics_.any_sys() && probe_->supports_metrics() && (!sys_started_ || now - last_sys_ >= sys_every_)) {
+    sys_started_ = true;
+    last_sys_ = now;
+    SysStat st = probe_->sys_stat();
+    long long ts = wall_fn_();
+    if (st.valid) {
+      if (metrics_.sys_ram) pending_sys_.push_back({ts, "ram", st.ram_total_kb, st.ram_avail_kb});
+      if (metrics_.sys_disk) {
+        for (const auto& d : st.disks) pending_sys_.push_back({ts, "disk:" + d.mount, d.total_kb, d.free_kb});
+      }
+    }
+  }
+}
+
 void Engine::step(TimePoint now) {
   if (store_) {
     std::string day = day_fn_();
@@ -142,6 +209,7 @@ void Engine::step(TimePoint now) {
       if (iv.state != State::Background) note_session(iv);
       if (iv.state != State::Background) pending_slots_[{slot_fn_(), iv.app, static_cast<int>(iv.state)}] += iv.ms.count();
     }
+    if (metrics_.any()) sample_metrics(now, samples);
     bool focus_changed = flush_started_ && focus != last_focus_;
     last_focus_ = focus;
     if (!flush_started_) {

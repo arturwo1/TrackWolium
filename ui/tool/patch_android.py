@@ -23,6 +23,7 @@ perms = [
     '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>',
     '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>',
     '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>',
+    '<uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES"/>',
 ]
 for p in perms:
     name = re.search(r'android:name="([^"]+)"', p).group(1)

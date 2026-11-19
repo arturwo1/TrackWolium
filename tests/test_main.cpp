@@ -575,6 +575,239 @@ void test_wayland_parsers() {
 }
 #endif
 
+struct MetricsProbe : tw::PushProbe {
+  std::vector<tw::ProcSnap> snaps;
+  tw::SysStat sys;
+  int proc_calls = 0;
+  int sys_calls = 0;
+  bool supports_metrics() const override { return true; }
+  std::vector<tw::ProcSnap> proc_snapshot() override {
+    ++proc_calls;
+    return snaps;
+  }
+  tw::SysStat sys_stat() override {
+    ++sys_calls;
+    return sys;
+  }
+};
+
+struct ResStore : FakeStore {
+  std::map<std::pair<int, std::string>, tw::ResEntry> res;
+  std::vector<tw::SysEntry> sysrows;
+  int res_calls = 0;
+  bool add_resources(const std::string&, const std::vector<tw::ResEntry>& v) override {
+    ++res_calls;
+    for (const auto& e : v) {
+      auto& r = res[{e.slot, e.app}];
+      r.cpu_ms += e.cpu_ms;
+      r.ram_sum_kb += e.ram_sum_kb;
+      r.ram_n += e.ram_n;
+      r.peak_kb = std::max(r.peak_kb, e.peak_kb);
+      r.io_read += e.io_read;
+      r.io_write += e.io_write;
+    }
+    return true;
+  }
+  bool add_system(const std::vector<tw::SysEntry>& v) override {
+    for (const auto& e : v) sysrows.push_back(e);
+    return true;
+  }
+};
+
+tw::ProcSnap snap(long long pid, long long stamp, const char* app, long long cpu, long long rss, long long peak, long long ior, long long iow) {
+  tw::ProcSnap p;
+  p.pid = pid;
+  p.stamp = stamp;
+  p.app = app;
+  p.cpu_ms = cpu;
+  p.rss_kb = rss;
+  p.peak_kb = peak;
+  p.io_read = ior;
+  p.io_write = iow;
+  return p;
+}
+
+void test_metrics_config_parse() {
+  auto c = tw::parse_metrics("cpu ram\nsysdisk bogus");
+  CHECK(c.cpu && c.ram && c.sys_disk && !c.peak && !c.io_read && !c.io_write && !c.sys_ram);
+  CHECK(c.any_proc() && c.any_sys() && c.any());
+  CHECK(tw::parse_metrics(tw::format_metrics(c)) == c);
+  CHECK(!tw::parse_metrics("").any());
+}
+
+void test_proc_tracker() {
+  tw::ProcTracker t;
+  auto first = t.update({snap(1, 10, "a", 1000, 500, 600, 100, 200), snap(2, 11, "a", 50, 100, 100, 0, 0)});
+  CHECK(first["a"].cpu_ms == 0 && first["a"].io_read == 0 && first["a"].io_write == 0);
+  CHECK(first["a"].rss_kb == 600);
+  auto second = t.update({snap(1, 10, "a", 1300, 520, 600, 150, 260), snap(2, 11, "a", 80, 100, 100, 0, 0), snap(3, 99, "a", 40, 70, 90, 5, 6)});
+  CHECK(second["a"].cpu_ms == 300 + 30 + 40);
+  CHECK(second["a"].io_read == 50 + 0 + 5);
+  CHECK(second["a"].io_write == 60 + 0 + 6);
+  CHECK(second["a"].rss_kb == 520 + 100 + 70);
+  CHECK(second["a"].peak_kb == 520 + 100 + 90);
+  auto third = t.update({snap(1, 10, "a", 1400, 530, 900, 150, 260), snap(3, 100, "a", 10, 60, 60, 0, 0)});
+  CHECK(third["a"].cpu_ms == 100 + 10);
+  CHECK(third["a"].peak_kb == 900 + 60);
+  t.reset();
+  auto again = t.update({snap(1, 10, "a", 9999, 1, 1, 9, 9)});
+  CHECK(again["a"].cpu_ms == 0);
+}
+
+void test_engine_metrics_buffer() {
+  auto probe = std::make_shared<MetricsProbe>();
+  auto store = std::make_shared<ResStore>();
+  int slot = 5;
+  long long wall = 1000;
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_slot_source([&] { return slot; });
+  e.set_wall_source([&] { return wall; });
+  e.set_store(store, Duration(1000000));
+  e.set_metrics_intervals(Duration(10000), Duration(100000));
+  probe->push({{"a", State::Focused}});
+  probe->snaps = {snap(1, 1, "a", 0, 1000, 1000, 0, 0)};
+  probe->sys.valid = true;
+  probe->sys.ram_total_kb = 8000;
+  probe->sys.ram_avail_kb = 3000;
+  probe->sys.disks = {{"C:", 1000, 400}};
+  e.step(at(0));
+  CHECK(probe->proc_calls == 0 && probe->sys_calls == 0);
+  tw::MetricsConfig cfg;
+  e.set_metrics(cfg);
+  e.step(at(1000));
+  CHECK(probe->proc_calls == 0);
+  cfg.cpu = true;
+  cfg.ram = true;
+  cfg.peak = true;
+  cfg.io_read = true;
+  e.set_metrics(cfg);
+  e.step(at(2000));
+  CHECK(probe->proc_calls == 1);
+  e.step(at(5000));
+  CHECK(probe->proc_calls == 1);
+  probe->snaps = {snap(1, 1, "a", 400, 1200, 1500, 2048, 4096)};
+  e.step(at(12000));
+  CHECK(probe->proc_calls == 2);
+  CHECK(store->res_calls == 0);
+  slot = 6;
+  probe->snaps = {snap(1, 1, "a", 700, 1400, 1500, 4096, 8192)};
+  e.step(at(22000));
+  CHECK(probe->sys_calls == 0);
+  e.finish();
+  CHECK(store->res_calls == 1);
+  const auto& r5 = store->res[{5, "a"}];
+  CHECK(r5.cpu_ms == 400 && r5.ram_n == 2 && r5.ram_sum_kb == 1000 + 1200 && r5.peak_kb == 1500 && r5.io_read == 2048 && r5.io_write == 0);
+  const auto& r6 = store->res[{6, "a"}];
+  CHECK(r6.cpu_ms == 300 && r6.ram_n == 1 && r6.io_read == 2048);
+  CHECK(store->sysrows.empty());
+  cfg.sys_ram = true;
+  cfg.sys_disk = true;
+  e.set_metrics(cfg);
+  e.step(at(30000));
+  e.step(at(40000));
+  CHECK(probe->sys_calls == 1);
+  e.step(at(140000));
+  CHECK(probe->sys_calls == 2);
+  e.finish();
+  CHECK(store->sysrows.size() == 4);
+  CHECK(store->sysrows[0].kind == "ram" && store->sysrows[0].a == 8000 && store->sysrows[0].b == 3000);
+  CHECK(store->sysrows[1].kind == "disk:C:" && store->sysrows[1].a == 1000 && store->sysrows[1].b == 400);
+}
+
+void test_engine_metrics_only_enabled_fields() {
+  auto probe = std::make_shared<MetricsProbe>();
+  auto store = std::make_shared<ResStore>();
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_slot_source([] { return 1; });
+  e.set_store(store, Duration(1000000));
+  e.set_metrics_intervals(Duration(1000), Duration(1000));
+  tw::MetricsConfig cfg;
+  cfg.io_write = true;
+  e.set_metrics(cfg);
+  probe->push({{"a", State::Focused}});
+  probe->snaps = {snap(1, 1, "a", 0, 1000, 1000, 0, 0)};
+  e.step(at(0));
+  probe->snaps = {snap(1, 1, "a", 900, 2000, 2000, 7, 3000)};
+  e.step(at(2000));
+  e.finish();
+  const auto& r = store->res[{1, "a"}];
+  CHECK(r.cpu_ms == 0 && r.ram_n == 0 && r.peak_kb == 0 && r.io_read == 0 && r.io_write == 3000);
+}
+
+void test_engine_metrics_skips_background_apps() {
+  auto probe = std::make_shared<MetricsProbe>();
+  auto store = std::make_shared<ResStore>();
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_slot_source([] { return 1; });
+  e.set_store(store, Duration(1000000));
+  e.set_metrics_intervals(Duration(1000), Duration(1000));
+  tw::MetricsConfig cfg;
+  cfg.cpu = true;
+  cfg.ram = true;
+  e.set_metrics(cfg);
+  probe->push({{"fg", State::Focused}, {"bg", State::Background}});
+  probe->snaps = {snap(1, 1, "fg", 0, 100, 100, 0, 0), snap(2, 1, "bg", 0, 200, 200, 0, 0)};
+  e.step(at(0));
+  probe->snaps = {snap(1, 1, "fg", 50, 100, 100, 0, 0), snap(2, 1, "bg", 70, 200, 200, 0, 0)};
+  e.step(at(2000));
+  e.finish();
+  CHECK(store->res.count({1, "fg"}) == 1);
+  CHECK(store->res.count({1, "bg"}) == 0);
+}
+
+void test_engine_metrics_no_rows_when_disabled() {
+  auto probe = std::make_shared<MetricsProbe>();
+  auto store = std::make_shared<ResStore>();
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_store(store, Duration(1000000));
+  probe->push({{"a", State::Focused}});
+  probe->snaps = {snap(1, 1, "a", 0, 1000, 1000, 0, 0)};
+  e.step(at(0));
+  e.step(at(5000));
+  e.finish();
+  CHECK(store->res_calls == 0 && store->res.empty() && probe->proc_calls == 0);
+}
+
+void test_sqlite_resources() {
+  std::string err;
+  auto store = tw::SqliteStore::open(":memory:", &err);
+  CHECK(store != nullptr);
+  if (!store) return;
+  tw::ResEntry a;
+  a.slot = 3;
+  a.app = "x.exe";
+  a.cpu_ms = 100;
+  a.ram_sum_kb = 2000;
+  a.ram_n = 2;
+  a.peak_kb = 1500;
+  a.io_read = 10;
+  a.io_write = 20;
+  CHECK(store->add_resources("2026-01-01", {a}));
+  a.cpu_ms = 50;
+  a.peak_kb = 900;
+  CHECK(store->add_resources("2026-01-01", {a}));
+  CHECK(store->add_system({{1000, "ram", 8000, 3000}, {1000, "disk:C:", 100, 40}}));
+  CHECK(store->add_system({{1000, "ram", 8000, 2500}}));
+}
+
+void test_native_metrics_smoke() {
+  auto probe = tw::make_native_probe({});
+  if (!probe->supports_metrics()) return;
+  auto a = probe->proc_snapshot();
+  CHECK(!a.empty());
+  auto st = probe->sys_stat();
+  CHECK(st.valid && st.ram_total_kb > 0 && st.ram_avail_kb >= 0);
+  bool self = false;
+  for (const auto& p : a) {
+    if (p.rss_kb > 0 && p.peak_kb >= p.rss_kb) self = true;
+  }
+  CHECK(self);
+}
+
 void test_presence_store() {
   std::string err;
   auto store = tw::SqliteStore::open(":memory:", &err);
@@ -616,6 +849,14 @@ int main() {
 #endif
   test_local_api();
   test_presence_store();
+  test_metrics_config_parse();
+  test_proc_tracker();
+  test_engine_metrics_buffer();
+  test_engine_metrics_only_enabled_fields();
+  test_engine_metrics_no_rows_when_disabled();
+  test_engine_metrics_skips_background_apps();
+  test_sqlite_resources();
+  test_native_metrics_smoke();
 #ifdef _WIN32
   test_ipc_roundtrip();
 #endif

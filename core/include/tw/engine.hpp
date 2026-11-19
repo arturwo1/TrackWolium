@@ -25,6 +25,8 @@ public:
   void set_day_source(std::function<std::string()> day);
   void set_slot_source(std::function<int()> slot);
   void set_wall_source(std::function<long long()> wall);
+  void set_metrics(const MetricsConfig& cfg);
+  void set_metrics_intervals(Duration proc, Duration sys);
   void set_store(std::shared_ptr<IStore> store, Duration flush_every = Duration(180000));
   void step(TimePoint now);
   void run(Duration interval, const std::function<bool()>& stop);
@@ -35,6 +37,7 @@ public:
 private:
   void flush_pending();
   void note_session(const Interval& iv);
+  void sample_metrics(TimePoint now, const std::vector<AppSample>& samples);
 
   std::shared_ptr<IProbe> probe_;
   std::vector<std::shared_ptr<ISink>> sinks_;
@@ -58,6 +61,24 @@ private:
   std::map<std::pair<std::string, long long>, SessionRec> pending_sessions_;
   std::set<std::string> known_;
   std::vector<AppMeta> new_names_;
+  struct ResAgg {
+    long long cpu_ms = 0;
+    long long ram_sum_kb = 0;
+    long long ram_n = 0;
+    long long peak_kb = 0;
+    long long io_read = 0;
+    long long io_write = 0;
+  };
+  MetricsConfig metrics_;
+  ProcTracker proc_tracker_;
+  std::map<std::pair<int, std::string>, ResAgg> pending_res_;
+  std::vector<SysEntry> pending_sys_;
+  Duration proc_every_{10000};
+  Duration sys_every_{600000};
+  TimePoint last_proc_{};
+  TimePoint last_sys_{};
+  bool proc_started_ = false;
+  bool sys_started_ = false;
   TimePoint last_flush_{};
   bool flush_started_ = false;
 };

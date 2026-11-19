@@ -3,6 +3,7 @@
 #include <dwmapi.h>
 #include <winver.h>
 #include <tlhelp32.h>
+#include <psapi.h>
 #include <cwctype>
 #include <map>
 #include <string>
@@ -143,6 +144,78 @@ public:
   std::string exe_path(const std::string& app) override {
     auto it = path_cache().find(app);
     return it == path_cache().end() ? std::string() : to_utf8(it->second);
+  }
+
+  bool supports_metrics() const override { return true; }
+
+  std::vector<ProcSnap> proc_snapshot() override {
+    std::vector<ProcSnap> out;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return out;
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snap, &pe)) {
+      do {
+        if (pe.th32ProcessID == 0 || pe.th32ProcessID == 4) continue;
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (!h) continue;
+        wchar_t buf[MAX_PATH * 4];
+        DWORD len = static_cast<DWORD>(sizeof(buf) / sizeof(buf[0]));
+        FILETIME created{}, exited{}, kernel{}, user{};
+        bool ok = QueryFullProcessImageNameW(h, 0, buf, &len) && GetProcessTimes(h, &created, &exited, &kernel, &user);
+        if (ok) {
+          std::wstring low = lower(std::wstring(buf, len));
+          if (include_system_ || windows_dir_.empty() || low.compare(0, windows_dir_.size(), windows_dir_) != 0) {
+            auto u64 = [](const FILETIME& f) { return (static_cast<unsigned long long>(f.dwHighDateTime) << 32) | f.dwLowDateTime; };
+            ProcSnap p;
+            p.pid = pe.th32ProcessID;
+            p.stamp = static_cast<long long>(u64(created));
+            p.app = to_utf8(base_name(low));
+            p.cpu_ms = static_cast<long long>((u64(kernel) + u64(user)) / 10000ULL);
+            PROCESS_MEMORY_COUNTERS mc{};
+            mc.cb = sizeof(mc);
+            if (GetProcessMemoryInfo(h, &mc, sizeof(mc))) {
+              p.rss_kb = static_cast<long long>(mc.WorkingSetSize / 1024);
+              p.peak_kb = static_cast<long long>(mc.PeakWorkingSetSize / 1024);
+            }
+            IO_COUNTERS io{};
+            if (GetProcessIoCounters(h, &io)) {
+              p.io_read = static_cast<long long>(io.ReadTransferCount);
+              p.io_write = static_cast<long long>(io.WriteTransferCount);
+            }
+            out.push_back(std::move(p));
+          }
+        }
+        CloseHandle(h);
+      } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return out;
+  }
+
+  SysStat sys_stat() override {
+    SysStat st;
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms)) {
+      st.ram_total_kb = static_cast<long long>(ms.ullTotalPhys / 1024);
+      st.ram_avail_kb = static_cast<long long>(ms.ullAvailPhys / 1024);
+      st.valid = true;
+    }
+    DWORD mask = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+      if (!(mask & (1u << i))) continue;
+      wchar_t root[4] = {static_cast<wchar_t>(L'A' + i), L':', L'\\', 0};
+      if (GetDriveTypeW(root) != DRIVE_FIXED) continue;
+      ULARGE_INTEGER avail{}, total{}, freeb{};
+      if (!GetDiskFreeSpaceExW(root, &avail, &total, &freeb)) continue;
+      DiskStat d;
+      d.mount = std::string(1, static_cast<char>('A' + i)) + ":";
+      d.total_kb = static_cast<long long>(total.QuadPart / 1024ULL);
+      d.free_kb = static_cast<long long>(freeb.QuadPart / 1024ULL);
+      st.disks.push_back(std::move(d));
+    }
+    return st;
   }
 
 private:

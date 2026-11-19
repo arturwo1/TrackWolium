@@ -53,6 +53,8 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
       "CREATE TABLE IF NOT EXISTS sessions(app TEXT NOT NULL, start INTEGER NOT NULL, stop INTEGER NOT NULL, state INTEGER NOT NULL, PRIMARY KEY(app, start)) WITHOUT ROWID;"
       "CREATE INDEX IF NOT EXISTS sessions_start ON sessions(start);"
       "CREATE TABLE IF NOT EXISTS presence(ts INTEGER NOT NULL, client_id TEXT NOT NULL, name TEXT NOT NULL, details TEXT NOT NULL, state TEXT NOT NULL, started INTEGER NOT NULL, raw TEXT NOT NULL DEFAULT '');"
+      "CREATE TABLE IF NOT EXISTS res(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, cpu INTEGER NOT NULL DEFAULT 0, ram INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 0, peak INTEGER NOT NULL DEFAULT 0, ior INTEGER NOT NULL DEFAULT 0, iow INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;";
   if (!exec(db, schema, error)) {
     sqlite3_close(db);
@@ -121,6 +123,78 @@ bool SqliteStore::add_timeline(const std::string& day, const std::vector<SlotEnt
     sqlite3_bind_text(st, 3, e.app.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(st, 4, e.state);
     sqlite3_bind_int64(st, 5, static_cast<sqlite3_int64>(e.ms));
+    if (sqlite3_step(st) != SQLITE_DONE) {
+      last_error_ = sqlite3_errmsg(db_);
+      ok = false;
+      break;
+    }
+    sqlite3_reset(st);
+  }
+  sqlite3_finalize(st);
+  if (!ok) {
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  return exec(db_, "COMMIT", &last_error_);
+}
+
+bool SqliteStore::add_resources(const std::string& day, const std::vector<ResEntry>& entries) {
+  if (entries.empty()) return true;
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
+  sqlite3_stmt* st = nullptr;
+  const char* sql =
+      "INSERT INTO res(day, slot, app, cpu, ram, n, peak, ior, iow) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) "
+      "ON CONFLICT(day, slot, app) DO UPDATE SET cpu = cpu + excluded.cpu, ram = ram + excluded.ram, n = n + excluded.n, "
+      "peak = MAX(peak, excluded.peak), ior = ior + excluded.ior, iow = iow + excluded.iow";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+    last_error_ = sqlite3_errmsg(db_);
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  bool ok = true;
+  for (const auto& e : entries) {
+    sqlite3_bind_text(st, 1, day.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 2, e.slot);
+    sqlite3_bind_text(st, 3, e.app.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 4, static_cast<sqlite3_int64>(e.cpu_ms));
+    sqlite3_bind_int64(st, 5, static_cast<sqlite3_int64>(e.ram_sum_kb));
+    sqlite3_bind_int64(st, 6, static_cast<sqlite3_int64>(e.ram_n));
+    sqlite3_bind_int64(st, 7, static_cast<sqlite3_int64>(e.peak_kb));
+    sqlite3_bind_int64(st, 8, static_cast<sqlite3_int64>(e.io_read));
+    sqlite3_bind_int64(st, 9, static_cast<sqlite3_int64>(e.io_write));
+    if (sqlite3_step(st) != SQLITE_DONE) {
+      last_error_ = sqlite3_errmsg(db_);
+      ok = false;
+      break;
+    }
+    sqlite3_reset(st);
+  }
+  sqlite3_finalize(st);
+  if (!ok) {
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  return exec(db_, "COMMIT", &last_error_);
+}
+
+bool SqliteStore::add_system(const std::vector<SysEntry>& entries) {
+  if (entries.empty()) return true;
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
+  sqlite3_stmt* st = nullptr;
+  const char* sql = "INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?1, ?2, ?3, ?4)";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+    last_error_ = sqlite3_errmsg(db_);
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  bool ok = true;
+  for (const auto& e : entries) {
+    sqlite3_bind_int64(st, 1, static_cast<sqlite3_int64>(e.ts));
+    sqlite3_bind_text(st, 2, e.kind.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 3, static_cast<sqlite3_int64>(e.a));
+    sqlite3_bind_int64(st, 4, static_cast<sqlite3_int64>(e.b));
     if (sqlite3_step(st) != SQLITE_DONE) {
       last_error_ = sqlite3_errmsg(db_);
       ok = false;

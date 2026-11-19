@@ -2,6 +2,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "tw/procstat.hpp"
 #include "tw/types.hpp"
 
 namespace tw {
@@ -13,6 +14,9 @@ public:
   virtual bool reports_windows() const { return true; }
   virtual std::string display_name(const std::string&) { return {}; }
   virtual std::string exe_path(const std::string&) { return {}; }
+  virtual bool supports_metrics() const { return false; }
+  virtual std::vector<ProcSnap> proc_snapshot() { return {}; }
+  virtual SysStat sys_stat() { return {}; }
 };
 
 class PushProbe : public IProbe {

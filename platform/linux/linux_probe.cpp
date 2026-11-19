@@ -1,5 +1,6 @@
 #include "tw/platform.hpp"
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 #include <algorithm>
 #include <cctype>
@@ -7,6 +8,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <sstream>
 #include "wayland_windows.hpp"
 #include "x11_windows.hpp"
 
@@ -39,6 +41,60 @@ std::string process_name(const fs::path& dir) {
 std::string lower(std::string s) {
   for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return s;
+}
+
+bool read_file(const fs::path& p, std::string& out) {
+  std::ifstream f(p, std::ios::binary);
+  if (!f) return false;
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  out = ss.str();
+  return true;
+}
+
+long long field_kb(const std::string& text, const char* key) {
+  size_t p = text.find(key);
+  if (p == std::string::npos) return -1;
+  return std::atoll(text.c_str() + p + std::char_traits<char>::length(key));
+}
+
+bool read_proc_stat(const fs::path& dir, long long& stamp, long long& cpu_ticks, long long& rss_pages) {
+  std::string text;
+  if (!read_file(dir / "stat", text)) return false;
+  size_t close = text.rfind(')');
+  if (close == std::string::npos) return false;
+  std::istringstream in(text.substr(close + 2));
+  std::string tok;
+  long long utime = 0, stime = 0;
+  for (int i = 3; i <= 24 && (in >> tok); ++i) {
+    if (i == 14) utime = std::atoll(tok.c_str());
+    else if (i == 15) stime = std::atoll(tok.c_str());
+    else if (i == 22) stamp = std::atoll(tok.c_str());
+    else if (i == 24) rss_pages = std::atoll(tok.c_str());
+  }
+  cpu_ticks = utime + stime;
+  return true;
+}
+
+bool real_fs(const std::string& type) {
+  static const char* kinds[] = {"ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "vfat", "exfat", "ntfs", "ntfs3", "fuseblk", "zfs", "jfs", "reiserfs", "apfs", "hfsplus"};
+  for (const char* k : kinds) {
+    if (type == k) return true;
+  }
+  return false;
+}
+
+std::string unescape_mount(const std::string& s) {
+  std::string out;
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '\\' && i + 3 < s.size() && std::isdigit(static_cast<unsigned char>(s[i + 1]))) {
+      out += static_cast<char>(std::strtol(s.substr(i + 1, 3).c_str(), nullptr, 8));
+      i += 3;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
 }
 
 class LinuxProbe : public IProbe {
@@ -102,6 +158,81 @@ public:
     out.reserve(best.size());
     for (auto& kv : best) out.push_back({kv.first, kv.second});
     return out;
+  }
+
+  bool supports_metrics() const override { return true; }
+
+  std::vector<ProcSnap> proc_snapshot() override {
+    std::vector<ProcSnap> out;
+    std::error_code ec;
+    const uid_t me = getuid();
+    const long long tick_ms = std::max<long long>(1, 1000 / std::max<long>(1, sysconf(_SC_CLK_TCK)));
+    const long long page_kb = std::max<long>(1, sysconf(_SC_PAGESIZE) / 1024);
+    for (fs::directory_iterator it("/proc", ec), end; !ec && it != end; it.increment(ec)) {
+      const std::string id = it->path().filename().string();
+      if (id.empty() || !std::all_of(id.begin(), id.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) continue;
+      struct stat st{};
+      if (stat(it->path().c_str(), &st) != 0) continue;
+      if (!include_system_ && st.st_uid != me) continue;
+      std::string name = process_name(it->path());
+      if (name.empty()) continue;
+      ProcSnap p;
+      long long ticks = 0, pages = 0;
+      if (!read_proc_stat(it->path(), p.stamp, ticks, pages)) continue;
+      p.pid = std::atoll(id.c_str());
+      p.app = std::move(name);
+      p.cpu_ms = ticks * tick_ms;
+      p.rss_kb = pages * page_kb;
+      std::string text;
+      if (read_file(it->path() / "status", text)) {
+        long long hwm = field_kb(text, "VmHWM:");
+        p.peak_kb = hwm > 0 ? hwm : p.rss_kb;
+      } else {
+        p.peak_kb = p.rss_kb;
+      }
+      if (read_file(it->path() / "io", text)) {
+        long long r = field_kb(text, "rchar:");
+        long long w = field_kb(text, "wchar:");
+        long long rb = field_kb(text, "read_bytes:");
+        long long wb = field_kb(text, "write_bytes:");
+        p.io_read = rb >= 0 ? rb : std::max<long long>(0, r);
+        p.io_write = wb >= 0 ? wb : std::max<long long>(0, w);
+      }
+      out.push_back(std::move(p));
+    }
+    return out;
+  }
+
+  SysStat sys_stat() override {
+    SysStat st;
+    std::string text;
+    if (read_file("/proc/meminfo", text)) {
+      long long total = field_kb(text, "MemTotal:");
+      long long avail = field_kb(text, "MemAvailable:");
+      if (total > 0) {
+        st.ram_total_kb = total;
+        st.ram_avail_kb = avail >= 0 ? avail : 0;
+        st.valid = true;
+      }
+    }
+    std::ifstream mounts("/proc/mounts");
+    std::string line;
+    std::set<std::string> seen;
+    while (std::getline(mounts, line) && st.disks.size() < 8) {
+      std::istringstream in(line);
+      std::string dev, mp, type;
+      if (!(in >> dev >> mp >> type)) continue;
+      if (!real_fs(type) || dev.compare(0, 5, "/dev/") != 0 || !seen.insert(dev).second) continue;
+      mp = unescape_mount(mp);
+      struct statvfs vfs{};
+      if (statvfs(mp.c_str(), &vfs) != 0 || vfs.f_blocks == 0) continue;
+      DiskStat d;
+      d.mount = mp;
+      d.total_kb = static_cast<long long>(vfs.f_blocks) * static_cast<long long>(vfs.f_frsize) / 1024;
+      d.free_kb = static_cast<long long>(vfs.f_bavail) * static_cast<long long>(vfs.f_frsize) / 1024;
+      st.disks.push_back(std::move(d));
+    }
+    return st;
   }
 
 private:

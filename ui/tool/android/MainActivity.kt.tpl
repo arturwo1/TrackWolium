@@ -105,6 +105,43 @@ class MainActivity : FlutterActivity() {
           result.success(Sync.events(this, from, to))
         }
         "label" -> result.success(Sync.label(this, call.argument<String>("pkg") ?: ""))
+        "openApp" -> {
+          val pkg = call.argument<String>("pkg") ?: ""
+          val launch = try {
+            packageManager.getLaunchIntentForPackage(pkg)
+          } catch (ex: Exception) {
+            null
+          }
+          if (launch == null) {
+            result.success(false)
+          } else {
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            result.success(try {
+              startActivity(launch)
+              true
+            } catch (ex: Exception) {
+              false
+            })
+          }
+        }
+        "appInfo" -> {
+          val pkg = call.argument<String>("pkg") ?: ""
+          result.success(try {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+          } catch (ex: Exception) {
+            false
+          })
+        }
+        "uninstallApp" -> {
+          val pkg = call.argument<String>("pkg") ?: ""
+          result.success(try {
+            startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+          } catch (ex: Exception) {
+            false
+          })
+        }
         "icon" -> result.success(Sync.icon(this, call.argument<String>("pkg") ?: ""))
         "saveFile" -> {
           pendingBytes = call.argument<ByteArray>("bytes")

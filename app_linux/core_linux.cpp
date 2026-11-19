@@ -215,6 +215,11 @@ int main(int argc, char** argv) {
     if (ticks % 2 == 0) {
       allowed = exists(data + "/consent");
       paused = exists(data + "/paused");
+      {
+        std::ifstream mf(data + "/metrics", std::ios::binary);
+        std::string mt((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+        engine.set_metrics(tw::parse_metrics(mt));
+      }
       if (exists(data + "/localapi")) api.start();
       else api.stop();
       if (exists(data + "/discordrpc")) proxy.start();

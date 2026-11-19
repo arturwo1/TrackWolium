@@ -7,13 +7,16 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'appctl.dart';
 import 'chart.dart';
 import 'data.dart';
 import 'device.dart';
+import 'forecast.dart';
 import 'icons.dart';
 import 'l10n.dart';
 import 'mark.dart';
 import 'picker.dart';
+import 'reschart.dart';
 import 'window_state.dart';
 import 'theme.dart';
 import 'updater.dart';
@@ -235,6 +238,10 @@ class _ShellState extends State<Shell> {
   bool loadSess = false;
   String? sortKey;
   bool sortAsc = false;
+  Map<String, ResAgg> resMap = {};
+  List<ResPoint> resPts = [];
+  List<SysPoint> sysPts = [];
+  final resSel = <String>{};
 
   int get dayCount => DateTime.utc(to.year, to.month, to.day).difference(DateTime.utc(from.year, from.month, from.day)).inDays + 1;
 
@@ -249,6 +256,9 @@ class _ShellState extends State<Shell> {
     final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
     contribs = usage.contribs(from, w0, w1, bin, useSess).where((c) => !Hidden.has(c.app)).toList();
     presenceRows = usage.presence(from, w0, w1);
+    final en = MetricPrefs.enabled.value;
+    resPts = en.any(procMetricIds.contains) ? usage.resPoints(from, w0, w1, bin) : [];
+    sysPts = en.any(sysMetricIds.contains) ? usage.sysPoints(from, w0, w1) : [];
     for (final r in presenceRows) {
       if (r.name.isEmpty && r.clientId.isNotEmpty) resolveRpcName(r.clientId);
     }
@@ -337,7 +347,7 @@ class _ShellState extends State<Shell> {
 
   Widget sortHead(String label, String k, TextStyle head) {
     final on = sortKey == k;
-    return HoverBox(
+    final box = HoverBox(
       onTap: () => sortBy(k),
       builder: (hovered) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
@@ -347,7 +357,156 @@ class _ShellState extends State<Shell> {
         ]),
       ),
     );
+    if (Platform.isAndroid) return box;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onSecondaryTapUp: (d) => columnMenu(d.globalPosition),
+      child: box,
+    );
   }
+
+  List<String> columnChoices() => [
+        if (liveMode) 'now',
+        if (multiState) ...['focused', 'open', 'minimized', 'background'],
+        'total',
+        if (multiState) ...procMetricIds.where(MetricPrefs.enabled.value.contains),
+      ];
+
+  List<String> activeColumns() => [for (final c in columnChoices()) if (ColumnPrefs.shown(c)) c];
+
+  String columnLabel(String id) => procMetricIds.contains(id) ? metricName(id) : tr(id);
+
+  RelativeRect menuPosition(Offset at) {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    return RelativeRect.fromRect(at & const Size(1, 1), Offset.zero & overlay.size);
+  }
+
+  Future<void> columnMenu(Offset at) async {
+    final ids = columnChoices();
+    final chosen = await showMenu<String>(
+      context: context,
+      position: menuPosition(at),
+      items: [
+        PopupMenuItem<String>(enabled: false, height: 32, child: Text(tr('colMenu'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800))),
+        for (final id in ids) CheckedPopupMenuItem<String>(value: id, checked: ColumnPrefs.shown(id), child: Text(columnLabel(id))),
+      ],
+    );
+    if (chosen == null) return;
+    ColumnPrefs.set(chosen, !ColumnPrefs.shown(chosen));
+  }
+
+  void toast(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
+  }
+
+  Future<bool> confirmEnd(AppUsage r) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: cPanel,
+        title: Text(tr('actEnd')),
+        content: Text(tr('actEndConfirm').replaceAll('{app}', r.title)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('cancel'))),
+          TextButton(style: TextButton.styleFrom(foregroundColor: cDanger), onPressed: () => Navigator.pop(c, true), child: Text(tr('actEnd'))),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> rowMenu(AppUsage r, Offset at) async {
+    Widget item(IconData icon, String text, {Color? color}) => Row(children: [Icon(icon, size: 18, color: color ?? cMuted), const SizedBox(width: 10), Text(text, style: TextStyle(color: color))]);
+    final control = appControlSupported;
+    final v = await showMenu<String>(
+      context: context,
+      position: menuPosition(at),
+      items: [
+        if (control) PopupMenuItem<String>(value: 'focus', child: item(Icons.open_in_new, tr('actFocus'))),
+        if (control && r.path.isNotEmpty) PopupMenuItem<String>(value: 'locate', child: item(Icons.folder_open, tr('actLocate'))),
+        if (control) PopupMenuItem<String>(value: 'end', child: item(Icons.power_settings_new, tr('actEnd'), color: cDanger)),
+        if (control) const PopupMenuDivider(),
+        PopupMenuItem<String>(value: 'hide', child: item(Icons.visibility_off_outlined, tr('actHide'))),
+      ],
+    );
+    switch (v) {
+      case 'focus':
+        if (!await focusApp(r.app)) toast(tr('actNoWindow'));
+        break;
+      case 'locate':
+        await openPath(r.path, select: true);
+        break;
+      case 'end':
+        if (!await confirmEnd(r)) return;
+        final n = await endApp(r.app);
+        toast(n > 0 ? tr('actEnded') : tr('actEndFailed'));
+        break;
+      case 'hide':
+        Hidden.hide(r.app, r.title);
+        break;
+    }
+  }
+
+  Future<void> androidMenu(AppUsage r) async {
+    buzz(1);
+    final bridge = collector?.bridge;
+    if (bridge == null) return;
+    final v = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: cPanel,
+      builder: (c) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(leading: AppIcon(title: r.title, path: r.path, size: 28), title: Text(r.title, style: const TextStyle(fontWeight: FontWeight.w800)), subtitle: Text(r.app, style: const TextStyle(color: cMuted, fontSize: 12))),
+          const Divider(height: 1),
+          ListTile(leading: const Icon(Icons.open_in_new), title: Text(tr('actOpenApp')), onTap: () => Navigator.pop(c, 'open')),
+          ListTile(leading: const Icon(Icons.info_outline), title: Text(tr('actAppInfo')), onTap: () => Navigator.pop(c, 'info')),
+          ListTile(leading: const Icon(Icons.delete_outline, color: cDanger), title: Text(tr('actUninstall'), style: const TextStyle(color: cDanger)), onTap: () => Navigator.pop(c, 'delete')),
+        ]),
+      ),
+    );
+    switch (v) {
+      case 'open':
+        if (!await bridge.openApp(r.app)) toast(tr('actEndFailed'));
+        break;
+      case 'info':
+        await bridge.appInfo(r.app);
+        break;
+      case 'delete':
+        await bridge.uninstallApp(r.app);
+        break;
+    }
+  }
+
+  String cellText(String id, AppUsage r) {
+    final a = resMap[r.app];
+    switch (id) {
+      case 'focused':
+        return r.ms[0] == 0 ? '-' : formatMs(r.ms[0]);
+      case 'open':
+        return r.ms[1] == 0 ? '-' : formatMs(r.ms[1]);
+      case 'minimized':
+        return r.ms[2] == 0 ? '-' : formatMs(r.ms[2]);
+      case 'background':
+        return r.ms[3] == 0 ? '-' : formatMs(r.ms[3]);
+      case 'total':
+        return formatMs(r.total);
+      case 'cpu':
+        return a == null || a.cpuMs == 0 ? '-' : formatCpuMs(a.cpuMs);
+      case 'ram':
+        return a == null || a.ramN == 0 ? '-' : formatKb(a.ramKb);
+      case 'peak':
+        return a == null || a.peakKb == 0 ? '-' : formatKb(a.peakKb);
+      case 'ior':
+        return a == null || a.ior == 0 ? '-' : formatBytes(a.ior);
+      case 'iow':
+        return a == null || a.iow == 0 ? '-' : formatBytes(a.iow);
+    }
+    return '-';
+  }
+
   String? only;
   Map<String, AppMeta> names = {};
   Metric metric = Metric.focused;
@@ -366,8 +525,12 @@ class _ShellState extends State<Shell> {
     requestFlush();
     checkForUpdate();
     Hidden.load();
+    MetricPrefs.load();
+    ColumnPrefs.load();
     loadHaptics();
     Hidden.apps.addListener(onHiddenChanged);
+    MetricPrefs.enabled.addListener(onMetricsChanged);
+    ColumnPrefs.hidden.addListener(onColumnsChanged);
     refresh();
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (++ticks % 20 == 0) requestFlush();
@@ -381,9 +544,26 @@ class _ShellState extends State<Shell> {
   @override
   void dispose() {
     Hidden.apps.removeListener(onHiddenChanged);
+    MetricPrefs.enabled.removeListener(onMetricsChanged);
+    ColumnPrefs.hidden.removeListener(onColumnsChanged);
     timer?.cancel();
     usage.close();
     super.dispose();
+  }
+
+  void onMetricsChanged() {
+    if (!mounted) return;
+    resSel.retainAll(MetricPrefs.enabled.value);
+    final fk = keyOf(from);
+    final tk = keyOf(to);
+    setState(() {
+      resMap = MetricPrefs.enabled.value.any(procMetricIds.contains) ? usage.resources(fk, tk) : {};
+      loadChart(force: true);
+    });
+  }
+
+  void onColumnsChanged() {
+    if (mounted) setState(() {});
   }
 
   void onHiddenChanged() {
@@ -506,6 +686,7 @@ class _ShellState extends State<Shell> {
       if (changed || ticks % every == 0) {
         loadChart(force: true);
         names = usage.names();
+        resMap = MetricPrefs.enabled.value.any(procMetricIds.contains) ? usage.resources(fk, tk) : {};
         rangeKey = rk;
       }
     });
@@ -744,6 +925,16 @@ class _ShellState extends State<Shell> {
           return r.ms[3];
         case 'total':
           return r.total;
+        case 'cpu':
+          return resMap[r.app]?.cpuMs ?? 0;
+        case 'ram':
+          return resMap[r.app]?.ramKb ?? 0;
+        case 'peak':
+          return resMap[r.app]?.peakKb ?? 0;
+        case 'ior':
+          return resMap[r.app]?.ior ?? 0;
+        case 'iow':
+          return resMap[r.app]?.iow ?? 0;
         case 'now':
           return r.now == null ? 0 : 4 - r.now!;
         default:
@@ -824,39 +1015,56 @@ class _ShellState extends State<Shell> {
             onPressed: showChartHelp,
           ),
         ]),
+        if (!Platform.isAndroid && MetricPrefs.enabled.value.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text(tr('resChartTitle'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800)),
+            for (final id in allMetricIds.where(MetricPrefs.enabled.value.contains))
+              FilterChip(
+                label: Text(metricName(id)),
+                selected: resSel.contains(id),
+                onSelected: (v) => setState(() => v ? resSel.add(id) : resSel.remove(id)),
+              ),
+          ]),
+        ],
         const SizedBox(height: 10),
         ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240, onView: onChartView),
+        if (!Platform.isAndroid && resSel.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          ResourceChart(
+            series: buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has),
+            first: from,
+            viewFrom: viewFrom,
+            viewTo: viewTo,
+            height: narrow ? 150 : 180,
+          ),
+        ],
       ]),
     );
   }
 
   Widget wideTable(TextStyle head) {
-    Widget hov(String? app, Widget child) => MouseRegion(
+    Widget hov(String? app, Widget child, {AppUsage? row}) => MouseRegion(
           onEnter: app == null ? null : (_) => setState(() => hoverApp = app),
           onExit: app == null ? null : (_) => setState(() => hoverApp = hoverApp == app ? null : hoverApp),
-          child: child,
+          child: row == null ? child : GestureDetector(behavior: HitTestBehavior.opaque, onSecondaryTapUp: (d) => rowMenu(row, d.globalPosition), child: child),
         );
-    Widget cell(String t, {TextStyle? style, String? app}) => hov(
-          app,
+    Widget cell(String t, AppUsage row, {TextStyle? style}) => hov(
+          row.app,
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
             child: EllipsisText(t, style: style),
           ),
+          row: row,
         );
-    final cols = 1 + (liveMode ? 1 : 0) + (multiState ? 4 : 0) + 1;
+    final ids = activeColumns();
+    final cols = 1 + ids.length;
     return Table(
       columnWidths: {0: const FlexColumnWidth(3), cols: const FixedColumnWidth(44)},
       children: [
         TableRow(children: [
           sortHead(tr('app'), 'app', head),
-          if (liveMode) sortHead(tr('now'), 'now', head),
-          if (multiState) ...[
-            sortHead(tr('focused'), 'focused', head),
-            sortHead(tr('open'), 'open', head),
-            sortHead(tr('minimized'), 'minimized', head),
-            sortHead(tr('background'), 'background', head),
-          ],
-          sortHead(tr('total'), 'total', head),
+          for (final id in ids) sortHead(columnLabel(id), id, head),
           const SizedBox.shrink(),
         ]),
         for (final r in sortedRows())
@@ -868,7 +1076,7 @@ class _ShellState extends State<Shell> {
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => toggleOnly(r.app),
-                onSecondaryTap: () => Hidden.hide(r.app, r.title),
+                onSecondaryTapUp: (d) => rowMenu(r, d.globalPosition),
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
                   onEnter: (_) => setState(() => hoverApp = r.app),
@@ -883,11 +1091,9 @@ class _ShellState extends State<Shell> {
                   ),
                 ),
               ),
-              if (liveMode) hov(r.app, nowCell(r)),
-              if (multiState)
-                for (final i in [0, 1, 2, 3]) cell(r.ms[i] == 0 ? '-' : formatMs(r.ms[i]), app: r.app),
-              cell(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w800), app: r.app),
-              hov(r.app, Align(alignment: Alignment.center, child: hideButton(r))),
+              for (final id in ids)
+                if (id == 'now') hov(r.app, nowCell(r), row: r) else cell(cellText(id, r), r, style: id == 'total' ? const TextStyle(fontWeight: FontWeight.w800) : null),
+              hov(r.app, Align(alignment: Alignment.center, child: hideButton(r)), row: r),
             ],
           ),
       ],
@@ -915,6 +1121,7 @@ class _ShellState extends State<Shell> {
       for (final r in sortedRows())
         GestureDetector(
           onTap: () => toggleOnly(r.app),
+          onLongPress: Platform.isAndroid ? () => androidMenu(r) : null,
           child: Container(
           width: double.infinity,
           margin: const EdgeInsets.only(top: 8),
@@ -1150,6 +1357,9 @@ class _SettingsPageState extends State<SettingsPage> {
   String? exportError;
   bool checking = false;
   String deviceLabel = deviceName();
+  final metricsUsage = Usage();
+  late final List<int> forecastHist = metricsUsage.forecastHistory();
+  late final int forecastDisks = metricsUsage.sysDiskCount();
   late bool localApi = prefs.flag('localapi');
   late bool discord = prefs.flag('discordrpc');
   String rpcStatus = '';
@@ -1167,6 +1377,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void dispose() {
     rpcTimer?.cancel();
+    metricsUsage.close();
     super.dispose();
   }
 
@@ -1226,13 +1437,60 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  String statusLine() => translateUpdateStatus(Platform.isWindows ? updateStatus() : lastUpdateStatus);
+
+  Widget metricsSection() {
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: MetricPrefs.enabled,
+      builder: (context, en, _) {
+        final f = forecastDb(enabled: en, histRows: forecastHist[0], histDays: forecastHist[1], disks: forecastDisks == 0 ? defaultDiskCount : forecastDisks);
+        String size(int b) => formatSize(b, sizeUnits());
+        Widget row(String id) {
+          final on = en.contains(id);
+          var cost = f.perMetric[id] ?? 0;
+          if (!on && procMetricIds.contains(id) && f.base == 0) cost += baseCost(f.rowsPerDay);
+          return Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(metricName(id), style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text(tr('metricsPerMonth').replaceAll('{size}', size(cost)), style: const TextStyle(color: cMuted, fontSize: 12)),
+              ]),
+            ),
+            Switch(
+              value: on,
+              onChanged: (v) {
+                buzz(0);
+                MetricPrefs.set(id, v);
+              },
+            ),
+          ]);
+        }
+
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(tr('metricsTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Text(tr('metricsHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+          const SizedBox(height: 6),
+          Row(children: [
+            Expanded(child: Text(tr('metricsTime'), style: const TextStyle(fontWeight: FontWeight.w600))),
+            const Switch(value: true, onChanged: null),
+          ]),
+          for (final id in allMetricIds) row(id),
+          const SizedBox(height: 6),
+          Text(tr('metricsTotal').replaceAll('{size}', size(f.total)), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+          Text(f.measured ? tr('metricsMeasured') : tr('metricsEstimated'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        ]);
+      },
+    );
+  }
+
   Widget hiddenSection() {
     return ValueListenableBuilder<Map<String, String>>(
       valueListenable: Hidden.apps,
       builder: (context, map, _) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(tr('hiddenApps'), style: const TextStyle(fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
-        Text(map.isEmpty ? tr('hiddenNone') : tr('hiddenHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        Text(map.isEmpty ? tr(Platform.isAndroid ? 'hiddenNoneTouch' : 'hiddenNone') : tr('hiddenHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
         for (final e in map.entries)
           Row(children: [
             Expanded(child: EllipsisText(e.value.isEmpty ? prettyApp(e.key) : e.value, style: const TextStyle(fontWeight: FontWeight.w600))),
@@ -1327,16 +1585,22 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
           const Divider(height: 28),
         ],
-        Row(children: [
-          Expanded(child: Text(tr('thisDevice'), style: const TextStyle(fontWeight: FontWeight.w700))),
-          Flexible(child: Text(deviceLabel, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cMuted))),
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(tr('thisDevice'), style: const TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text(deviceLabel, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cMuted)),
+              Text('${tr('deviceId')}: ${deviceId()}', style: const TextStyle(color: cMuted, fontSize: 12)),
+            ]),
+          ),
           IconButton(
             tooltip: tr('deviceEdit'),
+            visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.edit_outlined, size: 20),
             onPressed: renameDevice,
           ),
         ]),
-        Text('${tr('deviceId')}: ${deviceId()}', style: const TextStyle(color: cMuted, fontSize: 12)),
         const Divider(height: 28),
         if (updaterSupported) ...[
           Row(children: [
@@ -1371,7 +1635,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             if (checkText != null) Text(checkText!, style: const TextStyle(color: cMuted)),
           ]),
-          if (Platform.isWindows && updateStatus().isNotEmpty) Text(updateStatus(), style: const TextStyle(color: cMuted, fontSize: 12)),
+          if (statusLine().isNotEmpty) Text(statusLine(), style: const TextStyle(color: cMuted, fontSize: 12)),
           const Divider(height: 28),
         ],
         Row(children: [
@@ -1437,6 +1701,10 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
           ]),
+          const Divider(height: 28),
+        ],
+        if (!Platform.isAndroid) ...[
+          metricsSection(),
           const Divider(height: 28),
         ],
         hiddenSection(),

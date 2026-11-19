@@ -103,6 +103,41 @@ class Contrib {
   final int ms;
 }
 
+class ResAgg {
+  int cpuMs = 0;
+  int ramSum = 0;
+  int ramN = 0;
+  int peakKb = 0;
+  int ior = 0;
+  int iow = 0;
+
+  int get ramKb => ramN == 0 ? 0 : ramSum ~/ ramN;
+
+  bool get empty => cpuMs == 0 && ramN == 0 && peakKb == 0 && ior == 0 && iow == 0;
+}
+
+class ResPoint {
+  const ResPoint(this.start, this.end, this.app, this.cpuMs, this.ramKb, this.peakKb, this.ior, this.iow);
+
+  final int start;
+  final int end;
+  final String app;
+  final int cpuMs;
+  final int ramKb;
+  final int peakKb;
+  final int ior;
+  final int iow;
+}
+
+class SysPoint {
+  const SysPoint(this.t, this.kind, this.total, this.free);
+
+  final int t;
+  final String kind;
+  final int total;
+  final int free;
+}
+
 class PresenceRow {
   const PresenceRow(this.sec, this.clientId, this.name, this.details, this.state, this.raw);
 
@@ -227,6 +262,83 @@ class Usage {
       } catch (_) {}
     }
     return out;
+  }
+
+  Map<String, ResAgg> resources(String from, String to) {
+    final db = _open();
+    final out = <String, ResAgg>{};
+    if (db == null) return out;
+    try {
+      for (final r in db.select('SELECT app, SUM(cpu) AS cpu, SUM(ram) AS ram, SUM(n) AS n, MAX(peak) AS peak, SUM(ior) AS ior, SUM(iow) AS iow FROM res WHERE day BETWEEN ? AND ? GROUP BY app', [from, to])) {
+        out[r['app'] as String] = ResAgg()
+          ..cpuMs = r['cpu'] as int
+          ..ramSum = r['ram'] as int
+          ..ramN = r['n'] as int
+          ..peakKb = r['peak'] as int
+          ..ior = r['ior'] as int
+          ..iow = r['iow'] as int;
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  List<ResPoint> resPoints(DateTime first, int w0, int w1, int bin) {
+    final db = _open();
+    if (db == null) return [];
+    final out = <ResPoint>[];
+    final origin = DateTime.utc(first.year, first.month, first.day);
+    try {
+      final a = first.add(Duration(seconds: w0));
+      final b = first.add(Duration(seconds: w1));
+      String key(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      final rows = db.select(
+          'SELECT day, (slot / ?3) * ?3 AS bslot, app, SUM(cpu) AS cpu, SUM(ram) AS ram, SUM(n) AS n, MAX(peak) AS peak, SUM(ior) AS ior, SUM(iow) AS iow FROM res WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app',
+          [key(a), key(b), bin]);
+      for (final r in rows) {
+        final d = DateTime.parse('${r['day']}T00:00:00Z').difference(origin).inDays;
+        final start = d * 86400 + (r['bslot'] as int) * 300;
+        final n = r['n'] as int;
+        out.add(ResPoint(start, start + bin * 300, r['app'] as String, r['cpu'] as int, n == 0 ? 0 : (r['ram'] as int) ~/ n, r['peak'] as int, r['ior'] as int, r['iow'] as int));
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  List<SysPoint> sysPoints(DateTime first, int w0, int w1) {
+    final db = _open();
+    if (db == null) return [];
+    final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
+    try {
+      final rows = db.select('SELECT ts, kind, a, b FROM sysmon WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts', [firstUnix + w0, firstUnix + w1]);
+      return [for (final r in rows) SysPoint((r['ts'] as int) - firstUnix, r['kind'] as String, r['a'] as int, r['b'] as int)];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  List<int> forecastHistory() {
+    final db = _open();
+    if (db == null) return [0, 0];
+    try {
+      final since = DateTime.now().subtract(const Duration(days: 30));
+      final key = '${since.year}-${since.month.toString().padLeft(2, '0')}-${since.day.toString().padLeft(2, '0')}';
+      final r = db.select('SELECT COUNT(*) AS c, COUNT(DISTINCT day) AS d FROM (SELECT DISTINCT day, slot, app FROM timeline WHERE state < 3 AND day >= ?)', [key]);
+      if (r.isEmpty) return [0, 0];
+      return [r.first['c'] as int, r.first['d'] as int];
+    } catch (_) {
+      return [0, 0];
+    }
+  }
+
+  int sysDiskCount() {
+    final db = _open();
+    if (db == null) return 0;
+    try {
+      final r = db.select("SELECT COUNT(DISTINCT kind) AS c FROM sysmon WHERE kind LIKE 'disk:%'");
+      return r.isEmpty ? 0 : r.first['c'] as int;
+    } catch (_) {
+      return 0;
+    }
   }
 
   List<PresenceRow> presence(DateTime first, int w0, int w1) {
@@ -360,6 +472,70 @@ class Settings {
         File(_consent).writeAsStringSync('1');
       } else if (File(_consent).existsSync()) {
         File(_consent).deleteSync();
+      }
+    } catch (_) {}
+  }
+}
+
+class MetricPrefs {
+  static final ValueNotifier<Set<String>> enabled = ValueNotifier(<String>{});
+
+  static File get _file => File('${dataDir()}${Platform.pathSeparator}metrics');
+
+  static void load() {
+    try {
+      enabled.value = _file.existsSync() ? _file.readAsStringSync().split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toSet() : <String>{};
+    } catch (_) {}
+  }
+
+  static bool has(String id) => enabled.value.contains(id);
+
+  static void set(String id, bool on) {
+    final next = Set<String>.of(enabled.value);
+    if (on) {
+      next.add(id);
+    } else {
+      next.remove(id);
+    }
+    enabled.value = next;
+    try {
+      if (next.isEmpty) {
+        if (_file.existsSync()) _file.deleteSync();
+      } else {
+        Directory(dataDir()).createSync(recursive: true);
+        _file.writeAsStringSync('${next.join(' ')}\n');
+      }
+    } catch (_) {}
+  }
+}
+
+class ColumnPrefs {
+  static final ValueNotifier<Set<String>> hidden = ValueNotifier(<String>{});
+
+  static File get _file => File('${dataDir()}${Platform.pathSeparator}columns');
+
+  static void load() {
+    try {
+      hidden.value = _file.existsSync() ? _file.readAsStringSync().split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toSet() : <String>{};
+    } catch (_) {}
+  }
+
+  static bool shown(String id) => !hidden.value.contains(id);
+
+  static void set(String id, bool on) {
+    final next = Set<String>.of(hidden.value);
+    if (on) {
+      next.remove(id);
+    } else {
+      next.add(id);
+    }
+    hidden.value = next;
+    try {
+      if (next.isEmpty) {
+        if (_file.existsSync()) _file.deleteSync();
+      } else {
+        Directory(dataDir()).createSync(recursive: true);
+        _file.writeAsStringSync('${next.join(' ')}\n');
       }
     } catch (_) {}
   }

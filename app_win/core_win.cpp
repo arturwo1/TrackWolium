@@ -234,6 +234,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     if (now - last_check >= 4000 || last_check == 0) {
       allowed = app::consent_given();
       is_paused = app::paused();
+      {
+        std::ifstream mf{std::filesystem::path(app::userdata(L"metrics")), std::ios::binary};
+        std::string mt((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
+        engine.set_metrics(tw::parse_metrics(mt));
+      }
       if (app::flag(L"localapi")) api.start();
       else api.stop();
       if (app::flag(L"discordrpc")) proxy.start();
