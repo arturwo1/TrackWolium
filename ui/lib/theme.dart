@@ -82,6 +82,12 @@ class Panel extends StatelessWidget {
   }
 }
 
+Widget copyOnlyMenu(BuildContext context, SelectableRegionState state) {
+  final items = state.contextMenuButtonItems.where((i) => i.type == ContextMenuButtonType.copy).toList();
+  if (items.isEmpty) return const SizedBox.shrink();
+  return AdaptiveTextSelectionToolbar.buttonItems(anchors: state.contextMenuAnchors, buttonItems: items);
+}
+
 class HoverBox extends StatefulWidget {
   const HoverBox({super.key, required this.builder, this.onTap});
 

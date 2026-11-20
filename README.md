@@ -74,6 +74,7 @@ More in [platforms](docs/platforms.md).
 | [Local API](docs/local-api.md) | endpoints, parameters, OBS widget |
 | [Platforms](docs/platforms.md) | Android, Linux Wayland, macOS notes |
 | [Updates](docs/updates.md) | when and how Wolium checks for updates |
+| [Analytics, AFK, categories](docs/analytics.md) | real focus, categories, chart options, hotkeys |
 | [Privacy and data](docs/privacy.md) | what is stored and where |
 | [Architecture](docs/architecture.md) | core, UI, storage |
 | [Building](docs/building.md) | build, tests, translations, CI |

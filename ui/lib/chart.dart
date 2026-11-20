@@ -183,6 +183,9 @@ class ActivityChart extends StatefulWidget {
     this.series = const [],
     this.showTime = true,
     this.onPickApp,
+    this.previous = const [],
+    this.avgLine = false,
+    this.compare = false,
   });
 
   final DateTime first;
@@ -199,6 +202,9 @@ class ActivityChart extends StatefulWidget {
   final List<ResSeries> series;
   final bool showTime;
   final void Function(String app)? onPickApp;
+  final List<Contrib> previous;
+  final bool avgLine;
+  final bool compare;
 
   @override
   State<ActivityChart> createState() => _ActivityChartState();
@@ -217,6 +223,7 @@ class _ActivityChartState extends State<ActivityChart> {
   double vx0 = 0;
   double vx1 = _daySec.toDouble();
   List<Bucket?> cache = [];
+  List<int> prevCache = [];
   List<Object?> cacheKey = [];
   int cLo = 0;
   int cHi = 0;
@@ -383,16 +390,17 @@ class _ActivityChartState extends State<ActivityChart> {
     final count = (total / b).ceil();
     final needLo = (vx0 / b).floor() - 1;
     final needHi = (vx1 / b).ceil() + 1;
-    final sameKey = cacheKey.length == 4 &&
+    final sameKey = cacheKey.length == 5 &&
         identical(cacheKey[0], widget.contribs) &&
         cacheKey[1] == widget.only &&
         cacheKey[2] == widget.metric &&
-        cacheKey[3] == b;
+        cacheKey[3] == b &&
+        identical(cacheKey[4], widget.previous);
     if (sameKey && (needLo >= cLo || cLo == 0) && (needHi <= cHi || cHi >= count)) return;
     final margin = ((needHi - needLo) * 1.0).ceil();
     cLo = math.max(0, needLo - margin);
     cHi = math.min(count, needHi + margin);
-    cacheKey = [widget.contribs, widget.only, widget.metric, b];
+    cacheKey = [widget.contribs, widget.only, widget.metric, b, widget.previous];
     final list = List<Bucket?>.filled(math.max(0, cHi - cLo), null);
     final winStart = cLo * b;
     final winEnd = cHi * b;
@@ -422,8 +430,43 @@ class _ActivityChartState extends State<ActivityChart> {
       if (bk.value > peak) peak = bk.value;
     }
     cache = list;
+    final prevList = List<int>.filled(math.max(0, cHi - cLo), 0);
+    for (final c in widget.previous) {
+      if (widget.only != null && c.app != widget.only) continue;
+      if (!_inMetric(c.state, widget.metric)) continue;
+      final cs = c.start;
+      final ce = c.end > c.start ? c.end : c.start + 1;
+      if (ce <= winStart || cs >= winEnd) continue;
+      final dur = ce - cs;
+      final i0 = math.max(cLo, cs ~/ b);
+      final i1 = math.min(cHi - 1, (ce - 1) ~/ b);
+      for (var i = i0; i <= i1; i++) {
+        final ov = math.min(ce, (i + 1) * b) - math.max(cs, i * b);
+        if (ov > 0) prevList[i - cLo] += (c.ms * ov / dur).round();
+      }
+    }
+    for (final v in prevList) {
+      if (v > peak) peak = v;
+    }
+    prevCache = prevList;
     final floor = math.min(b * 1000, 60000);
     top = ((peak < floor ? floor : peak) * 1.18).ceil();
+  }
+
+  double? avgValue() {
+    final maxI = (widget.total / bucket).ceil() - 1;
+    final lo = ((vx0 / bucket).floor()).clamp(0, maxI).toInt();
+    final hi = ((vx1 / bucket).ceil()).clamp(0, maxI).toInt();
+    var sum = 0;
+    var n = 0;
+    for (var i = lo; i <= hi; i++) {
+      final v = valueAt(i);
+      if (v > 0) {
+        sum += v;
+        n++;
+      }
+    }
+    return n == 0 ? null : sum / n;
   }
 
   Bucket? bucketOf(int i) => (i < cLo || i >= cHi) ? null : cache[i - cLo];
@@ -698,6 +741,8 @@ class _ActivityChartState extends State<ActivityChart> {
                       yBottom: 0,
                       ySpan: top.toDouble(),
                       hover: t != null && t.visible ? t.bucket : null,
+                      prev: widget.compare ? prevCache : const [],
+                      avg: widget.avgLine ? avgValue() : null,
                     ),
                     );
                   },
@@ -910,7 +955,7 @@ class _ActivityChartState extends State<ActivityChart> {
     );
   }
 
-  Widget pinnable(_Tip t, Widget child) => t.interactive ? SelectionArea(child: child) : child;
+  Widget pinnable(_Tip t, Widget child) => t.interactive ? SelectionArea(contextMenuBuilder: copyOnlyMenu, child: child) : child;
 
   BoxDecoration get _tipDecoration => BoxDecoration(
         color: cBg,
@@ -931,6 +976,8 @@ class _ActivityChartState extends State<ActivityChart> {
           Text(rangeText(t.bucket), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 2),
           Text('${metricLabel(widget.metric)}: ${formatMs(b.value)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w900, fontSize: 15)),
+          if (widget.compare && t.bucket >= cLo && t.bucket - cLo < prevCache.length)
+            Text('${tr('comparePrev')}: ${formatMs(prevCache[t.bucket - cLo])}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
           if (presenceIn(t.bucket).isNotEmpty)
             Flexible(
@@ -1060,6 +1107,7 @@ class _ActivityChartState extends State<ActivityChart> {
           ]),
           const SizedBox(height: 4),
           Text('${metricLabel(widget.metric)}: ${formatMs(total)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800, fontSize: 13)),
+          Text('${tr('launches')}: ${sessions.length}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
           Text(tr('sessions'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
@@ -1087,7 +1135,7 @@ class _ActivityChartState extends State<ActivityChart> {
 }
 
 class _ChartPainter extends CustomPainter {
-  _ChartPainter({required this.series, required this.focus, required this.showTime, required this.buckets, required this.cLo, required this.bucket, required this.first, required this.total, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover});
+  _ChartPainter({required this.series, required this.focus, required this.showTime, required this.buckets, required this.cLo, required this.bucket, required this.first, required this.total, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover, this.prev = const [], this.avg});
 
   final List<ResSeries> series;
   final ResSeries? focus;
@@ -1102,6 +1150,8 @@ class _ChartPainter extends CustomPainter {
   final double yBottom;
   final double ySpan;
   final int? hover;
+  final List<int> prev;
+  final double? avg;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1206,6 +1256,43 @@ class _ChartPainter extends CustomPainter {
       );
     }
     paintSeries(canvas, plotW, plotH, span);
+    if (prev.isNotEmpty && !dim) {
+      final dash = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..color = cMuted.withValues(alpha: 0.85);
+      final path = Path();
+      var started = false;
+      for (var i = lo; i <= hi; i++) {
+        final k = i - cLo;
+        final v = k < 0 || k >= prev.length ? 0 : prev[k];
+        final pt = Offset(xOf(center(i)), yOf(v.toDouble()));
+        if (!started) {
+          path.moveTo(pt.dx, pt.dy);
+          started = true;
+        } else {
+          path.lineTo(pt.dx, pt.dy);
+        }
+      }
+      for (final m in path.computeMetrics()) {
+        var d = 0.0;
+        while (d < m.length) {
+          canvas.drawPath(m.extractPath(d, math.min(m.length, d + 6)), dash);
+          d += 11;
+        }
+      }
+    }
+    if (avg != null && !dim) {
+      final y = yOf(avg!);
+      final line = Paint()
+        ..strokeWidth = 1.2
+        ..color = cWarn.withValues(alpha: 0.9);
+      for (var x = _left; x < _left + plotW; x += 10) {
+        canvas.drawLine(Offset(x, y), Offset(math.min(x + 5, _left + plotW), y), line);
+      }
+      final tp = TextPainter(text: TextSpan(text: '${tr('avgLine')}: ${formatMs(avg!.round())}', style: const TextStyle(color: cWarn, fontSize: 11, fontWeight: FontWeight.w700)), textDirection: TextDirection.ltr)..layout();
+      tp.paint(canvas, Offset(_left + plotW - tp.width - 4, math.max(_top, y - tp.height - 2)));
+    }
     if (hover != null && !dim) {
       final p = Offset(xOf(center(hover!)), yOf(valueOf(hover!)));
       canvas.drawLine(

@@ -22,6 +22,7 @@ public:
   bool add_timeline(const std::string& day, const std::vector<SlotEntry>& entries) override;
   bool set_names(const std::vector<AppMeta>& names) override;
   bool add_resources(const std::string& day, const std::vector<ResEntry>& entries) override;
+  bool add_afk(const std::string& day, const std::vector<SlotEntry>& entries) override;
   bool add_system(const std::vector<SysEntry>& entries) override;
   bool add_sessions(const std::vector<SessionRec>& sessions) override;
   std::vector<SessionRec> load_sessions(long long from, long long to);

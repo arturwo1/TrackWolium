@@ -1,3 +1,4 @@
+#include <dlfcn.h>
 #include "tw/platform.hpp"
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -97,6 +98,49 @@ std::string unescape_mount(const std::string& s) {
   return out;
 }
 
+
+namespace {
+
+struct XssInfo {
+  unsigned long window;
+  int state;
+  int kind;
+  unsigned long til_or_since;
+  unsigned long idle;
+  unsigned long event_mask;
+};
+
+long long xss_idle_ms() {
+  static bool tried = false;
+  static void* dpy = nullptr;
+  static void* xss_lib = nullptr;
+  static XssInfo* (*alloc)() = nullptr;
+  static int (*query)(void*, unsigned long, XssInfo*) = nullptr;
+  static void* (*open_display)(const char*) = nullptr;
+  static unsigned long (*root_of)(void*) = nullptr;
+  static XssInfo* info = nullptr;
+  if (!tried) {
+    tried = true;
+    void* x11 = dlopen("libX11.so.6", RTLD_NOW);
+    xss_lib = dlopen("libXss.so.1", RTLD_NOW);
+    if (x11 && xss_lib) {
+      open_display = reinterpret_cast<decltype(open_display)>(dlsym(x11, "XOpenDisplay"));
+      root_of = reinterpret_cast<decltype(root_of)>(dlsym(x11, "XDefaultRootWindow"));
+      alloc = reinterpret_cast<decltype(alloc)>(dlsym(xss_lib, "XScreenSaverAllocInfo"));
+      query = reinterpret_cast<decltype(query)>(dlsym(xss_lib, "XScreenSaverQueryInfo"));
+      if (open_display && root_of && alloc && query) {
+        dpy = open_display(nullptr);
+        if (dpy) info = alloc();
+      }
+    }
+  }
+  if (!dpy || !info) return -1;
+  if (!query(dpy, root_of(dpy), info)) return -1;
+  return static_cast<long long>(info->idle);
+}
+
+}
+
 class LinuxProbe : public IProbe {
 public:
   explicit LinuxProbe(bool include_system) : include_system_(include_system) {}
@@ -161,6 +205,8 @@ public:
   }
 
   bool supports_metrics() const override { return true; }
+
+  long long idle_ms() override { return xss_idle_ms(); }
 
   std::vector<ProcSnap> proc_snapshot() override {
     std::vector<ProcSnap> out;

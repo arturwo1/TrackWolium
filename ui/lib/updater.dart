@@ -1,6 +1,7 @@
 import 'package:path_provider/path_provider.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'data.dart';
 import 'l10n.dart';
@@ -179,11 +180,22 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
     final total = res.contentLength;
     var got = 0;
     final sink = target.openWrite();
+    final buffer = BytesBuilder(copy: false);
+    var reported = 0.0;
     await for (final chunk in res) {
-      sink.add(chunk);
+      buffer.add(chunk);
       got += chunk.length;
-      if (total > 0) progress(got / total);
+      if (buffer.length >= 1 << 20) await sink.addStream(Stream<List<int>>.value(buffer.takeBytes()));
+      if (total > 0) {
+        final p = got / total;
+        if (p - reported >= 0.01 || p >= 1) {
+          reported = p;
+          progress(p);
+        }
+      }
     }
+    if (buffer.length > 0) sink.add(buffer.takeBytes());
+    await sink.flush();
     await sink.close();
     if (total > 0 && got != total) {
       updateNote = '$got/$total';

@@ -25,6 +25,8 @@ using tw::i18n::tr;
 
 constexpr UINT kTrayMsg = WM_APP + 1;
 constexpr UINT kTrayId = 1;
+constexpr int kHotkeyOpen = 1;
+constexpr int kHotkeyPause = 2;
 constexpr UINT_PTR kTimer = 1;
 constexpr UINT kMsgUpdate = WM_APP + 4;
 constexpr UINT kMsgBadge = WM_APP + 5;
@@ -568,6 +570,23 @@ void launch_viewer() {
   }
 }
 
+void open_or_raise_viewer() {
+  if (!g->viewer || WaitForSingleObject(g->viewer, 0) != WAIT_TIMEOUT) {
+    launch_viewer();
+    return;
+  }
+  DWORD want = GetProcessId(g->viewer);
+  HWND h = nullptr;
+  while ((h = FindWindowExW(nullptr, h, L"FLUTTER_RUNNER_WIN32_WINDOW", nullptr)) != nullptr) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != want) continue;
+    ShowWindow(h, IsIconic(h) ? SW_RESTORE : SW_SHOW);
+    SetForegroundWindow(h);
+    return;
+  }
+}
+
 void toggle_pause() {
   std::wstring flag = app::userdata(L"paused");
   if (app::exists(flag)) {
@@ -741,6 +760,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
       if (wp == kTimer) on_timer();
       return 0;
+    case WM_HOTKEY:
+      if (g && wp == kHotkeyOpen) open_or_raise_viewer();
+      else if (g && wp == kHotkeyPause) toggle_pause();
+      return 0;
     case WM_QUERYENDSESSION:
       return TRUE;
     case WM_ENDSESSION:
@@ -817,6 +840,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   if (!guard.background) launch_viewer();
   guard.check_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
   register_triggers(guard.hwnd);
+  RegisterHotKey(guard.hwnd, kHotkeyOpen, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'W');
+  RegisterHotKey(guard.hwnd, kHotkeyPause, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'P');
   std::thread(update_loop, guard.hwnd).detach();
   std::thread(network_watch).detach();
 
@@ -826,6 +851,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     DispatchMessageW(&m);
   }
 
+  UnregisterHotKey(guard.hwnd, kHotkeyOpen);
+  UnregisterHotKey(guard.hwnd, kHotkeyPause);
   KillTimer(guard.hwnd, kTimer);
   tray_remove();
   stop_core();

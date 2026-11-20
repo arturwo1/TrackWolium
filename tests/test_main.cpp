@@ -580,6 +580,8 @@ struct MetricsProbe : tw::PushProbe {
   tw::SysStat sys;
   int proc_calls = 0;
   int sys_calls = 0;
+  long long idle = -1;
+  long long idle_ms() override { return idle; }
   bool supports_metrics() const override { return true; }
   std::vector<tw::ProcSnap> proc_snapshot() override {
     ++proc_calls;
@@ -595,6 +597,11 @@ struct ResStore : FakeStore {
   std::map<std::pair<int, std::string>, tw::ResEntry> res;
   std::vector<tw::SysEntry> sysrows;
   int res_calls = 0;
+  std::map<std::pair<int, std::string>, long long> afk;
+  bool add_afk(const std::string&, const std::vector<tw::SlotEntry>& v) override {
+    for (const auto& e : v) afk[{e.slot, e.app}] += e.ms;
+    return true;
+  }
   bool add_resources(const std::string&, const std::vector<tw::ResEntry>& v) override {
     ++res_calls;
     for (const auto& e : v) {
@@ -758,6 +765,58 @@ void test_engine_metrics_skips_background_apps() {
   CHECK(store->res.count({1, "bg"}) == 0);
 }
 
+void test_engine_afk_counts_idle_focus() {
+  auto probe = std::make_shared<MetricsProbe>();
+  auto store = std::make_shared<ResStore>();
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_slot_source([] { return 1; });
+  e.set_store(store, Duration(1000000));
+  e.set_afk_threshold(Duration(60000));
+  probe->push({{"a", State::Focused}, {"b", State::Open}});
+  probe->idle = 1000;
+  e.step(at(0));
+  e.step(at(1000));
+  probe->idle = 70000;
+  e.step(at(2000));
+  e.step(at(3000));
+  e.finish();
+  CHECK(store->afk[{1, "a"}] == 2000);
+  CHECK(store->afk.count({1, "b"}) == 0);
+  tw::Engine off(probe, Duration(60000));
+  auto store2 = std::make_shared<ResStore>();
+  off.set_day_source([] { return std::string("2026-01-01"); });
+  off.set_slot_source([] { return 1; });
+  off.set_store(store2, Duration(1000000));
+  off.step(at(0));
+  off.step(at(1000));
+  off.finish();
+  CHECK(store2->afk.empty());
+}
+
+void test_afk_threshold_parse() {
+  CHECK(tw::parse_afk_threshold("").count() == 300000);
+  CHECK(tw::parse_afk_threshold("120\n").count() == 120000);
+  CHECK(tw::parse_afk_threshold("0").count() == 0);
+  CHECK(tw::parse_afk_threshold("5").count() == 30000);
+  CHECK(tw::parse_afk_threshold("999999").count() == 3600000);
+  CHECK(tw::parse_afk_threshold("abc").count() == 300000);
+}
+
+void test_proc_tracker_ignores_old_unseen_processes() {
+  tw::ProcTracker t;
+  t.update({snap(1, 10, "a", 100, 1, 1, 0, 0)});
+  auto old = snap(2, 11, "a", 5000, 1, 1, 900, 900);
+  old.age_ms = 3600000;
+  auto fresh = snap(3, 12, "a", 400, 1, 1, 50, 60);
+  fresh.age_ms = 2000;
+  auto r = t.update({snap(1, 10, "a", 150, 1, 1, 0, 0), old, fresh});
+  CHECK(r["a"].cpu_ms == 50 + 400);
+  CHECK(r["a"].io_read == 50 && r["a"].io_write == 60);
+  auto r2 = t.update({snap(1, 10, "a", 160, 1, 1, 0, 0), old, fresh});
+  CHECK(r2["a"].cpu_ms == 10);
+}
+
 void test_engine_time_can_be_disabled() {
   auto probe = std::make_shared<MetricsProbe>();
   auto store = std::make_shared<ResStore>();
@@ -878,6 +937,9 @@ int main() {
   test_engine_metrics_no_rows_when_disabled();
   test_engine_metrics_skips_background_apps();
   test_engine_time_can_be_disabled();
+  test_engine_afk_counts_idle_focus();
+  test_afk_threshold_parse();
+  test_proc_tracker_ignores_old_unseen_processes();
   test_sqlite_resources();
   test_native_metrics_smoke();
 #ifdef _WIN32

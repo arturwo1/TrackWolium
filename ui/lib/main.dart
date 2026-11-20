@@ -21,6 +21,8 @@ import 'window_state.dart';
 import 'theme.dart';
 import 'updater.dart';
 import 'android_collector.dart';
+import 'categories_ui.dart';
+import 'prefs.dart';
 import 'package:path_provider/path_provider.dart';
 import 'posix.dart';
 import 'haptics.dart';
@@ -244,6 +246,54 @@ class _ShellState extends State<Shell> {
   List<ResPoint> resPts = [];
   List<SysPoint> sysPts = [];
   final resSel = <String>{};
+  String? catFilter;
+  List<Contrib> previous = [];
+  Map<String, int> catTotals = {};
+  Set<String> rowApps = {};
+  bool dirty = false;
+
+  bool get realFocusOn => ViewPrefs.realFocus && !Platform.isAndroid && !MetricPrefs.has('notime');
+
+  DateTime prevFrom() => DateTime(from.year, from.month, from.day - dayCount);
+
+  bool appAllowed(String app) {
+    if (Hidden.has(app)) return false;
+    final cat = Categories.byId(catFilter);
+    if (cat != null && !cat.apps.contains(app)) return false;
+    return ViewPrefs.minSec == 0 || rowApps.contains(app);
+  }
+
+  List<AppUsage> prepareRows(List<AppUsage> src, String fk, String tk) {
+    var list = src.where((r) => !Hidden.has(r.app)).toList();
+    if (realFocusOn) {
+      final idle = usage.afk(fk, tk);
+      for (final r in list) {
+        final v = idle[r.app];
+        if (v != null) r.ms[0] = math.max(0, r.ms[0] - v);
+      }
+      list = list.where((r) => r.total > 0).toList();
+    }
+    if (ViewPrefs.minSec > 0) {
+      list = list.where((r) => (r.visible > 0 ? r.visible : r.total) >= ViewPrefs.minSec * 1000).toList();
+    }
+    rowApps = {for (final r in list) r.app};
+    final totals = <String, int>{};
+    for (final r in list) {
+      final c = Categories.of(r.app);
+      if (c != null) totals[c.id] = (totals[c.id] ?? 0) + metricValue(r);
+    }
+    catTotals = totals;
+    final cat = Categories.byId(catFilter);
+    if (cat != null) list = list.where((r) => cat.apps.contains(r.app)).toList();
+    return list;
+  }
+
+  void onViewChanged() {
+    if (!mounted) return;
+    if (catFilter != null && Categories.byId(catFilter) == null) catFilter = null;
+    dirty = true;
+    refresh();
+  }
 
   int get dayCount => DateTime.utc(to.year, to.month, to.day).difference(DateTime.utc(from.year, from.month, from.day)).inDays + 1;
 
@@ -256,7 +306,8 @@ class _ShellState extends State<Shell> {
     if (!force && inside && bin == loadBin && useSess == loadSess) return;
     final w0 = math.max(0, viewFrom - sp).floor();
     final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
-    contribs = usage.contribs(from, w0, w1, bin, useSess).where((c) => !Hidden.has(c.app)).toList();
+    contribs = usage.contribs(from, w0, w1, bin, useSess, realFocus: realFocusOn).where((c) => appAllowed(c.app)).toList();
+    previous = ViewPrefs.compare ? usage.contribs(prevFrom(), w0, w1, bin, false, realFocus: realFocusOn).where((c) => appAllowed(c.app)).toList() : [];
     presenceRows = usage.presence(from, w0, w1);
     final en = MetricPrefs.enabled.value;
     resPts = en.any(procMetricIds.contains) ? usage.resPoints(from, w0, w1, bin) : [];
@@ -342,7 +393,7 @@ class _ShellState extends State<Shell> {
         sortAsc = !sortAsc;
       } else {
         sortKey = k;
-        sortAsc = k == 'app';
+        sortAsc = k == 'app' || k == 'category';
       }
     });
   }
@@ -359,7 +410,7 @@ class _ShellState extends State<Shell> {
         ]),
       ),
     );
-    if (Platform.isAndroid) return box;
+    if (Platform.isAndroid) return GestureDetector(behavior: HitTestBehavior.translucent, onLongPress: columnsSheet, child: box);
     final sized = !resize
         ? box
         : LayoutBuilder(builder: (context, c) {
@@ -395,6 +446,7 @@ class _ShellState extends State<Shell> {
   }
 
   List<String> columnChoices() => [
+        if (Categories.list.value.isNotEmpty) 'category',
         if (liveMode) 'now',
         if (multiState) ...['focused', 'open', 'minimized', 'background'],
         'total',
@@ -473,6 +525,7 @@ class _ShellState extends State<Shell> {
       if (control && r.path.isNotEmpty) PopupMenuItem<String>(value: 'locate', enabled: exists, child: item(Icons.folder_open, tr('actLocate'), on: exists)),
       if (control) PopupMenuItem<String>(value: 'end', enabled: live.running, child: item(Icons.power_settings_new, tr('actEnd'), color: cDanger, on: live.running)),
       if (control) const PopupMenuDivider(),
+      PopupMenuItem<String>(value: 'cat', child: item(Icons.label_outline, tr('catAssign'))),
       PopupMenuItem<String>(value: 'hide', child: item(Icons.visibility_off_outlined, tr('actHide'))),
     ]);
     if (mounted) setState(() => menuApp = null);
@@ -488,9 +541,45 @@ class _ShellState extends State<Shell> {
         final n = await endApp(r.app);
         toast(n > 0 ? tr('actEnded') : tr('actEndFailed'));
         break;
+      case 'cat':
+        await assignCategory(r, at);
+        break;
       case 'hide':
         Hidden.hide(r.app, r.title);
         break;
+    }
+  }
+
+  Future<void> assignCategory(AppUsage r, Offset? at) async {
+    final cats = Categories.list.value;
+    final cur = Categories.of(r.app);
+    String? v;
+    if (at != null) {
+      v = await darkMenu<String>(at, [
+        for (final c in cats)
+          PopupMenuItem<String>(value: c.id, child: Row(children: [c.iconWidget(18), const SizedBox(width: 10), Expanded(child: Text(c.name, style: const TextStyle(color: cPrimary))), if (cur?.id == c.id) const Icon(Icons.check, size: 16, color: cPrimary)])),
+        if (cats.isNotEmpty) const PopupMenuDivider(),
+        if (cur != null) PopupMenuItem<String>(value: '-', child: Text(tr('catRemove'), style: const TextStyle(color: cPrimary))),
+        PopupMenuItem<String>(value: '+', child: Text(tr('catNew'), style: const TextStyle(color: cPrimary))),
+      ]);
+    } else {
+      v = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: cPanel,
+        builder: (c) => SafeArea(
+          child: ListView(shrinkWrap: true, children: [
+            for (final cat in cats) ListTile(leading: cat.iconWidget(24), title: Text(cat.name), trailing: cur?.id == cat.id ? const Icon(Icons.check) : null, onTap: () => Navigator.pop(c, cat.id)),
+            if (cur != null) ListTile(leading: const Icon(Icons.label_off_outlined), title: Text(tr('catRemove')), onTap: () => Navigator.pop(c, '-')),
+            ListTile(leading: const Icon(Icons.add), title: Text(tr('catNew')), onTap: () => Navigator.pop(c, '+')),
+          ]),
+        ),
+      );
+    }
+    if (v == null || !mounted) return;
+    if (v == '+') {
+      await categoryEditor(context, bridge: collector?.bridge, onCreated: (c) => Categories.assign(r.app, c.id));
+    } else {
+      Categories.assign(r.app, v == '-' ? null : v);
     }
   }
 
@@ -507,6 +596,7 @@ class _ShellState extends State<Shell> {
           const Divider(height: 1),
           ListTile(leading: const Icon(Icons.open_in_new), title: Text(tr('actOpenApp')), onTap: () => Navigator.pop(c, 'open')),
           ListTile(leading: const Icon(Icons.info_outline), title: Text(tr('actAppInfo')), onTap: () => Navigator.pop(c, 'info')),
+          ListTile(leading: const Icon(Icons.label_outline), title: Text(tr('catAssign')), onTap: () => Navigator.pop(c, 'cat')),
         ]),
       ),
     );
@@ -516,6 +606,9 @@ class _ShellState extends State<Shell> {
         break;
       case 'info':
         await bridge.appInfo(r.app);
+        break;
+      case 'cat':
+        await assignCategory(r, null);
         break;
     }
   }
@@ -531,6 +624,8 @@ class _ShellState extends State<Shell> {
         return r.ms[2] == 0 ? '-' : formatMs(r.ms[2]);
       case 'background':
         return r.ms[3] == 0 ? '-' : formatMs(r.ms[3]);
+      case 'category':
+        return Categories.of(r.app)?.name ?? '-';
       case 'total':
         return formatMs(r.total);
       case 'cpu':
@@ -567,10 +662,14 @@ class _ShellState extends State<Shell> {
     Hidden.load();
     MetricPrefs.load();
     ColumnPrefs.load();
+    ViewPrefs.load();
+    Categories.load();
     loadHaptics();
     Hidden.apps.addListener(onHiddenChanged);
     MetricPrefs.enabled.addListener(onMetricsChanged);
     ColumnPrefs.hidden.addListener(onColumnsChanged);
+    ViewPrefs.rev.addListener(onViewChanged);
+    Categories.list.addListener(onViewChanged);
     refresh();
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (++ticks % 20 == 0) requestFlush();
@@ -586,6 +685,8 @@ class _ShellState extends State<Shell> {
     Hidden.apps.removeListener(onHiddenChanged);
     MetricPrefs.enabled.removeListener(onMetricsChanged);
     ColumnPrefs.hidden.removeListener(onColumnsChanged);
+    ViewPrefs.rev.removeListener(onViewChanged);
+    Categories.list.removeListener(onViewChanged);
     timer?.cancel();
     usage.close();
     super.dispose();
@@ -715,7 +816,7 @@ class _ShellState extends State<Shell> {
       beat = b;
       isPaused = usage.paused;
       liveMode = l != null;
-      rows = (l ?? usage.range(fk, tk)).where((r) => !Hidden.has(r.app)).toList();
+      rows = prepareRows(l ?? usage.range(fk, tk), fk, tk);
       final every = dayCount > 1 ? 30 : 5;
       final changed = rangeKey != rk;
       if (changed) {
@@ -723,7 +824,8 @@ class _ShellState extends State<Shell> {
         viewTo = dayCount * 86400.0;
         viewBucket = bucketSecFor(viewTo, 600);
       }
-      if (changed || ticks % every == 0) {
+      if (changed || dirty || ticks % every == 0) {
+        dirty = false;
         loadChart(force: true);
         names = usage.names();
         resMap = MetricPrefs.enabled.value.any(procMetricIds.contains) ? usage.resources(fk, tk) : {};
@@ -983,6 +1085,10 @@ class _ShellState extends State<Shell> {
     }
 
     list.sort((a, b) {
+      if (sortKey == 'category') {
+        final c = (Categories.of(a.app)?.name ?? '\uFFFF').toLowerCase().compareTo((Categories.of(b.app)?.name ?? '\uFFFF').toLowerCase());
+        return c != 0 ? (sortAsc ? c : -c) : b.total.compareTo(a.total);
+      }
       if (sortKey == 'app') {
         final c = a.title.toLowerCase().compareTo(b.title.toLowerCase());
         return sortAsc ? c : -c;
@@ -1034,7 +1140,18 @@ class _ShellState extends State<Shell> {
   }
 
   String chartHeading() {
-    if (showTime || Platform.isAndroid) return tr('chartTitle');
+    if (showTime || Platform.isAndroid) {
+      switch (metric) {
+        case Metric.focused:
+          return tr('chartTitle');
+        case Metric.open:
+          return tr('chartTitleOpen');
+        case Metric.minimized:
+          return tr('chartTitleMin');
+        case Metric.visible:
+          return tr('chartTitleVisible');
+      }
+    }
     final ids = [for (final id in allMetricIds) if (resSel.contains(id) && MetricPrefs.enabled.value.contains(id)) id];
     if (ids.isEmpty) return tr('chartTitle');
     return ids.length == 1 ? metricName(ids.first) : tr('chartTitleLines');
@@ -1103,23 +1220,23 @@ class _ShellState extends State<Shell> {
         child: Text(text, style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w800)),
       );
 
-  Widget popRow(String text, bool on, VoidCallback tap, {Color? dot, bool radio = false, VoidCallback? enter, VoidCallback? leave}) {
+  Widget popRow(String text, bool on, VoidCallback tap, {Color? dot, bool radio = false, VoidCallback? enter, VoidCallback? leave, bool enabled = true}) {
     final icon = radio ? (on ? Icons.radio_button_checked : Icons.radio_button_unchecked) : (on ? Icons.check_box : Icons.check_box_outline_blank);
     return MouseRegion(
       onEnter: enter == null ? null : (_) => enter(),
       onExit: leave == null ? null : (_) => leave(),
       child: InkWell(
-        onTap: tap,
+        onTap: enabled ? tap : null,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           child: Row(children: [
-            Icon(icon, size: 20, color: on ? cPrimary : cMuted),
+            Icon(icon, size: 20, color: !enabled ? cMuted.withValues(alpha: 0.4) : (on ? cPrimary : cMuted)),
             const SizedBox(width: 10),
             if (dot != null) ...[
               Container(width: 10, height: 10, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
               const SizedBox(width: 8),
             ],
-            Expanded(child: Text(text, style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600))),
+            Expanded(child: Text(text, style: TextStyle(color: enabled ? cPrimary : cMuted.withValues(alpha: 0.5), fontWeight: FontWeight.w600))),
           ]),
         ),
       ),
@@ -1152,6 +1269,28 @@ class _ShellState extends State<Shell> {
         const SizedBox(height: 6),
       ]);
     });
+  }
+
+  Future<void> columnsSheet() async {
+    buzz(1);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: cBg,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (c) => StatefulBuilder(
+        builder: (c, set) => SafeArea(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            popHeader(tr('optColumns')),
+            for (final id in columnChoices())
+              popRow(columnLabel(id), ColumnPrefs.shown(id), () {
+                ColumnPrefs.set(id, !ColumnPrefs.shown(id));
+                set(() {});
+              }),
+            const SizedBox(height: 8),
+          ]),
+        ),
+      ),
+    );
   }
 
   Future<void> optionsPopover(BuildContext ctx, bool narrow) {
@@ -1191,6 +1330,28 @@ class _ShellState extends State<Shell> {
             ),
           ),
         ],
+        popHeader(tr('optChart')),
+        popRow(tr('avgLine'), ViewPrefs.avgLine, () {
+          ViewPrefs.update(avg: !ViewPrefs.avgLine);
+          set(() {});
+        }),
+        popRow(tr('comparePrev'), ViewPrefs.compare, () {
+          ViewPrefs.update(cmp: !ViewPrefs.compare);
+          set(() {});
+        }),
+        if (!Platform.isAndroid) ...[
+          popRow(tr('realFocus'), realFocusOn, () {
+            ViewPrefs.update(real: !ViewPrefs.realFocus);
+            set(() {});
+          }, enabled: !MetricPrefs.has('notime')),
+          if (MetricPrefs.has('notime')) Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 6), child: Text(tr('realFocusNeedsTime'), style: const TextStyle(color: cMuted, fontSize: 12))),
+        ],
+        popHeader(tr('optMinSec')),
+        for (final n in const [0, 5, 10, 30, 60])
+          popRow(n == 0 ? tr('minSecOff') : '$n ${tr('unitS')}', ViewPrefs.minSec == n, () {
+            ViewPrefs.update(sec: n);
+            set(() {});
+          }, radio: true),
         const SizedBox(height: 6),
       ]);
     });
@@ -1211,6 +1372,21 @@ class _ShellState extends State<Shell> {
             current: only == null ? null : PickerItem(only!, titleOf(only!), iconOf(only!, 20)),
             onChanged: (v) => setState(() => only = v),
           ),
+          if (Categories.list.value.isNotEmpty) ...[
+            toolDivider(),
+            SelectBox<String>(
+              value: catFilter ?? '',
+              items: [
+                DropdownMenuItem(value: '', child: Text(tr('catAll'))),
+                for (final c in Categories.list.value)
+                  DropdownMenuItem(value: c.id, child: Row(mainAxisSize: MainAxisSize.min, children: [c.iconWidget(18), const SizedBox(width: 8), Text(c.name)])),
+              ],
+              onChanged: (v) {
+                catFilter = (v == null || v.isEmpty) ? null : v;
+                onViewChanged();
+              },
+            ),
+          ],
           if (!Platform.isAndroid) ...[
             toolDivider(),
             Builder(builder: (ctx) => toolButton(tr('linesBtn'), Icons.show_chart, () => linesPopover(ctx), badge: '${(showTime ? 1 : 0) + resSel.where(MetricPrefs.enabled.value.contains).length}')),
@@ -1225,7 +1401,7 @@ class _ShellState extends State<Shell> {
           ),
         ]),
         const SizedBox(height: 10),
-        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has)),
+        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, previous: previous, avgLine: ViewPrefs.avgLine, compare: ViewPrefs.compare, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has)),
       ]),
     );
   }
@@ -1392,12 +1568,54 @@ class _ShellState extends State<Shell> {
         },
       );
 
+  Widget catSummary() {
+    final cats = Categories.list.value;
+    if (cats.isEmpty) return const SizedBox.shrink();
+    Widget chip(Category c) {
+      final on = catFilter == c.id;
+      return HoverBox(
+        onTap: () {
+          buzz(0);
+          catFilter = on ? null : c.id;
+          onViewChanged();
+        },
+        builder: (hovered) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: on || hovered ? cSoft : cPanel,
+            borderRadius: BorderRadius.circular(rMd),
+            border: Border.all(color: on ? c.tint : cBorder),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            c.iconWidget(18),
+            const SizedBox(width: 8),
+            Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(width: 8),
+            Text(formatMs(catTotals[c.id] ?? 0), style: const TextStyle(color: cMuted, fontSize: 12)),
+          ]),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Panel(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(tr('catSummary'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [for (final c in cats) chip(c)]),
+        ]),
+      ),
+    );
+  }
+
   Widget activity(bool narrow) {
     const head = TextStyle(color: cMuted, fontWeight: FontWeight.w800);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       leaderCard(),
       chartPanel(narrow),
       const SizedBox(height: 12),
+      catSummary(),
       if (rows.isEmpty)
         Panel(child: Text(tr('noData')))
       else
@@ -1477,7 +1695,7 @@ class _ShellState extends State<Shell> {
               valueListenable: chartPinch,
               builder: (context, pinching, _) => column(narrow, title, pad, pinching),
             );
-            return Platform.isAndroid ? content : DefaultSelectionStyle(mouseCursor: MouseCursor.defer, child: SelectionArea(child: content));
+            return Platform.isAndroid ? content : DefaultSelectionStyle(mouseCursor: MouseCursor.defer, child: SelectionArea(contextMenuBuilder: copyOnlyMenu, child: content));
           }),
         ),
       );
@@ -1559,8 +1777,49 @@ class _SettingsPageState extends State<SettingsPage> {
   late bool localApi = prefs.flag('localapi');
   late bool discord = prefs.flag('discordrpc');
   String rpcStatus = '';
+  late int afkSeconds = readAfkSeconds();
   bool rpcRestarting = false;
   Timer? rpcTimer;
+
+  Widget categoriesSection() {
+    return ValueListenableBuilder<List<Category>>(
+      valueListenable: Categories.list,
+      builder: (context, cats, _) {
+        Map<String, String> titles() {
+          final m = metricsUsage.names();
+          return {for (final e in m.entries) e.key: e.value.name.isNotEmpty ? e.value.name : prettyApp(e.key)};
+        }
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(tr('catTitle'), style: const TextStyle(fontWeight: FontWeight.w700))),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.add, size: 18),
+              label: Text(tr('catNew')),
+              onPressed: () => categoryEditor(context, bridge: collector?.bridge),
+            ),
+          ]),
+          Align(alignment: Alignment.centerLeft, child: Text(tr('catHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
+          for (final c in cats)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(children: [
+                c.iconWidget(26),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    Text('${tr('catApps')}: ${c.apps.length}', style: const TextStyle(color: cMuted, fontSize: 12)),
+                  ]),
+                ),
+                IconButton(tooltip: tr('catApps'), visualDensity: VisualDensity.compact, icon: const Icon(Icons.apps, size: 20), onPressed: () => categoryApps(context, c, titles())),
+                IconButton(tooltip: tr('catEdit'), visualDensity: VisualDensity.compact, icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () => categoryEditor(context, edit: c, bridge: collector?.bridge)),
+                IconButton(tooltip: tr('catDelete'), visualDensity: VisualDensity.compact, icon: const Icon(Icons.delete_outline, size: 20, color: cDanger), onPressed: () => Categories.remove(c.id)),
+              ]),
+            ),
+        ]);
+      },
+    );
+  }
 
   String readRpcStatus() {
     try {
@@ -1865,6 +2124,24 @@ class _SettingsPageState extends State<SettingsPage> {
           ]),
           const Divider(height: 28),
         ],
+        if (!Platform.isAndroid) ...[
+          Row(children: [
+            Expanded(child: Text(tr('afkTitle'), style: const TextStyle(fontWeight: FontWeight.w700))),
+            SelectBox<int>(
+              value: afkSeconds,
+              items: [for (final n in afkChoices) DropdownMenuItem(value: n, child: Text(n == 0 ? tr('afkOff') : '${n ~/ 60} ${tr('unitM')}'))],
+              onChanged: (v) {
+                if (v == null) return;
+                writeAfkSeconds(v);
+                setState(() => afkSeconds = v);
+              },
+            ),
+          ]),
+          Align(alignment: Alignment.centerLeft, child: Text(tr('afkHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
+          const Divider(height: 28),
+        ],
+        categoriesSection(),
+        const Divider(height: 28),
         Row(children: [
           Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
           Switch(value: localApi, onChanged: toggleApi),

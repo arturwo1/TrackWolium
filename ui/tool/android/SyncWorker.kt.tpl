@@ -67,7 +67,7 @@ object Sync {
     while (events.hasNextEvent()) {
       events.getNextEvent(e)
       val t = e.eventType
-      if (t != 1 && t != 2 && t != 16 && t != 26) continue
+      if (t != 1 && t != 2 && t != 16 && t != 17 && t != 26) continue
       val pkg = e.packageName ?: ""
       if (pkg == launcher || pkg == "com.android.systemui") {
         if (t == 1) out.add(mapOf("pkg" to pkg, "type" to 16, "time" to e.timeStamp))
@@ -123,7 +123,7 @@ object Sync {
           }
         }
         2 -> if (app == e.pkg) close(e.ms)
-        16, 26 -> close(e.ms)
+        16, 17, 26 -> close(e.ms)
       }
     }
     close(nowMs)

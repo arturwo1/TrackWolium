@@ -4,6 +4,10 @@
 
 namespace tw {
 
+namespace {
+constexpr long long kNewProcessWindowMs = 60000;
+}
+
 MetricsConfig parse_metrics(const std::string& text) {
   MetricsConfig c;
   std::istringstream in(text);
@@ -58,7 +62,7 @@ std::map<std::string, AppRes> ProcTracker::update(const std::vector<ProcSnap>& s
       dr = std::max<long long>(0, s.io_read - it->second.io_read);
       dw = std::max<long long>(0, s.io_write - it->second.io_write);
       if (s.peak_kb > it->second.peak_kb) peak = std::max(peak, s.peak_kb);
-    } else if (primed_) {
+    } else if (primed_ && (s.age_ms < 0 || s.age_ms <= kNewProcessWindowMs)) {
       dc = s.cpu_ms;
       dr = s.io_read;
       dw = s.io_write;

@@ -220,6 +220,11 @@ int main(int argc, char** argv) {
         std::string mt((std::istreambuf_iterator<char>(mf)), std::istreambuf_iterator<char>());
         engine.set_metrics(tw::parse_metrics(mt));
       }
+      {
+        std::ifstream af(data + "/afk", std::ios::binary);
+        std::string at((std::istreambuf_iterator<char>(af)), std::istreambuf_iterator<char>());
+        engine.set_afk_threshold(tw::parse_afk_threshold(at));
+      }
       if (exists(data + "/localapi")) api.start();
       else api.stop();
       if (exists(data + "/discordrpc")) proxy.start();

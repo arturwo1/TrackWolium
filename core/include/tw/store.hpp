@@ -55,6 +55,7 @@ public:
   virtual bool set_names(const std::vector<AppMeta>&) { return true; }
   virtual bool add_resources(const std::string&, const std::vector<ResEntry>&) { return true; }
   virtual bool add_system(const std::vector<SysEntry>&) { return true; }
+  virtual bool add_afk(const std::string&, const std::vector<SlotEntry>&) { return true; }
 };
 
 }

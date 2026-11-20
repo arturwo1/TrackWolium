@@ -30,6 +30,23 @@ int local_slot_now() {
   return (tm.tm_hour * 60 + tm.tm_min) / 5;
 }
 
+Duration parse_afk_threshold(const std::string& text) {
+  long long seconds = 300;
+  std::size_t a = text.find_first_not_of(" \t\r\n");
+  if (a != std::string::npos) {
+    std::size_t b = text.find_last_not_of(" \t\r\n");
+    std::string t = text.substr(a, b - a + 1);
+    bool digits = !t.empty() && t.size() <= 6;
+    for (char c : t) {
+      if (c < '0' || c > '9') digits = false;
+    }
+    if (digits) seconds = std::stoll(t);
+  }
+  if (seconds == 0) return Duration(0);
+  seconds = std::max<long long>(30, std::min<long long>(3600, seconds));
+  return Duration(seconds * 1000);
+}
+
 Engine::Engine(std::shared_ptr<IProbe> probe, Duration max_gap)
     : probe_(std::move(probe)), max_gap_(max_gap), tracker_(max_gap), day_fn_(local_day_now), slot_fn_(local_slot_now), wall_fn_([] { return static_cast<long long>(std::time(nullptr)); }) {}
 
@@ -51,6 +68,10 @@ void Engine::set_metrics(const MetricsConfig& cfg) {
     proc_started_ = false;
   }
   if (!cfg.any_sys() || !had_sys) sys_started_ = false;
+}
+
+void Engine::set_afk_threshold(Duration threshold) {
+  afk_threshold_ = threshold;
 }
 
 void Engine::set_metrics_intervals(Duration proc, Duration sys) {
@@ -88,6 +109,12 @@ void Engine::flush_pending() {
     if (rows.empty() || store_->add_resources(day_, rows)) pending_res_.clear();
   }
   if (!pending_sys_.empty() && store_->add_system(pending_sys_)) pending_sys_.clear();
+  if (!pending_afk_.empty()) {
+    std::vector<SlotEntry> rows;
+    rows.reserve(pending_afk_.size());
+    for (const auto& kv : pending_afk_) rows.push_back({kv.first.first, kv.first.second, 0, kv.second});
+    if (store_->add_afk(day_, rows)) pending_afk_.clear();
+  }
   if (!pending_sessions_.empty()) {
     std::vector<SessionRec> recs;
     recs.reserve(pending_sessions_.size());
@@ -209,6 +236,14 @@ void Engine::step(TimePoint now) {
       pending_[{iv.app, static_cast<int>(iv.state)}] += iv.ms;
       if (iv.state != State::Background) note_session(iv);
       if (iv.state != State::Background) pending_slots_[{slot_fn_(), iv.app, static_cast<int>(iv.state)}] += iv.ms.count();
+    }
+    if (afk_threshold_.count() > 0 && !metrics_.no_time && !intervals.empty()) {
+      long long idle = probe_->idle_ms();
+      if (idle >= afk_threshold_.count()) {
+        for (const auto& iv : intervals) {
+          if (iv.state == State::Focused) pending_afk_[{slot_fn_(), iv.app}] += iv.ms.count();
+        }
+      }
     }
     if (metrics_.any()) sample_metrics(now, samples);
     bool focus_changed = flush_started_ && focus != last_focus_;

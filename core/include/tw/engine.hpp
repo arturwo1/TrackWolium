@@ -15,6 +15,7 @@
 namespace tw {
 
 std::string local_day_now();
+Duration parse_afk_threshold(const std::string& text);
 int local_slot_now();
 
 class Engine {
@@ -27,6 +28,7 @@ public:
   void set_wall_source(std::function<long long()> wall);
   void set_metrics(const MetricsConfig& cfg);
   void set_metrics_intervals(Duration proc, Duration sys);
+  void set_afk_threshold(Duration threshold);
   void set_store(std::shared_ptr<IStore> store, Duration flush_every = Duration(180000));
   void step(TimePoint now);
   void run(Duration interval, const std::function<bool()>& stop);
@@ -51,6 +53,8 @@ private:
   std::string last_focus_;
   std::function<int()> slot_fn_;
   std::map<std::tuple<int, std::string, int>, long long> pending_slots_;
+  std::map<std::pair<int, std::string>, long long> pending_afk_;
+  Duration afk_threshold_{0};
   std::function<long long()> wall_fn_;
   struct OpenSession {
     int state = 0;

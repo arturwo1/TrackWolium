@@ -148,6 +148,12 @@ public:
 
   bool supports_metrics() const override { return true; }
 
+  long long idle_ms() override {
+    CFTimeInterval s = CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType);
+    if (s < 0 || s > 86400.0 * 365) return -1;
+    return static_cast<long long>(s * 1000.0);
+  }
+
   std::vector<ProcSnap> proc_snapshot() override {
     std::vector<ProcSnap> out;
     mach_timebase_info_data_t tb{};

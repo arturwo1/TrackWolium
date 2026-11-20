@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:math' as math;
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import 'l10n.dart';
@@ -206,6 +207,18 @@ class Usage {
     return list;
   }
 
+  Map<String, int> afk(String from, String to) {
+    final db = _open();
+    final out = <String, int>{};
+    if (db == null) return out;
+    try {
+      for (final r in db.select('SELECT app, SUM(ms) AS ms FROM afk WHERE day BETWEEN ? AND ? GROUP BY app', [from, to])) {
+        out[r['app'] as String] = r['ms'] as int;
+      }
+    } catch (_) {}
+    return out;
+  }
+
   int maxSpan = -1;
   int maxSpanAt = 0;
 
@@ -223,10 +236,11 @@ class Usage {
     return maxSpan + (now - maxSpanAt) + 60;
   }
 
-  List<Contrib> contribs(DateTime first, int w0, int w1, int bin, bool sessions) {
+  List<Contrib> contribs(DateTime first, int w0, int w1, int bin, bool sessions, {bool realFocus = false}) {
     final db = _open();
     if (db == null) return [];
     final out = <Contrib>[];
+    if (realFocus) sessions = false;
     final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
     int? cutoff;
     if (sessions) {
@@ -242,12 +256,23 @@ class Usage {
       final rows = db.select(
           'SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM timeline WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, state',
           [key(a), key(b), bin]);
+      final idle = <String, int>{};
+      if (realFocus) {
+        try {
+          for (final r in db.select('SELECT day, (slot / ?3) * ?3 AS bslot, app, SUM(ms) AS ms FROM afk WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app', [key(a), key(b), bin])) {
+            idle['${r['day']}|${r['bslot']}|${r['app']}'] = r['ms'] as int;
+          }
+        } catch (_) {}
+      }
       for (final r in rows) {
         final midnight = DateTime.parse('${r['day']}T00:00:00');
         final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
         final end = start + bin * 300;
         if (cutoff != null && end > cutoff) continue;
-        out.add(Contrib(start, end, r['app'] as String, r['state'] as int, r['ms'] as int));
+        var ms = r['ms'] as int;
+        if (realFocus && r['state'] == 0) ms = math.max(0, ms - (idle['${r['day']}|${r['bslot']}|${r['app']}'] ?? 0));
+        if (ms == 0) continue;
+        out.add(Contrib(start, end, r['app'] as String, r['state'] as int, ms));
       }
     } catch (_) {}
     if (cutoff != null) {

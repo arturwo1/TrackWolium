@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <algorithm>
 #include "tw/platform.hpp"
 #include "tw/win_util.hpp"
@@ -97,6 +98,103 @@ BOOL CALLBACK enum_windows(HWND h, LPARAM lparam) {
   return TRUE;
 }
 
+
+namespace {
+
+struct NtUnicode {
+  USHORT length;
+  USHORT maximum;
+  PWSTR buffer;
+};
+
+struct NtProcessInfo {
+  ULONG next;
+  ULONG threads;
+  LARGE_INTEGER working_set_private;
+  ULONG hard_faults;
+  ULONG threads_high;
+  ULONGLONG cycle_time;
+  LARGE_INTEGER create_time;
+  LARGE_INTEGER user_time;
+  LARGE_INTEGER kernel_time;
+  NtUnicode image_name;
+  LONG base_priority;
+  HANDLE pid;
+  HANDLE parent_pid;
+  ULONG handles;
+  ULONG session;
+  ULONG_PTR key;
+  SIZE_T peak_virtual;
+  SIZE_T virtual_size;
+  ULONG page_faults;
+  SIZE_T peak_working_set;
+  SIZE_T working_set;
+  SIZE_T quota_peak_paged;
+  SIZE_T quota_paged;
+  SIZE_T quota_peak_nonpaged;
+  SIZE_T quota_nonpaged;
+  SIZE_T pagefile;
+  SIZE_T peak_pagefile;
+  SIZE_T private_pages;
+  LARGE_INTEGER read_ops;
+  LARGE_INTEGER write_ops;
+  LARGE_INTEGER other_ops;
+  LARGE_INTEGER read_bytes;
+  LARGE_INTEGER write_bytes;
+  LARGE_INTEGER other_bytes;
+};
+
+using NtQuerySystemInformationFn = LONG(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
+
+bool nt_process_snapshot(std::vector<ProcSnap>& out) {
+  static_assert(sizeof(void*) == 8 && offsetof(NtProcessInfo, pid) == 80 && offsetof(NtProcessInfo, read_bytes) == 232, "unexpected SYSTEM_PROCESS_INFORMATION layout");
+  static NtQuerySystemInformationFn query = reinterpret_cast<NtQuerySystemInformationFn>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation")));
+  if (!query) return false;
+  static std::vector<unsigned char> buffer(1 << 20);
+  ULONG need = 0;
+  LONG status = 0;
+  for (int attempt = 0; attempt < 6; ++attempt) {
+    status = query(5, buffer.data(), static_cast<ULONG>(buffer.size()), &need);
+    if (status >= 0) break;
+    if (static_cast<ULONG>(status) != 0xC0000004UL) return false;
+    buffer.resize(std::max<size_t>(buffer.size() * 2, static_cast<size_t>(need) + (256 << 10)));
+  }
+  if (status < 0) return false;
+  FILETIME now_ft{};
+  GetSystemTimeAsFileTime(&now_ft);
+  long long now100 = static_cast<long long>((static_cast<unsigned long long>(now_ft.dwHighDateTime) << 32) | now_ft.dwLowDateTime);
+  size_t offset = 0;
+  for (;;) {
+    if (offset + sizeof(NtProcessInfo) > buffer.size()) break;
+    const NtProcessInfo* p = reinterpret_cast<const NtProcessInfo*>(buffer.data() + offset);
+    unsigned long long pid = reinterpret_cast<unsigned long long>(p->pid);
+    if (pid != 0 && pid != 4 && p->image_name.buffer && p->image_name.length > 0) {
+      std::wstring name(p->image_name.buffer, p->image_name.length / sizeof(wchar_t));
+      ProcSnap s;
+      s.pid = static_cast<long long>(pid);
+      s.stamp = p->create_time.QuadPart;
+      s.app = to_utf8(lower(name));
+      s.cpu_ms = (p->user_time.QuadPart + p->kernel_time.QuadPart) / 10000;
+      unsigned long long priv = static_cast<unsigned long long>(p->working_set_private.QuadPart);
+      if (priv == 0 || priv > p->working_set) priv = std::min<unsigned long long>(p->private_pages, p->working_set);
+      unsigned long long peak = std::min<unsigned long long>(p->peak_pagefile, p->peak_working_set);
+      if (peak < priv) peak = priv;
+      s.rss_kb = static_cast<long long>(priv / 1024);
+      s.peak_kb = static_cast<long long>(peak / 1024);
+      s.io_read = p->read_bytes.QuadPart;
+      s.io_write = p->write_bytes.QuadPart;
+      s.age_ms = p->create_time.QuadPart > 0 && now100 >= p->create_time.QuadPart ? (now100 - p->create_time.QuadPart) / 10000 : -1;
+      out.push_back(std::move(s));
+    }
+    if (p->next == 0) break;
+    offset += p->next;
+  }
+  return true;
+}
+
+}
+
 class WinProbe : public IProbe {
 public:
   explicit WinProbe(bool include_system) : include_system_(include_system) {
@@ -149,8 +247,17 @@ public:
 
   bool supports_metrics() const override { return true; }
 
+  long long idle_ms() override {
+    LASTINPUTINFO li{};
+    li.cbSize = sizeof(li);
+    if (!GetLastInputInfo(&li)) return -1;
+    return static_cast<long long>(static_cast<DWORD>(GetTickCount() - li.dwTime));
+  }
+
   std::vector<ProcSnap> proc_snapshot() override {
     std::vector<ProcSnap> out;
+    if (nt_process_snapshot(out)) return out;
+    out.clear();
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return out;
     PROCESSENTRY32W pe;

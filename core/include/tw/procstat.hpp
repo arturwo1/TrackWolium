@@ -14,6 +14,7 @@ struct ProcSnap {
   long long peak_kb = 0;
   long long io_read = 0;
   long long io_write = 0;
+  long long age_ms = -1;
 };
 
 struct AppRes {
