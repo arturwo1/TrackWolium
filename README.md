@@ -39,7 +39,7 @@ Wolium is not code-signed, which is why Windows and macOS show a warning on firs
 - Date ranges: day, week, month, year or any custom period
 - Hide apps you do not want to see; restore them in Settings
 - CSV export and, on Android, backup and restore as a file
-- Local API (all platforms; `/v1/current`, `/v1/summary?days=7`, `/v1/apps/top?days=1&limit=5&metric=focused`, `/v1/sessions?hours=24`, and an OBS browser-source widget at `http://127.0.0.1:9095/widget`, accepts `?days=&limit=&metric=&accent=&lang=&bg=none`) and Discord activity cards (desktop), both off by default
+- Local API (all platforms, [docs](docs/local-api.md)) and Discord activity cards (desktop), both off by default
 - Update notifications with one-click update
 - Languages: English, Russian
 

@@ -16,6 +16,7 @@ MetricsConfig parse_metrics(const std::string& text) {
     else if (tok == "iow") c.io_write = true;
     else if (tok == "sysram") c.sys_ram = true;
     else if (tok == "sysdisk") c.sys_disk = true;
+    else if (tok == "notime") c.no_time = true;
   }
   return c;
 }
@@ -34,6 +35,7 @@ std::string format_metrics(const MetricsConfig& c) {
   add(c.io_write, "iow");
   add(c.sys_ram, "sysram");
   add(c.sys_disk, "sysdisk");
+  add(c.no_time, "notime");
   return out;
 }
 

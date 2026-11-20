@@ -11,6 +11,7 @@
 #include "common_win.hpp"
 #include "update_win.hpp"
 #include <shellapi.h>
+#include <dbt.h>
 #include "tw/i18n.hpp"
 
 namespace {
@@ -28,6 +29,12 @@ constexpr UINT_PTR kTimer = 1;
 constexpr UINT kMsgUpdate = WM_APP + 4;
 constexpr UINT kMsgBadge = WM_APP + 5;
 constexpr UINT kCmdUpdate = 1005;
+constexpr ULONGLONG kTriggerGapMs = 20ULL * 60 * 1000;
+constexpr ULONGLONG kRenotifyGapMs = 20ULL * 60 * 1000;
+constexpr UINT kWmDisplayChange = 0x007E;
+constexpr UINT kWmDeviceChange = 0x0219;
+constexpr WPARAM kDeviceArrival = 0x8000;
+constexpr WPARAM kDeviceRemoved = 0x8004;
 constexpr UINT kWmPowerBroadcast = 0x0218;
 constexpr UINT kWmSessionChange = 0x02B1;
 constexpr WPARAM kResumeAutomatic = 0x12;
@@ -35,6 +42,7 @@ constexpr WPARAM kResumeSuspend = 0x7;
 constexpr WPARAM kPowerSettingChange = 0x8013;
 constexpr WPARAM kSessionUnlock = 0x8;
 const GUID kDisplayState = {0x6fe69556, 0x704a, 0x47a0, {0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47}};
+const GUID kMonitorInterface = {0xE6F07B5F, 0xEE97, 0x4A90, {0xB0, 0x76, 0x33, 0xF5, 0x7B, 0xF4, 0xEA, 0xA7}};
 const GUID kPowerSource = {0x5d3e9a59, 0xe9d5, 0x4b00, {0xa6, 0xbd, 0xff, 0x34, 0xff, 0x51, 0x65, 0x48}};
 
 struct PowerSetting {
@@ -70,6 +78,7 @@ struct Guard {
   std::string update_version;
   HICON badged[5] = {};
   HANDLE check_event = nullptr;
+  ULONGLONG renotified = 0;
 };
 
 Guard* g = nullptr;
@@ -357,17 +366,39 @@ int check_once(HWND hwnd) {
   return 1;
 }
 
+void wait_for_traffic() {
+  for (int i = 0; i < 10; ++i) {
+    if (app::traffic_flowing()) return;
+    Sleep(30000);
+  }
+}
+
 void update_loop(HWND hwnd) {
   WaitForSingleObject(g->check_event, 20000);
   int failures = 0;
+  ULONGLONG last = 0;
+  bool triggered = false;
   for (;;) {
-    int result = check_once(hwnd);
-    failures = result == 0 ? (failures < 4 ? failures + 1 : failures) : 0;
+    ULONGLONG now = GetTickCount64();
+    bool skip = triggered && failures == 0 && last != 0 && now - last < kTriggerGapMs;
     DWORD wait = 6 * 60 * 60 * 1000;
-    if (result == 0) wait = (60 * 1000) << (failures - 1);
-    if (result == 2) wait = 5 * 60 * 1000;
+    if (skip) {
+      wait = static_cast<DWORD>(kTriggerGapMs - (now - last));
+    } else {
+      if (!triggered) wait_for_traffic();
+      if (app::unmetered_connection()) {
+        int result = check_once(hwnd);
+        last = GetTickCount64();
+        failures = result == 0 ? (failures < 4 ? failures + 1 : failures) : 0;
+        if (result == 0) wait = (60 * 1000) << (failures - 1);
+        if (result == 2) wait = 5 * 60 * 1000;
+      } else {
+        wait = 10 * 60 * 1000;
+      }
+    }
     DWORD r = WaitForSingleObject(g->check_event, wait);
-    if (r == WAIT_OBJECT_0) {
+    triggered = r == WAIT_OBJECT_0;
+    if (triggered) {
       Sleep(8000);
       ResetEvent(g->check_event);
     }
@@ -417,6 +448,11 @@ void register_triggers(HWND hwnd) {
     reg(hwnd, &kDisplayState, 0);
     reg(hwnd, &kPowerSource, 0);
   }
+  DEV_BROADCAST_DEVICEINTERFACE_W filter{};
+  filter.dbcc_size = sizeof(filter);
+  filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+  filter.dbcc_classguid = kMonitorInterface;
+  RegisterDeviceNotificationW(hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
   HMODULE wts = LoadLibraryW(L"wtsapi32.dll");
   using Session = BOOL(WINAPI*)(HWND, DWORD);
   auto session = wts ? reinterpret_cast<Session>(reinterpret_cast<void*>(GetProcAddress(wts, "WTSRegisterSessionNotification"))) : nullptr;
@@ -604,6 +640,19 @@ void on_timer() {
   }
 }
 
+void screen_returned() {
+  if (!g->check_event) return;
+  SetEvent(g->check_event);
+  if (!g->update_ready || g->update_version.empty()) return;
+  if (g->state == State::Error) return;
+  if (read_small(app::userdata(L"update_acted")) == g->update_version) return;
+  ULONGLONG now = GetTickCount64();
+  if (g->renotified != 0 && now - g->renotified < kRenotifyGapMs) return;
+  if (app::do_not_disturb() || app::ui_window_open()) return;
+  g->renotified = now;
+  notify_update(g->update_version);
+}
+
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (g) {
     if (msg == kTrayMsg) {
@@ -654,15 +703,33 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (msg == kWmPowerBroadcast) {
       bool trigger = wp == kResumeAutomatic || wp == kResumeSuspend;
+      bool screen = false;
       if (wp == kPowerSettingChange && lp) {
         const PowerSetting* ps = reinterpret_cast<const PowerSetting*>(lp);
-        if (ps->length > 0 && (IsEqualGUID(ps->guid, kDisplayState) || IsEqualGUID(ps->guid, kPowerSource))) trigger = true;
+        if (ps->length > 0 && IsEqualGUID(ps->guid, kDisplayState)) {
+          trigger = true;
+          screen = ps->data[0] != 0;
+        } else if (ps->length > 0 && IsEqualGUID(ps->guid, kPowerSource)) {
+          trigger = true;
+        }
       }
-      if (trigger && g->check_event) SetEvent(g->check_event);
+      if (screen || wp == kResumeAutomatic || wp == kResumeSuspend) {
+        screen_returned();
+      } else if (trigger && g->check_event) {
+        SetEvent(g->check_event);
+      }
+      return TRUE;
+    }
+    if (msg == kWmDisplayChange) {
+      screen_returned();
+      return 0;
+    }
+    if (msg == kWmDeviceChange) {
+      if (wp == kDeviceArrival || wp == kDeviceRemoved) screen_returned();
       return TRUE;
     }
     if (msg == kWmSessionChange) {
-      if (wp == kSessionUnlock && g->check_event) SetEvent(g->check_event);
+      if (wp == kSessionUnlock) screen_returned();
       return 0;
     }
     if (msg == app::kMsgOpenUi) {

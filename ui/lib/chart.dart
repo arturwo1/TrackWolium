@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'data.dart';
 import 'haptics.dart';
 import 'l10n.dart';
+import 'reschart.dart';
 import 'theme.dart';
 
 enum Metric { focused, open, minimized, visible }
@@ -49,6 +50,27 @@ const _top = 8.0;
 const _bottom = 22.0;
 const _tipWidth = 250.0;
 const _detailWidth = 250.0;
+
+double? seriesValueAt(ResSeries s, double sec) {
+  final p = s.points;
+  if (p.isEmpty) return null;
+  if (sec <= p.first.dx) return (p.first.dx - sec) <= 600 ? p.first.dy : null;
+  if (sec >= p.last.dx) return (sec - p.last.dx) <= 600 ? p.last.dy : null;
+  for (var i = 0; i < p.length - 1; i++) {
+    if (sec >= p[i].dx && sec <= p[i + 1].dx) {
+      final w = p[i + 1].dx - p[i].dx;
+      final t = w <= 0 ? 0.0 : (sec - p[i].dx) / w;
+      return p[i].dy * (1 - t) + p[i + 1].dy * t;
+    }
+  }
+  return null;
+}
+
+double seriesScaleTop(ResSeries s, double a, double b) {
+  final pad = (b - a) * 0.2;
+  final m = s.maxIn(a - pad, b + pad);
+  return (m <= 0 ? 1.0 : m) * 1.18;
+}
 
 int bucketSecFor(double span, double plotW) {
   final budget = (plotW / 5).clamp(150.0, 250.0).toDouble();
@@ -156,6 +178,7 @@ class ActivityChart extends StatefulWidget {
     this.presence = const [],
     this.assetUrl,
     this.onView,
+    this.series = const [],
   });
 
   final DateTime first;
@@ -169,6 +192,7 @@ class ActivityChart extends StatefulWidget {
   final Widget Function(String app, double size) icon;
   final double height;
   final void Function(double from, double to, int bucketSec)? onView;
+  final List<ResSeries> series;
 
   @override
   State<ActivityChart> createState() => _ActivityChartState();
@@ -177,6 +201,7 @@ class ActivityChart extends StatefulWidget {
 class _ActivityChartState extends State<ActivityChart> {
   final key = GlobalKey();
   final tip = ValueNotifier<_Tip?>(null);
+  final lineHover = ValueNotifier<String?>(null);
   OverlayEntry? entry;
   Timer? hideTimer;
   Timer? removeTimer;
@@ -207,6 +232,36 @@ class _ActivityChartState extends State<ActivityChart> {
   double plotH = 1;
 
   double get span => vx1 - vx0;
+
+  ResSeries? get focusSeries {
+    final id = lineHover.value ?? seriesFocus.value;
+    if (id == null) return null;
+    for (final s in widget.series) {
+      if (s.id == id || s.id.startsWith('$id:')) return s;
+    }
+    return null;
+  }
+
+  String? nearSeries(Offset p) {
+    String? best;
+    var d = 12.0;
+    final sec = vx0 + (p.dx - _left) / plotW * span;
+    for (final s in widget.series) {
+      final v = seriesValueAt(s, sec);
+      if (v == null) continue;
+      final y = _top + plotH * (1 - v / seriesScaleTop(s, vx0, vx1));
+      final dist = (y - p.dy).abs();
+      if (dist < d) {
+        d = dist;
+        best = s.id;
+      }
+    }
+    return best;
+  }
+
+  void setLine(String? id) {
+    if (lineHover.value != id) lineHover.value = id;
+  }
 
   @override
   void initState() {
@@ -291,6 +346,7 @@ class _ActivityChartState extends State<ActivityChart> {
     entry?.remove();
     entry = null;
     tip.dispose();
+    lineHover.dispose();
     super.dispose();
   }
 
@@ -480,11 +536,14 @@ class _ActivityChartState extends State<ActivityChart> {
     if (t != null && t.interactive) return;
     final p = e.localPosition;
     if (p.dx < _left || p.dx > _left + plotW || cache.isEmpty) {
+      setLine(null);
       scheduleHide();
       return;
     }
+    final near = nearSeries(p);
+    setLine(near);
     final lineTop = math.min(lineY(p.dx), math.min(lineY(p.dx - 8), lineY(p.dx + 8)));
-    if (p.dy >= lineTop - 34 && p.dy <= _top + plotH + 6) {
+    if (near != null || (p.dy >= lineTop - 34 && p.dy <= _top + plotH + 6)) {
       show(p, touchMode: false);
     } else {
       scheduleHide(60);
@@ -566,6 +625,7 @@ class _ActivityChartState extends State<ActivityChart> {
           cursor: dragging ? SystemMouseCursors.grabbing : SystemMouseCursors.basic,
           onHover: onHover,
           onExit: (_) {
+            setLine(null);
             final t = tip.value;
             scheduleHide(t != null && t.interactive ? 900 : 60);
           },
@@ -601,10 +661,14 @@ class _ActivityChartState extends State<ActivityChart> {
               width: c.maxWidth,
               height: widget.height,
               child: ClipRect(
-                child: ValueListenableBuilder<_Tip?>(
-                  valueListenable: tip,
-                  builder: (context, t, _) => CustomPaint(
+                child: ListenableBuilder(
+                  listenable: Listenable.merge([tip, lineHover, seriesFocus]),
+                  builder: (context, _) {
+                    final t = tip.value;
+                    return CustomPaint(
                     painter: _ChartPainter(
+                      series: widget.series,
+                      focus: focusSeries,
                       buckets: cache,
                       cLo: cLo,
                       bucket: bucket,
@@ -616,7 +680,8 @@ class _ActivityChartState extends State<ActivityChart> {
                       ySpan: top.toDouble(),
                       hover: t != null && t.visible ? t.bucket : null,
                     ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ),
@@ -726,20 +791,27 @@ class _ActivityChartState extends State<ActivityChart> {
   }
 
   Widget buildOverlay(BuildContext overlayContext) {
-    return ValueListenableBuilder<_Tip?>(
-      valueListenable: tip,
-      builder: (context, t, _) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([tip, lineHover, seriesFocus]),
+      builder: (context, _) {
+        final t = tip.value;
         if (t == null) return const SizedBox.shrink();
+        final fs = focusSeries;
+        final fa = (t.bucket * bucket).toDouble();
+        final fb = math.min(widget.total, (t.bucket + 1) * bucket).toDouble();
+        final fApps = fs == null
+            ? <MapEntry<String, double>>[]
+            : (fs.appsIn(fa, fb).entries.where((e) => e.value > 0).toList()..sort((x, y) => y.value.compareTo(x.value)));
         final screen = MediaQuery.of(context).size;
         final b = bucketOf(t.bucket) ?? Bucket();
         final rows = b.apps.entries
             .where((e) => metricOf(e.value, widget.metric) > 0 && (widget.only == null || e.key == widget.only))
             .toList()
           ..sort((a, c) => metricOf(c.value, widget.metric).compareTo(metricOf(a.value, widget.metric)));
-        final visibleRows = math.min(rows.length, 6);
+        final visibleRows = math.min(fs == null ? rows.length : fApps.length, 6);
         final marks = presenceIn(t.bucket);
         final maxH = math.max(120.0, screen.height - 16);
-        final height = math.min(maxH, 70.0 + math.max(1, visibleRows) * 40.0 + marks.length * 190.0);
+        final height = math.min(maxH, 70.0 + math.max(1, visibleRows) * 40.0 + (fs == null ? marks.length * 190.0 : 0.0));
         double left;
         double topPos;
         if (t.follow) {
@@ -793,7 +865,7 @@ class _ActivityChartState extends State<ActivityChart> {
                 key: tipKey,
                 onEnter: (_) => cancelHide(),
                 onExit: (_) => scheduleHide(900),
-                child: animated(_mainTip(b, t, rows, maxH), t.visible),
+                child: animated(fs == null ? _mainTip(b, t, rows, maxH) : _seriesTip(fs, t, fApps, fa, fb, maxH), t.visible),
               ),
             ),
           ),
@@ -893,6 +965,52 @@ class _ActivityChartState extends State<ActivityChart> {
     );
   }
 
+  Widget _seriesTip(ResSeries s, _Tip t, List<MapEntry<String, double>> apps, double a, double b, double maxH) {
+    final total = s.valueIn(a, b);
+    return Material(
+      type: MaterialType.transparency,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxH),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: _tipDecoration,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(rangeText(t.bucket), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text('${s.label}: ${s.format(total)}', style: TextStyle(color: s.color, fontWeight: FontWeight.w900, fontSize: 15)),
+            if (apps.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Flexible(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 240),
+                  child: ListView(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    children: [
+                      for (final e in apps)
+                        Container(
+                          height: 36,
+                          margin: const EdgeInsets.only(bottom: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: Row(children: [
+                            widget.icon(e.key, 20),
+                            const SizedBox(width: 8),
+                            Expanded(child: EllipsisText(widget.title(e.key), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                            const SizedBox(width: 6),
+                            Text(s.format(e.value), style: const TextStyle(fontSize: 12, color: cMuted)),
+                          ]),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ]),
+        ),
+      ),
+    );
+  }
+
   Widget _detailTip(String app) {
     final tb = tip.value?.bucket ?? 0;
     final ws = tb * bucket;
@@ -939,8 +1057,10 @@ class _ActivityChartState extends State<ActivityChart> {
 }
 
 class _ChartPainter extends CustomPainter {
-  _ChartPainter({required this.buckets, required this.cLo, required this.bucket, required this.first, required this.total, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover});
+  _ChartPainter({required this.series, required this.focus, required this.buckets, required this.cLo, required this.bucket, required this.first, required this.total, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover});
 
+  final List<ResSeries> series;
+  final ResSeries? focus;
   final List<Bucket?> buckets;
   final int cLo;
   final int bucket;
@@ -969,9 +1089,10 @@ class _ChartPainter extends CustomPainter {
     for (var k = 0; k <= 2; k++) {
       final y = _top + plotH * k / 2;
       canvas.drawLine(Offset(_left, y), Offset(size.width - _right, y), grid);
-      final v = yBottom + ySpan * (2 - k) / 2;
-      final tp = TextPainter(text: TextSpan(text: formatMs(v.round()), style: label), textDirection: TextDirection.ltr)..layout();
-      tp.paint(canvas, Offset(_left - tp.width - 6, y - tp.height / 2));
+      final f = focus;
+      final shown = f == null ? formatMs((yBottom + ySpan * (2 - k) / 2).round()) : (k == 2 ? f.format(0) : f.format(seriesScaleTop(f, vx0, vx1) * (2 - k) / 2));
+      final tp = TextPainter(text: TextSpan(text: shown, style: f == null ? label : TextStyle(color: f.color, fontSize: 11, fontWeight: FontWeight.w700)), textDirection: TextDirection.ltr)..layout();
+      tp.paint(canvas, Offset(math.max(0.0, _left - tp.width - 6), y - tp.height / 2));
     }
     var step = _niceSteps.last;
     final avail = size.width - _left - _right;
@@ -997,7 +1118,12 @@ class _ChartPainter extends CustomPainter {
       lastEnd = dx + tp.width;
       tp.paint(canvas, Offset(dx, size.height - tp.height));
     }
-    if (buckets.isEmpty) return;
+    final dim = focus != null;
+    final fade = dim ? 0.3 : 1.0;
+    if (buckets.isEmpty) {
+      paintSeries(canvas, plotW, plotH, span);
+      return;
+    }
 
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(_left, 0, plotW, _top + plotH + 1));
@@ -1035,7 +1161,7 @@ class _ChartPainter extends CustomPainter {
       canvas.drawPath(
         fill,
         Paint()
-          ..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [cPrimary.withValues(alpha: 0.28), cPrimary.withValues(alpha: 0)])
+          ..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [cPrimary.withValues(alpha: 0.28 * fade), cPrimary.withValues(alpha: 0)])
               .createShader(Rect.fromLTWH(_left, _top, plotW, plotH)),
       );
       canvas.drawPath(
@@ -1044,10 +1170,11 @@ class _ChartPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.2
           ..strokeJoin = StrokeJoin.round
-          ..color = cPrimary,
+          ..color = cPrimary.withValues(alpha: fade),
       );
     }
-    if (hover != null) {
+    paintSeries(canvas, plotW, plotH, span);
+    if (hover != null && !dim) {
       final p = Offset(xOf(center(hover!)), yOf(valueOf(hover!)));
       canvas.drawLine(
           Offset(p.dx, _top),
@@ -1063,6 +1190,58 @@ class _ChartPainter extends CustomPainter {
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2.2
             ..color = cPrimary);
+    }
+    canvas.restore();
+  }
+
+  void paintSeries(Canvas canvas, double plotW, double plotH, double span) {
+    if (series.isEmpty) return;
+    double xOf(double sec) => _left + (sec - vx0) / span * plotW;
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(_left, 0, plotW, _top + plotH + 1));
+    final ordered = [for (final s in series) if (s.id != focus?.id) s, if (focus != null) focus!];
+    for (final s in ordered) {
+      final isFocus = focus != null && s.id == focus!.id;
+      final top = seriesScaleTop(s, vx0, vx1);
+      double yOf(double v) => _top + plotH * (1 - (v / top).clamp(0.0, 1.0));
+      final pad = span * 0.2;
+      final pts = [for (final p in s.points) if (p.dx >= vx0 - pad && p.dx <= vx1 + pad) Offset(xOf(p.dx), yOf(p.dy))];
+      if (pts.isEmpty) continue;
+      final alpha = focus == null ? 0.95 : (isFocus ? 1.0 : 0.22);
+      final width = focus == null ? 2.0 : (isFocus ? 3.4 : 1.4);
+      final color = s.color.withValues(alpha: alpha);
+      if (pts.length == 1) {
+        canvas.drawCircle(pts.first, width + 1, Paint()..color = color);
+        continue;
+      }
+      final path = Path()..moveTo(pts.first.dx, pts.first.dy);
+      for (var i = 1; i < pts.length; i++) {
+        path.lineTo(pts[i].dx, pts[i].dy);
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = width
+          ..strokeJoin = StrokeJoin.round
+          ..strokeCap = StrokeCap.round
+          ..color = color,
+      );
+      if (isFocus && hover != null) {
+        final v = s.valueIn(hover! * bucket.toDouble(), math.min(total, (hover! + 1) * bucket).toDouble());
+        final c = Offset(xOf((hover! + 0.5) * bucket), yOf(v));
+        canvas.drawLine(Offset(c.dx, _top), Offset(c.dx, _top + plotH), Paint()
+          ..color = s.color.withValues(alpha: 0.35)
+          ..strokeWidth = 1);
+        canvas.drawCircle(c, 5, Paint()..color = cBg);
+        canvas.drawCircle(
+            c,
+            5,
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2.2
+              ..color = s.color);
+      }
     }
     canvas.restore();
   }

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "tw/platform.hpp"
 #include "tw/win_util.hpp"
 #include <dwmapi.h>
@@ -172,11 +173,14 @@ public:
             p.stamp = static_cast<long long>(u64(created));
             p.app = to_utf8(base_name(low));
             p.cpu_ms = static_cast<long long>((u64(kernel) + u64(user)) / 10000ULL);
-            PROCESS_MEMORY_COUNTERS mc{};
+            PROCESS_MEMORY_COUNTERS_EX mc{};
             mc.cb = sizeof(mc);
-            if (GetProcessMemoryInfo(h, &mc, sizeof(mc))) {
-              p.rss_kb = static_cast<long long>(mc.WorkingSetSize / 1024);
-              p.peak_kb = static_cast<long long>(mc.PeakWorkingSetSize / 1024);
+            if (GetProcessMemoryInfo(h, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&mc), sizeof(mc))) {
+              unsigned long long priv = std::min<unsigned long long>(mc.PrivateUsage, mc.WorkingSetSize);
+              unsigned long long peak = std::min<unsigned long long>(mc.PeakPagefileUsage, mc.PeakWorkingSetSize);
+              if (peak < priv) peak = priv;
+              p.rss_kb = static_cast<long long>(priv / 1024);
+              p.peak_kb = static_cast<long long>(peak / 1024);
             }
             IO_COUNTERS io{};
             if (GetProcessIoCounters(h, &io)) {

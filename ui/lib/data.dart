@@ -227,7 +227,6 @@ class Usage {
     final db = _open();
     if (db == null) return [];
     final out = <Contrib>[];
-    final origin = DateTime.utc(first.year, first.month, first.day);
     final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
     int? cutoff;
     if (sessions) {
@@ -244,8 +243,8 @@ class Usage {
           'SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM timeline WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, state',
           [key(a), key(b), bin]);
       for (final r in rows) {
-        final d = DateTime.parse('${r['day']}T00:00:00Z').difference(origin).inDays;
-        final start = d * 86400 + (r['bslot'] as int) * 300;
+        final midnight = DateTime.parse('${r['day']}T00:00:00');
+        final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
         final end = start + bin * 300;
         if (cutoff != null && end > cutoff) continue;
         out.add(Contrib(start, end, r['app'] as String, r['state'] as int, r['ms'] as int));
@@ -286,7 +285,6 @@ class Usage {
     final db = _open();
     if (db == null) return [];
     final out = <ResPoint>[];
-    final origin = DateTime.utc(first.year, first.month, first.day);
     try {
       final a = first.add(Duration(seconds: w0));
       final b = first.add(Duration(seconds: w1));
@@ -295,8 +293,8 @@ class Usage {
           'SELECT day, (slot / ?3) * ?3 AS bslot, app, SUM(cpu) AS cpu, SUM(ram) AS ram, SUM(n) AS n, MAX(peak) AS peak, SUM(ior) AS ior, SUM(iow) AS iow FROM res WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app',
           [key(a), key(b), bin]);
       for (final r in rows) {
-        final d = DateTime.parse('${r['day']}T00:00:00Z').difference(origin).inDays;
-        final start = d * 86400 + (r['bslot'] as int) * 300;
+        final midnight = DateTime.parse('${r['day']}T00:00:00');
+        final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
         final n = r['n'] as int;
         out.add(ResPoint(start, start + bin * 300, r['app'] as String, r['cpu'] as int, n == 0 ? 0 : (r['ram'] as int) ~/ n, r['peak'] as int, r['ior'] as int, r['iow'] as int));
       }

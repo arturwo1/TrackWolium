@@ -345,6 +345,10 @@ object Sync {
     val dir = dir(ctx)
     if (!File(dir, "consent").exists() || File(dir, "noupdates").exists()) return
     val current = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: return
+    val gate = ctx.getSharedPreferences("wolium", Context.MODE_PRIVATE)
+    val nowMs = System.currentTimeMillis()
+    if (nowMs - gate.getLong("update_checked", 0L) < 6L * 3600L * 1000L) return
+    gate.edit().putLong("update_checked", nowMs).apply()
     val latest = http("https://github.com/$REPO/releases/latest/download/version.txt").trim()
     if (!Regex("^[0-9]+(\\.[0-9]+)*$").matches(latest) || compare(current, latest) >= 0) {
       cleanUpdates(ctx)

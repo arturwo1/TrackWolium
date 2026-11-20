@@ -2,7 +2,15 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <ws2ipdef.h>
 #include <winhttp.h>
+#include <iphlpapi.h>
+#include <ntddndis.h>
+#include <netioapi.h>
+#include <objbase.h>
+#include <netlistmgr.h>
 #include "common_win.hpp"
 
 namespace app {
@@ -135,6 +143,47 @@ inline bool do_not_disturb() {
   bool busy = false;
   if (query && SUCCEEDED(query(&state))) busy = state == 2 || state == 3 || state == 4 || state == 6;
   return busy;
+}
+
+inline bool unmetered_connection() {
+  bool ok = true;
+  HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  INetworkCostManager* manager = nullptr;
+  if (SUCCEEDED(CoCreateInstance(CLSID_NetworkListManager, nullptr, CLSCTX_ALL, IID_INetworkCostManager, reinterpret_cast<void**>(&manager))) && manager) {
+    DWORD cost = 0;
+    if (SUCCEEDED(manager->GetCost(&cost, nullptr))) ok = cost == 0 || (cost & NLM_CONNECTION_COST_UNRESTRICTED) != 0;
+    manager->Release();
+  }
+  if (SUCCEEDED(init)) CoUninitialize();
+  return ok;
+}
+
+inline unsigned long long net_octets() {
+  HMODULE lib = LoadLibraryW(L"iphlpapi.dll");
+  if (!lib) return 0;
+  using Get = ULONG(WINAPI*)(PMIB_IF_TABLE2*);
+  using Free = VOID(WINAPI*)(PVOID);
+  auto get = reinterpret_cast<Get>(reinterpret_cast<void*>(GetProcAddress(lib, "GetIfTable2")));
+  auto release = reinterpret_cast<Free>(reinterpret_cast<void*>(GetProcAddress(lib, "FreeMibTable")));
+  unsigned long long sum = 0;
+  PMIB_IF_TABLE2 table = nullptr;
+  if (get && release && get(&table) == NO_ERROR && table) {
+    for (ULONG i = 0; i < table->NumEntries; ++i) {
+      const MIB_IF_ROW2& row = table->Table[i];
+      if (row.Type == IF_TYPE_SOFTWARE_LOOPBACK || row.OperStatus != IfOperStatusUp) continue;
+      sum += row.InOctets + row.OutOctets;
+    }
+    release(table);
+  }
+  FreeLibrary(lib);
+  return sum;
+}
+
+inline bool traffic_flowing() {
+  unsigned long long a = net_octets();
+  Sleep(1000);
+  unsigned long long b = net_octets();
+  return b > a && b - a > 16 * 1024;
 }
 
 inline bool json_value(const std::string& s, const std::string& key, size_t& pos, std::string& value) {

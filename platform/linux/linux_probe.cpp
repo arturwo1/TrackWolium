@@ -186,7 +186,9 @@ public:
       std::string text;
       if (read_file(it->path() / "status", text)) {
         long long hwm = field_kb(text, "VmHWM:");
-        p.peak_kb = hwm > 0 ? hwm : p.rss_kb;
+        long long anon = field_kb(text, "RssAnon:");
+        if (anon >= 0 && anon < p.rss_kb) p.rss_kb = anon;
+        p.peak_kb = hwm > 0 ? std::max(hwm, p.rss_kb) : p.rss_kb;
       } else {
         p.peak_kb = p.rss_kb;
       }

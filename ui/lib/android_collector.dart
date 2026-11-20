@@ -175,7 +175,6 @@ class UsageBridge {
 
   Future<bool> appInfo(String pkg) async => (await _channel.invokeMethod<bool>('appInfo', {'pkg': pkg})) ?? false;
 
-  Future<bool> uninstallApp(String pkg) async => (await _channel.invokeMethod<bool>('uninstallApp', {'pkg': pkg})) ?? false;
 
   Future<String> label(String pkg) async => (await _channel.invokeMethod<String>('label', {'pkg': pkg})) ?? pkg;
 

@@ -45,12 +45,13 @@ struct MetricsConfig {
   bool io_write = false;
   bool sys_ram = false;
   bool sys_disk = false;
+  bool no_time = false;
 
   bool any_proc() const { return cpu || ram || peak || io_read || io_write; }
   bool any_sys() const { return sys_ram || sys_disk; }
   bool any() const { return any_proc() || any_sys(); }
   bool operator==(const MetricsConfig& o) const {
-    return cpu == o.cpu && ram == o.ram && peak == o.peak && io_read == o.io_read && io_write == o.io_write && sys_ram == o.sys_ram && sys_disk == o.sys_disk;
+    return cpu == o.cpu && ram == o.ram && peak == o.peak && io_read == o.io_read && io_write == o.io_write && sys_ram == o.sys_ram && sys_disk == o.sys_disk && no_time == o.no_time;
   }
   bool operator!=(const MetricsConfig& o) const { return !(*this == o); }
 };

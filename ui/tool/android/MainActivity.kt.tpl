@@ -133,15 +133,6 @@ class MainActivity : FlutterActivity() {
             false
           })
         }
-        "uninstallApp" -> {
-          val pkg = call.argument<String>("pkg") ?: ""
-          result.success(try {
-            startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            true
-          } catch (ex: Exception) {
-            false
-          })
-        }
         "icon" -> result.success(Sync.icon(this, call.argument<String>("pkg") ?: ""))
         "saveFile" -> {
           pendingBytes = call.argument<ByteArray>("bytes")
@@ -173,10 +164,29 @@ class MainActivity : FlutterActivity() {
           result.success(a)
         }
         "deviceName" -> {
-          val maker = Build.MANUFACTURER ?: ""
-          val model = Build.MODEL ?: ""
-          val brand = if (maker.isEmpty()) "" else maker.substring(0, 1).uppercase() + maker.substring(1)
-          result.success(if (model.lowercase().startsWith(maker.lowercase())) model else "$brand $model".trim())
+          fun setting(name: String): String {
+            var v: String? = null
+            try {
+              v = Settings.Global.getString(contentResolver, name)
+            } catch (ex: Exception) {
+            }
+            if (v.isNullOrBlank()) {
+              try {
+                v = Settings.Secure.getString(contentResolver, name)
+              } catch (ex: Exception) {
+              }
+            }
+            return (v ?: "").trim()
+          }
+          var name = setting("device_name")
+          if (name.isEmpty()) name = setting("bluetooth_name")
+          if (name.isEmpty()) {
+            val maker = Build.MANUFACTURER ?: ""
+            val model = Build.MODEL ?: ""
+            val brand = if (maker.isEmpty()) "" else maker.substring(0, 1).uppercase() + maker.substring(1)
+            name = if (model.lowercase().startsWith(maker.lowercase())) model else "$brand $model".trim()
+          }
+          result.success(name)
         }
         "readyApk" -> {
           result.success(try {

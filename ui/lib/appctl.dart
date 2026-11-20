@@ -82,15 +82,19 @@ int _onWindow(int hwnd, int lparam) {
   return 1;
 }
 
-bool _focusWindows(String app) {
-  if (_enumWindows == null || _openProcess == null) return false;
+int _findWindow(String app) {
+  if (_enumWindows == null || _openProcess == null) return 0;
   _wantedApp = app.toLowerCase();
   _foundWindow = 0;
   _pidNames.clear();
   final cb = Pointer.fromFunction<_EnumNative>(_onWindow, 1);
   _enumWindows!(cb, 0);
   _pidNames.clear();
-  final hwnd = _foundWindow;
+  return _foundWindow;
+}
+
+bool _focusWindows(String app) {
+  final hwnd = _findWindow(app);
   if (hwnd == 0) return false;
   if (_isIconic!(hwnd) != 0) _showWindow!(hwnd, _swRestore);
   final fg = _getForeground!();
@@ -108,6 +112,29 @@ bool _focusWindows(String app) {
   final ok = _setForeground!(hwnd) != 0;
   if (attach) _attachInput!(me, fgThread, 0);
   return ok;
+}
+
+bool _runningWindows(String app) {
+  if (_enumProcesses == null || _openProcess == null) return false;
+  final want = app.toLowerCase();
+  const cap = 4096;
+  final pids = calloc<Uint32>(cap);
+  final needed = calloc<Uint32>();
+  try {
+    if (_enumProcesses!(pids, cap * 4, needed) == 0) return false;
+    final count = needed.value ~/ 4;
+    _pidNames.clear();
+    for (var i = 0; i < count; i++) {
+      final pid = pids[i];
+      if (pid == 0 || pid == 4) continue;
+      if (_imageName(pid) == want) return true;
+    }
+    return false;
+  } finally {
+    _pidNames.clear();
+    calloc.free(pids);
+    calloc.free(needed);
+  }
 }
 
 int _terminateWindows(String app) {
@@ -215,6 +242,22 @@ Future<bool> _focusMac(String app) async {
   } catch (_) {
     return false;
   }
+}
+
+class AppLive {
+  const AppLive(this.running, this.window);
+
+  final bool running;
+  final bool window;
+}
+
+Future<AppLive> appLive(String app) async {
+  if (Platform.isWindows) {
+    final running = _runningWindows(app);
+    return AppLive(running, running && _findWindow(app) != 0);
+  }
+  final pids = Platform.isLinux ? _linuxPids(app) : (Platform.isMacOS ? await _macPids(app) : <int>[]);
+  return AppLive(pids.isNotEmpty, pids.isNotEmpty);
 }
 
 bool get appControlSupported => Platform.isWindows || Platform.isLinux || Platform.isMacOS;

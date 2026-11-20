@@ -205,6 +205,7 @@ void Engine::step(TimePoint now) {
 
   if (store_) {
     for (const auto& iv : intervals) {
+      if (metrics_.no_time) break;
       pending_[{iv.app, static_cast<int>(iv.state)}] += iv.ms;
       if (iv.state != State::Background) note_session(iv);
       if (iv.state != State::Background) pending_slots_[{slot_fn_(), iv.app, static_cast<int>(iv.state)}] += iv.ms.count();

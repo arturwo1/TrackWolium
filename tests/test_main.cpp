@@ -758,6 +758,28 @@ void test_engine_metrics_skips_background_apps() {
   CHECK(store->res.count({1, "bg"}) == 0);
 }
 
+void test_engine_time_can_be_disabled() {
+  auto probe = std::make_shared<MetricsProbe>();
+  auto store = std::make_shared<ResStore>();
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_slot_source([] { return 1; });
+  e.set_store(store, Duration(1000000));
+  e.set_metrics_intervals(Duration(1000), Duration(1000));
+  auto cfg = tw::parse_metrics("cpu notime");
+  CHECK(cfg.no_time && cfg.cpu);
+  CHECK(tw::parse_metrics(tw::format_metrics(cfg)) == cfg);
+  e.set_metrics(cfg);
+  probe->push({{"a", State::Focused}});
+  probe->snaps = {snap(1, 1, "a", 0, 100, 100, 0, 0)};
+  e.step(at(0));
+  probe->snaps = {snap(1, 1, "a", 500, 100, 100, 0, 0)};
+  e.step(at(2000));
+  e.finish();
+  CHECK(store->adds == 0 && store->slots.empty() && store->sessions.empty());
+  CHECK(store->res[{1, "a"}].cpu_ms == 500);
+}
+
 void test_engine_metrics_no_rows_when_disabled() {
   auto probe = std::make_shared<MetricsProbe>();
   auto store = std::make_shared<ResStore>();
@@ -855,6 +877,7 @@ int main() {
   test_engine_metrics_only_enabled_fields();
   test_engine_metrics_no_rows_when_disabled();
   test_engine_metrics_skips_background_apps();
+  test_engine_time_can_be_disabled();
   test_sqlite_resources();
   test_native_metrics_smoke();
 #ifdef _WIN32

@@ -217,6 +217,7 @@ class _ShellState extends State<Shell> {
   late DateTime to;
   String preset = 'day';
   String? hoverApp;
+  String? menuApp;
   List<AppUsage> rows = [];
   Duration? beat;
   bool hasDb = false;
@@ -381,16 +382,28 @@ class _ShellState extends State<Shell> {
     return RelativeRect.fromRect(at & const Size(1, 1), Offset.zero & overlay.size);
   }
 
+  Future<T?> darkMenu<T>(Offset at, List<PopupMenuEntry<T>> items) => showMenu<T>(
+        context: context,
+        position: menuPosition(at),
+        color: cBg,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: const Color(0x99000000),
+        elevation: 12,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(rSm), side: const BorderSide(color: cBorder)),
+        items: items,
+      );
+
   Future<void> columnMenu(Offset at) async {
     final ids = columnChoices();
-    final chosen = await showMenu<String>(
-      context: context,
-      position: menuPosition(at),
-      items: [
-        PopupMenuItem<String>(enabled: false, height: 32, child: Text(tr('colMenu'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800))),
-        for (final id in ids) CheckedPopupMenuItem<String>(value: id, checked: ColumnPrefs.shown(id), child: Text(columnLabel(id))),
-      ],
-    );
+    final chosen = await darkMenu<String>(at, [
+      PopupMenuItem<String>(enabled: false, height: 32, child: Text(tr('colMenu'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800))),
+      for (final id in ids)
+        CheckedPopupMenuItem<String>(
+          value: id,
+          checked: ColumnPrefs.shown(id),
+          child: Text(columnLabel(id), style: const TextStyle(color: cPrimary)),
+        ),
+    ]);
     if (chosen == null) return;
     ColumnPrefs.set(chosen, !ColumnPrefs.shown(chosen));
   }
@@ -419,19 +432,22 @@ class _ShellState extends State<Shell> {
   }
 
   Future<void> rowMenu(AppUsage r, Offset at) async {
-    Widget item(IconData icon, String text, {Color? color}) => Row(children: [Icon(icon, size: 18, color: color ?? cMuted), const SizedBox(width: 10), Text(text, style: TextStyle(color: color))]);
+    Widget item(IconData icon, String text, {Color? color, bool on = true}) {
+      final c = on ? (color ?? cPrimary) : cMuted.withValues(alpha: 0.45);
+      return Row(children: [Icon(icon, size: 18, color: on ? (color ?? cMuted) : c), const SizedBox(width: 10), Text(text, style: TextStyle(color: c))]);
+    }
     final control = appControlSupported;
-    final v = await showMenu<String>(
-      context: context,
-      position: menuPosition(at),
-      items: [
-        if (control) PopupMenuItem<String>(value: 'focus', child: item(Icons.open_in_new, tr('actFocus'))),
-        if (control && r.path.isNotEmpty) PopupMenuItem<String>(value: 'locate', child: item(Icons.folder_open, tr('actLocate'))),
-        if (control) PopupMenuItem<String>(value: 'end', child: item(Icons.power_settings_new, tr('actEnd'), color: cDanger)),
-        if (control) const PopupMenuDivider(),
-        PopupMenuItem<String>(value: 'hide', child: item(Icons.visibility_off_outlined, tr('actHide'))),
-      ],
-    );
+    final live = control ? await appLive(r.app) : const AppLive(false, false);
+    final exists = r.path.isNotEmpty && File(r.path).existsSync();
+    setState(() => menuApp = r.app);
+    final v = await darkMenu<String>(at, [
+      if (control) PopupMenuItem<String>(value: 'focus', enabled: live.window, child: item(Icons.open_in_new, tr('actFocus'), on: live.window)),
+      if (control && r.path.isNotEmpty) PopupMenuItem<String>(value: 'locate', enabled: exists, child: item(Icons.folder_open, tr('actLocate'), on: exists)),
+      if (control) PopupMenuItem<String>(value: 'end', enabled: live.running, child: item(Icons.power_settings_new, tr('actEnd'), color: cDanger, on: live.running)),
+      if (control) const PopupMenuDivider(),
+      PopupMenuItem<String>(value: 'hide', child: item(Icons.visibility_off_outlined, tr('actHide'))),
+    ]);
+    if (mounted) setState(() => menuApp = null);
     switch (v) {
       case 'focus':
         if (!await focusApp(r.app)) toast(tr('actNoWindow'));
@@ -463,7 +479,6 @@ class _ShellState extends State<Shell> {
           const Divider(height: 1),
           ListTile(leading: const Icon(Icons.open_in_new), title: Text(tr('actOpenApp')), onTap: () => Navigator.pop(c, 'open')),
           ListTile(leading: const Icon(Icons.info_outline), title: Text(tr('actAppInfo')), onTap: () => Navigator.pop(c, 'info')),
-          ListTile(leading: const Icon(Icons.delete_outline, color: cDanger), title: Text(tr('actUninstall'), style: const TextStyle(color: cDanger)), onTap: () => Navigator.pop(c, 'delete')),
         ]),
       ),
     );
@@ -473,9 +488,6 @@ class _ShellState extends State<Shell> {
         break;
       case 'info':
         await bridge.appInfo(r.app);
-        break;
-      case 'delete':
-        await bridge.uninstallApp(r.app);
         break;
     }
   }
@@ -990,6 +1002,10 @@ class _ShellState extends State<Shell> {
   }
 
   Widget chartPanel(bool narrow) {
+    return SelectionContainer.disabled(child: chartPanelBody(narrow));
+  }
+
+  Widget chartPanelBody(bool narrow) {
     return Panel(
       padding: EdgeInsets.all(narrow ? 12 : 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1020,25 +1036,20 @@ class _ShellState extends State<Shell> {
           Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
             Text(tr('resChartTitle'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800)),
             for (final id in allMetricIds.where(MetricPrefs.enabled.value.contains))
-              FilterChip(
-                label: Text(metricName(id)),
-                selected: resSel.contains(id),
-                onSelected: (v) => setState(() => v ? resSel.add(id) : resSel.remove(id)),
+              MouseRegion(
+                onEnter: (_) => seriesFocus.value = id,
+                onExit: (_) => seriesFocus.value = null,
+                child: FilterChip(
+                  label: Text(metricName(id)),
+                  selected: resSel.contains(id),
+                  selectedColor: metricColor(id).withValues(alpha: 0.28),
+                  onSelected: (v) => setState(() => v ? resSel.add(id) : resSel.remove(id)),
+                ),
               ),
           ]),
         ],
         const SizedBox(height: 10),
-        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 190 : 240, onView: onChartView),
-        if (!Platform.isAndroid && resSel.isNotEmpty) ...[
-          const SizedBox(height: 14),
-          ResourceChart(
-            series: buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has),
-            first: from,
-            viewFrom: viewFrom,
-            viewTo: viewTo,
-            height: narrow ? 150 : 180,
-          ),
-        ],
+        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has)),
       ]),
     );
   }
@@ -1071,7 +1082,7 @@ class _ShellState extends State<Shell> {
           TableRow(
             decoration: only == r.app
                 ? BoxDecoration(color: cSoft.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(8), border: Border.all(color: cPrimary))
-                : BoxDecoration(color: hoverApp == r.app ? cSoft.withValues(alpha: 0.35) : null, border: const Border(top: BorderSide(color: cBorder))),
+                : BoxDecoration(color: menuApp == r.app ? cSoft.withValues(alpha: 0.7) : (hoverApp == r.app ? cSoft.withValues(alpha: 0.35) : null), border: const Border(top: BorderSide(color: cBorder))),
             children: [
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -1279,10 +1290,13 @@ class _ShellState extends State<Shell> {
       final pad = narrow ? 12.0 : 18.0;
       return Scaffold(
         body: SafeArea(
-          child: ValueListenableBuilder<bool>(
-            valueListenable: chartPinch,
-            builder: (context, pinching, _) => column(narrow, title, pad, pinching),
-          ),
+          child: Builder(builder: (context) {
+            final content = ValueListenableBuilder<bool>(
+              valueListenable: chartPinch,
+              builder: (context, pinching, _) => column(narrow, title, pad, pinching),
+            );
+            return Platform.isAndroid ? content : SelectionArea(child: content);
+          }),
         ),
       );
     });
@@ -1437,13 +1451,28 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  String statusLine() => translateUpdateStatus(Platform.isWindows ? updateStatus() : lastUpdateStatus);
+  int rowsTimeCost(Forecast f) => f.rowsPerDay * forecastDays * timeRowBytes;
+
+  void apiHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(tr('localApi')),
+        content: Text(tr('localApiHint')),
+        actions: [
+          TextButton(onPressed: () => open('https://github.com/arturwo1/TrackWolium/blob/main/docs/local-api.md'), child: Text(tr('localApiDocs'))),
+          TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok'))),
+        ],
+      ),
+    );
+  }
 
   Widget metricsSection() {
     return ValueListenableBuilder<Set<String>>(
       valueListenable: MetricPrefs.enabled,
       builder: (context, en, _) {
-        final f = forecastDb(enabled: en, histRows: forecastHist[0], histDays: forecastHist[1], disks: forecastDisks == 0 ? defaultDiskCount : forecastDisks);
+        final timeOn = !en.contains('notime');
+        final f = forecastDb(enabled: en, timeOn: timeOn, histRows: forecastHist[0], histDays: forecastHist[1], disks: forecastDisks == 0 ? defaultDiskCount : forecastDisks);
         String size(int b) => formatSize(b, sizeUnits());
         Widget row(String id) {
           final on = en.contains(id);
@@ -1466,20 +1495,37 @@ class _SettingsPageState extends State<SettingsPage> {
           ]);
         }
 
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(tr('metricsTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          Text(tr('metricsHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
-          const SizedBox(height: 6),
-          Row(children: [
-            Expanded(child: Text(tr('metricsTime'), style: const TextStyle(fontWeight: FontWeight.w600))),
-            const Switch(value: true, onChanged: null),
-          ]),
-          for (final id in allMetricIds) row(id),
-          const SizedBox(height: 6),
-          Text(tr('metricsTotal').replaceAll('{size}', size(f.total)), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-          Text(f.measured ? tr('metricsMeasured') : tr('metricsEstimated'), style: const TextStyle(color: cMuted, fontSize: 12)),
-        ]);
+        return Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            title: Text(tr('metricsTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: Text(tr('metricsTotal').replaceAll('{size}', size(f.total)), style: const TextStyle(color: cMuted, fontSize: 12)),
+            children: [
+              Align(alignment: Alignment.centerLeft, child: Text(tr('metricsHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(tr('metricsTime'), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    Text(tr('metricsPerMonth').replaceAll('{size}', size(timeOn ? f.time : rowsTimeCost(f))), style: const TextStyle(color: cMuted, fontSize: 12)),
+                  ]),
+                ),
+                Switch(
+                  value: timeOn,
+                  onChanged: (v) {
+                    buzz(0);
+                    MetricPrefs.set('notime', !v);
+                  },
+                ),
+              ]),
+              for (final id in allMetricIds) row(id),
+              const SizedBox(height: 6),
+              Align(alignment: Alignment.centerLeft, child: Text(f.measured ? tr('metricsMeasured') : tr('metricsEstimated'), style: const TextStyle(color: cMuted, fontSize: 12))),
+            ],
+          ),
+        );
       },
     );
   }
@@ -1635,14 +1681,21 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             if (checkText != null) Text(checkText!, style: const TextStyle(color: cMuted)),
           ]),
-          if (statusLine().isNotEmpty) Text(statusLine(), style: const TextStyle(color: cMuted, fontSize: 12)),
           const Divider(height: 28),
         ],
         Row(children: [
           Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),
           Switch(value: localApi, onChanged: toggleApi),
         ]),
-        Text(tr('localApiHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        Row(children: [
+          Expanded(child: Text(tr('localApiShort'), style: const TextStyle(color: cMuted, fontSize: 12))),
+          IconButton(
+            tooltip: tr('localApiMore'),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.help_outline, size: 18, color: cMuted),
+            onPressed: apiHelp,
+          ),
+        ]),
         if (Platform.isAndroid) Text(tr('localApiAndroid'), style: const TextStyle(color: cMuted, fontSize: 12)),
         const Divider(height: 28),
         if (!Platform.isAndroid) ...[
