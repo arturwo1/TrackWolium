@@ -217,6 +217,7 @@ class _ShellState extends State<Shell> {
   late DateTime to;
   String preset = 'day';
   String? hoverApp;
+  bool showTime = true;
   String? menuApp;
   List<AppUsage> rows = [];
   Duration? beat;
@@ -346,7 +347,7 @@ class _ShellState extends State<Shell> {
     });
   }
 
-  Widget sortHead(String label, String k, TextStyle head) {
+  Widget sortHead(String label, String k, TextStyle head, {bool resize = false}) {
     final on = sortKey == k;
     final box = HoverBox(
       onTap: () => sortBy(k),
@@ -359,10 +360,37 @@ class _ShellState extends State<Shell> {
       ),
     );
     if (Platform.isAndroid) return box;
+    final sized = !resize
+        ? box
+        : LayoutBuilder(builder: (context, c) {
+            var w = c.maxWidth;
+            return Stack(children: [
+              box,
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                width: 10,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.resizeColumn,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onHorizontalDragStart: (_) => w = ColumnPrefs.widths[k] ?? c.maxWidth,
+                    onHorizontalDragUpdate: (d) {
+                      w = (w + d.delta.dx).clamp(60.0, 420.0).toDouble();
+                      ColumnPrefs.setWidth(k, w, persist: false);
+                    },
+                    onHorizontalDragEnd: (_) => ColumnPrefs.persistWidths(),
+                    child: const Align(alignment: Alignment.centerRight, child: SizedBox(width: 2, child: ColoredBox(color: cBorder))),
+                  ),
+                ),
+              ),
+            ]);
+          });
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onSecondaryTapUp: (d) => columnMenu(d.globalPosition),
-      child: box,
+      child: sized,
     );
   }
 
@@ -1005,25 +1033,190 @@ class _ShellState extends State<Shell> {
     return SelectionContainer.disabled(child: chartPanelBody(narrow));
   }
 
+  String chartHeading() {
+    if (showTime || Platform.isAndroid) return tr('chartTitle');
+    final ids = [for (final id in allMetricIds) if (resSel.contains(id) && MetricPrefs.enabled.value.contains(id)) id];
+    if (ids.isEmpty) return tr('chartTitle');
+    return ids.length == 1 ? metricName(ids.first) : tr('chartTitleLines');
+  }
+
+  Widget toolDivider() => Container(width: 1, height: 24, color: cBorder);
+
+  Widget toolButton(String label, IconData icon, VoidCallback onTap, {String? badge}) {
+    return HoverBox(
+      onTap: () {
+        buzz(0);
+        onTap();
+      },
+      builder: (hovered) => Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: hovered ? cSoft : cPanel,
+          borderRadius: BorderRadius.circular(rMd),
+          border: Border.fromBorderSide(line),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 18, color: cMuted),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600)),
+          if (badge != null) ...[
+            const SizedBox(width: 6),
+            Text(badge, style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  Future<void> popover(BuildContext ctx, Widget Function(StateSetter set) body) async {
+    final box = ctx.findRenderObject() as RenderBox;
+    final overlay = Overlay.of(ctx).context.findRenderObject() as RenderBox;
+    final at = box.localToGlobal(Offset(0, box.size.height + 4), ancestor: overlay);
+    final pos = RelativeRect.fromLTRB(at.dx, at.dy, overlay.size.width - at.dx - box.size.width, overlay.size.height - at.dy);
+    await showMenu<void>(
+      context: ctx,
+      position: pos,
+      color: cBg,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: const Color(0x99000000),
+      elevation: 12,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(rSm), side: const BorderSide(color: cBorder)),
+      items: [
+        PopupMenuItem<void>(
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: StatefulBuilder(
+            builder: (c, set) => ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 240, maxWidth: 340),
+              child: body(set),
+            ),
+          ),
+        ),
+      ],
+    );
+    seriesFocus.value = null;
+  }
+
+  Widget popHeader(String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+        child: Text(text, style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w800)),
+      );
+
+  Widget popRow(String text, bool on, VoidCallback tap, {Color? dot, bool radio = false, VoidCallback? enter, VoidCallback? leave}) {
+    final icon = radio ? (on ? Icons.radio_button_checked : Icons.radio_button_unchecked) : (on ? Icons.check_box : Icons.check_box_outline_blank);
+    return MouseRegion(
+      onEnter: enter == null ? null : (_) => enter(),
+      onExit: leave == null ? null : (_) => leave(),
+      child: InkWell(
+        onTap: tap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(children: [
+            Icon(icon, size: 20, color: on ? cPrimary : cMuted),
+            const SizedBox(width: 10),
+            if (dot != null) ...[
+              Container(width: 10, height: 10, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+              const SizedBox(width: 8),
+            ],
+            Expanded(child: Text(text, style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600))),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> linesPopover(BuildContext ctx) {
+    return popover(ctx, (set) {
+      final ids = allMetricIds.where(MetricPrefs.enabled.value.contains).toList();
+      return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        popHeader(tr('linesBtn')),
+        popRow(tr('lineTime'), showTime, () {
+          setState(() => showTime = !showTime);
+          set(() {});
+        }, dot: cPrimary),
+        for (final id in ids)
+          popRow(
+            metricName(id),
+            resSel.contains(id),
+            () {
+              setState(() => resSel.contains(id) ? resSel.remove(id) : resSel.add(id));
+              set(() {});
+            },
+            dot: metricColor(id),
+            enter: () => seriesFocus.value = id,
+            leave: () => seriesFocus.value = null,
+          ),
+        if (ids.isEmpty)
+          Padding(padding: const EdgeInsets.fromLTRB(14, 4, 14, 12), child: Text(tr('linesHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
+        const SizedBox(height: 6),
+      ]);
+    });
+  }
+
+  Future<void> optionsPopover(BuildContext ctx, bool narrow) {
+    return popover(ctx, (set) {
+      final cols = columnChoices();
+      return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (!Platform.isAndroid) ...[
+          popHeader(tr('optMode')),
+          for (final m in Metric.values)
+            popRow(metricLabel(m), metric == m, () {
+              setState(() => metric = m);
+              set(() {});
+            }, radio: true),
+        ],
+        if (narrow || Platform.isAndroid) ...[
+          popHeader(tr('optColumns')),
+          for (final id in cols)
+            popRow(columnLabel(id), ColumnPrefs.shown(id), () {
+              ColumnPrefs.set(id, !ColumnPrefs.shown(id));
+              set(() {});
+            }),
+        ],
+        if (!narrow && !Platform.isAndroid && ColumnPrefs.widths.isNotEmpty) ...[
+          popHeader(tr('optColumns')),
+          InkWell(
+            onTap: () {
+              ColumnPrefs.resetWidths();
+              set(() {});
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Row(children: [
+                const Icon(Icons.restart_alt, size: 20, color: cMuted),
+                const SizedBox(width: 10),
+                Text(tr('optResetWidths'), style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+          ),
+        ],
+        const SizedBox(height: 6),
+      ]);
+    });
+  }
+
   Widget chartPanelBody(bool narrow) {
     return Panel(
       padding: EdgeInsets.all(narrow ? 12 : 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Wrap(spacing: 12, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          Text(tr('chartTitle'), style: const TextStyle(fontWeight: FontWeight.w800)),
+        Text(chartHeading(), style: const TextStyle(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           rangeSelect(),
-          if (!Platform.isAndroid)
-            SelectBox<Metric>(
-              value: metric,
-              items: [for (final m in Metric.values) DropdownMenuItem(value: m, child: Text(metricLabel(m)))],
-              onChanged: (v) => setState(() => metric = v ?? metric),
-            ),
+          toolDivider(),
           AppPicker(
             value: only,
             items: [for (final app in appChoices()) PickerItem(app, titleOf(app), iconOf(app, 20))],
             current: only == null ? null : PickerItem(only!, titleOf(only!), iconOf(only!, 20)),
             onChanged: (v) => setState(() => only = v),
           ),
+          if (!Platform.isAndroid) ...[
+            toolDivider(),
+            Builder(builder: (ctx) => toolButton(tr('linesBtn'), Icons.show_chart, () => linesPopover(ctx), badge: '${(showTime ? 1 : 0) + resSel.where(MetricPrefs.enabled.value.contains).length}')),
+          ],
+          toolDivider(),
+          Builder(builder: (ctx) => toolButton(tr('optionsBtn'), Icons.tune, () => optionsPopover(ctx, narrow))),
           IconButton(
             tooltip: tr('helpTitle'),
             visualDensity: VisualDensity.compact,
@@ -1031,25 +1224,8 @@ class _ShellState extends State<Shell> {
             onPressed: showChartHelp,
           ),
         ]),
-        if (!Platform.isAndroid && MetricPrefs.enabled.value.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            Text(tr('resChartTitle'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800)),
-            for (final id in allMetricIds.where(MetricPrefs.enabled.value.contains))
-              MouseRegion(
-                onEnter: (_) => seriesFocus.value = id,
-                onExit: (_) => seriesFocus.value = null,
-                child: FilterChip(
-                  label: Text(metricName(id)),
-                  selected: resSel.contains(id),
-                  selectedColor: metricColor(id).withValues(alpha: 0.28),
-                  onSelected: (v) => setState(() => v ? resSel.add(id) : resSel.remove(id)),
-                ),
-              ),
-          ]),
-        ],
         const SizedBox(height: 10),
-        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has)),
+        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has)),
       ]),
     );
   }
@@ -1070,12 +1246,25 @@ class _ShellState extends State<Shell> {
         );
     final ids = activeColumns();
     final cols = 1 + ids.length;
+    return LayoutBuilder(builder: (context, area) => wideTableBody(head, ids, cols, area.maxWidth, hov, cell));
+  }
+
+  Widget wideTableBody(TextStyle head, List<String> ids, int cols, double maxWidth, Widget Function(String?, Widget, {AppUsage? row}) hov, Widget Function(String, AppUsage, {TextStyle? style}) cell) {
+    final w = ColumnPrefs.widths;
+    final fixedSum = [for (final k in ['app', ...ids]) w[k] ?? 0.0].fold<double>(0, (a, b) => a + b) + 44;
+    final useWidths = fixedSum + 120 < maxWidth;
+    double? width(String k) => useWidths ? w[k] : null;
     return Table(
-      columnWidths: {0: const FlexColumnWidth(3), cols: const FixedColumnWidth(44)},
+      columnWidths: <int, TableColumnWidth>{
+        0: width('app') != null ? FixedColumnWidth(width('app')!) : const FlexColumnWidth(3),
+        for (var i = 0; i < ids.length; i++)
+          if (width(ids[i]) != null) i + 1: FixedColumnWidth(width(ids[i])!),
+        cols: const FixedColumnWidth(44),
+      },
       children: [
         TableRow(children: [
-          sortHead(tr('app'), 'app', head),
-          for (final id in ids) sortHead(columnLabel(id), id, head),
+          sortHead(tr('app'), 'app', head, resize: true),
+          for (final id in ids) sortHead(columnLabel(id), id, head, resize: true),
           const SizedBox.shrink(),
         ]),
         for (final r in sortedRows())
@@ -1112,22 +1301,18 @@ class _ShellState extends State<Shell> {
   }
 
   Widget compactList(TextStyle head) {
-    Widget stat(String label, int ms) => Padding(
+    final ids = activeColumns();
+    Widget stat(String label, String text) => Padding(
           padding: const EdgeInsets.only(right: 14, top: 4),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label, style: const TextStyle(color: cMuted, fontSize: 12)),
-            Text(ms == 0 ? '-' : formatMs(ms), style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
           ]),
         );
     return Column(children: [
       Wrap(children: [
         sortHead(tr('app'), 'app', head),
-        if (liveMode) sortHead(tr('now'), 'now', head),
-        sortHead(tr('total'), 'total', head),
-        if (multiState) ...[
-          sortHead(tr('focused'), 'focused', head),
-          sortHead(tr('open'), 'open', head),
-        ],
+        for (final id in ids) sortHead(columnLabel(id), id, head),
       ]),
       for (final r in sortedRows())
         GestureDetector(
@@ -1143,23 +1328,20 @@ class _ShellState extends State<Shell> {
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              if (liveMode) ...[
+              if (liveMode && ids.contains('now')) ...[
                 Container(width: 8, height: 8, decoration: BoxDecoration(color: r.now == null ? cMuted : stateColor(r.now), shape: BoxShape.circle)),
                 const SizedBox(width: 8),
               ],
               AppIcon(title: r.title, path: r.path, size: 22),
               const SizedBox(width: 8),
               Expanded(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
-              Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
+              if (ids.contains('total')) Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
               hideButton(r),
             ]),
-            if (multiState)
-              Wrap(children: [
-                stat(tr('focused'), r.ms[0]),
-                stat(tr('open'), r.ms[1]),
-                stat(tr('minimized'), r.ms[2]),
-                stat(tr('background'), r.ms[3]),
-              ]),
+            Wrap(children: [
+              for (final id in ids)
+                if (id != 'total' && id != 'now') stat(columnLabel(id), cellText(id, r)),
+            ]),
           ]),
         ),
         ),
@@ -1295,7 +1477,7 @@ class _ShellState extends State<Shell> {
               valueListenable: chartPinch,
               builder: (context, pinching, _) => column(narrow, title, pad, pinching),
             );
-            return Platform.isAndroid ? content : SelectionArea(child: content);
+            return Platform.isAndroid ? content : DefaultSelectionStyle(mouseCursor: MouseCursor.defer, child: SelectionArea(child: content));
           }),
         ),
       );

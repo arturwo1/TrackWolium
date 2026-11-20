@@ -4,3 +4,8 @@ add_test(NAME tw_tests COMMAND tw_tests WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 if(UNIX AND NOT APPLE)
   target_include_directories(tw_tests PRIVATE ${CMAKE_SOURCE_DIR}/platform/linux)
 endif()
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME translations COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_i18n.py)
+endif()

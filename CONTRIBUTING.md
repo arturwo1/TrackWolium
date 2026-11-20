@@ -15,7 +15,7 @@ By opening a pull request you agree to the contribution license in section 3 of 
 
 1. Run the first command, for example `python tools/lang.py add de Deutsch 0x07`.
 2. Open `i18n/translations/<code>.json` and translate the values. Do not rename keys. Keep `%` and `{}` placeholders and line breaks as they are. Untranslated keys fall back to English.
-3. Run the second command and commit the changed files.
+3. Run the second command, then `python tools/check_i18n.py`, and commit the changed files.
 
 No code needs to be edited by hand.
 

@@ -211,8 +211,8 @@
     "resMax": "max",
     "resScaleNote": "Each line is scaled to its own maximum. Click a legend item to hide or show its line.",
     "metricsTitle": "Resource metrics",
-    "metricsHint": "Time is always recorded. Enable extra metrics only if you need them: they are kept in memory and written to the database together with the regular batch, so there is no extra background disk activity. Recorded only for apps with a visible window.",
-    "metricsTime": "Time (always on)",
+    "metricsHint": "Extra metrics are kept in memory and written to the database with the regular batch, so there is no extra background disk activity. Recorded only for apps with a visible window.",
+    "metricsTime": "Time",
     "metricsPerMonth": "~{size}/month",
     "metricsTotal": "Estimated database growth: ~{size} per month",
     "metricsMeasured": "Based on your last days of activity.",
@@ -242,11 +242,17 @@
     "usInstalling": "installing silently",
     "usSilentFailed": "silent install failed",
     "usWaitingWindow": "ready, waiting for the window",
-    "usAvailable": "update available"
-  },
-  "localApiShort": "Local HTTP API for widgets and scripts, this device only.",
-  "localApiMore": "Endpoints and docs",
-  "localApiDocs": "Docs on GitHub",
-  "metricsTime": "Time",
-  "metricsHint": "Extra metrics are kept in memory and written to the database with the regular batch, so there is no extra background disk activity. Recorded only for apps with a visible window."
+    "usAvailable": "update available",
+    "localApiShort": "Local HTTP API for widgets and scripts, this device only.",
+    "localApiMore": "Endpoints and docs",
+    "localApiDocs": "Docs on GitHub",
+    "linesBtn": "Lines",
+    "optionsBtn": "Options",
+    "lineTime": "Time",
+    "chartTitleLines": "Resources",
+    "linesHint": "Enable resource metrics in Settings to add more lines.",
+    "optMode": "Count",
+    "optColumns": "Columns",
+    "optResetWidths": "Reset column widths"
+  }
 }

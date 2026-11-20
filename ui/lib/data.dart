@@ -512,9 +512,47 @@ class ColumnPrefs {
 
   static File get _file => File('${dataDir()}${Platform.pathSeparator}columns');
 
+  static Map<String, double> widths = {};
+
+  static File get _widthFile => File('${dataDir()}${Platform.pathSeparator}colwidths');
+
   static void load() {
     try {
       hidden.value = _file.existsSync() ? _file.readAsStringSync().split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toSet() : <String>{};
+    } catch (_) {}
+    try {
+      final next = <String, double>{};
+      if (_widthFile.existsSync()) {
+        for (final line in _widthFile.readAsLinesSync()) {
+          final i = line.indexOf('=');
+          final w = i < 0 ? null : double.tryParse(line.substring(i + 1).trim());
+          if (w != null && w >= 40 && w <= 800) next[line.substring(0, i).trim()] = w;
+        }
+      }
+      widths = next;
+    } catch (_) {}
+  }
+
+  static void setWidth(String id, double w, {bool persist = true}) {
+    widths = {...widths, id: w};
+    hidden.value = Set<String>.of(hidden.value);
+    if (persist) persistWidths();
+  }
+
+  static void resetWidths() {
+    widths = {};
+    hidden.value = Set<String>.of(hidden.value);
+    persistWidths();
+  }
+
+  static void persistWidths() {
+    try {
+      if (widths.isEmpty) {
+        if (_widthFile.existsSync()) _widthFile.deleteSync();
+      } else {
+        Directory(dataDir()).createSync(recursive: true);
+        _widthFile.writeAsStringSync('${widths.entries.map((e) => '${e.key}=${e.value.round()}').join('\n')}\n');
+      }
     } catch (_) {}
   }
 

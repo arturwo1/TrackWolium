@@ -15,77 +15,69 @@
 
 </div>
 
-## What is Wolium
+> [!NOTE]
+> **100% local.** No account, no cloud, no telemetry. Nothing is recorded until you accept the privacy policy, and your history never leaves your device.
 
-Wolium shows how much time you spend in each app: an interactive activity graph, a per-app table, daily leader, hidden apps and CSV export. Nothing is recorded until you accept the privacy policy, and nothing leaves your device.
+## Why Wolium
+
+| | |
+|---|---|
+| **See where the time goes** | Interactive graph and per-app table: focused, open, minimized, background |
+| **Zero background load** | No periodic disk writes, a quiet native core and a separate UI process |
+| **Resources, if you want them** | CPU, RAM and disk I/O per app on the same graph, off by default |
+| **Everywhere** | Windows, Linux, macOS and Android, English and Russian |
+| **Yours to use** | CSV export, local API with an OBS widget, Discord activity cards |
 
 ## Install
 
-| Platform | Steps |
-| --- | --- |
-| Windows 10 / 11 | Run `WoliumSetup.exe`. SmartScreen may warn about an unknown publisher: choose *More info*, then *Run anyway*. |
-| Android 8+ | Open `Wolium.apk`, allow installing from this source, then grant *Usage access* on first start. |
-| Linux | Extract the archive and run `./install.sh`. Windows are tracked on X11 and XWayland, and natively on Hyprland and Sway. On GNOME and KDE Wayland only background time is shown for pure Wayland apps. |
-| macOS 11+ | Open `Wolium-macos.dmg` and drag Wolium to Applications. On first start right-click it and choose *Open*. No Screen Recording or Accessibility access is needed. |
+| Platform | |
+|---|---|
+| Windows 10 / 11 | Run `WoliumSetup.exe` |
+| Android 8+ | Open `Wolium.apk`, then grant *Usage access* |
+| Linux | Extract the archive, run `./install.sh` |
+| macOS 11+ | Open the `.dmg`, drag to Applications |
 
-Wolium is not code-signed, which is why Windows and macOS show a warning on first start. Every release ships `SHA256SUMS.txt` and a GitHub build attestation proving the file was built from this repository. To verify a download:
+> [!WARNING]
+> Wolium is not code-signed yet, so Windows and macOS warn on first start. On a fresh Windows 11 the download may even be blocked before you can open it. See the [Windows download guide](docs/windows-download.md) for the safe way through and how to verify the file.
 
-    gh attestation verify WoliumSetup.exe --repo arturwo1/trackwolium
+<details>
+<summary><b>Graph controls</b></summary>
 
-## Features
-
-- Activity graph: zoom, pan, tooltips with per-app time and sessions down to seconds
-- Time per app in four states: focused, open, minimized, background (Android: focused only)
-- Date ranges: day, week, month, year or any custom period
-- Hide apps you do not want to see; restore them in Settings
-- CSV export and, on Android, backup and restore as a file
-- Local API (all platforms, [docs](docs/local-api.md)) and Discord activity cards (desktop), both off by default
-- Update notifications with one-click update
-- Languages: English, Russian
-
-| Graph control | Mouse | Touch |
-| --- | --- | --- |
+| Action | Mouse | Touch |
+|---|---|---|
 | Zoom | wheel | pinch |
 | Pan | drag | drag |
 | Reset | middle or double click | double tap |
 | Details | hover the line, click to pin | tap, or long press and drag |
 
-## Platform differences
+</details>
+
+<details>
+<summary><b>What differs by platform</b></summary>
 
 | | Windows | Linux | macOS | Android |
-| --- | --- | --- | --- | --- |
-| Focused / open / minimized / background | yes | yes | yes | focused only |
-| Update notification | yes | yes | yes | yes |
-| Local API | yes | yes | yes | yes (foreground service, persistent notification) |
-| Discord activity, Discord restart button | yes | yes | yes | no |
+|---|---|---|---|---|
+| Four activity states | yes | yes | yes | focused only |
+| Resource metrics | yes | yes | yes | no |
+| Local API | yes | yes | yes | yes |
+| Discord activity | yes | yes | yes | no |
 
-## Android
+More in [platforms](docs/platforms.md).
 
-Wolium collects statistics in the background every few hours without a permanent service, so you never need to open the app to keep the history complete. Android keeps only about a week of raw usage events, so open Wolium at least once a week if your phone is aggressive about killing background work.
+</details>
 
-## Privacy
+## Documentation
 
-Data is stored in a local SQLite file and never uploaded.
-
-| Platform | Data folder |
-| --- | --- |
-| Windows | `%LOCALAPPDATA%\DTSys\Wolium` |
-| Linux | `~/.local/share/DTSys/Wolium` |
-| macOS | `~/Library/Application Support/DTSys/Wolium` |
-| Android | app storage, included in Android's own backup when enabled |
-
-Updating never touches your data, uninstalling asks first. Policy: https://wolium.netlify.app/privacy-policy/
+| | |
+|---|---|
+| [Windows download and SmartScreen](docs/windows-download.md) | blocked or deleted installer, hash and attestation check |
+| [Local API](docs/local-api.md) | endpoints, parameters, OBS widget |
+| [Platforms](docs/platforms.md) | Android, Linux Wayland, macOS notes |
+| [Updates](docs/updates.md) | when and how Wolium checks for updates |
+| [Privacy and data](docs/privacy.md) | what is stored and where |
+| [Architecture](docs/architecture.md) | core, UI, storage |
+| [Building](docs/building.md) | build, tests, translations, CI |
 
 ## License
 
-Proprietary, see [LICENSE](LICENSE). Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Wayland
-
-Window tracking on Wayland works on Hyprland and Sway out of the box. On GNOME and KDE Plasma 6 the installer adds a small bridge (a GNOME Shell extension or a KWin script) that sends only the window class and process id to the local collector over the session D-Bus. On GNOME, log out and back in once after installing, then enable the extension with `gnome-extensions enable wolium-bridge@dtsys`. The bridge scripts are not tested on real GNOME and KDE sessions yet; if no report arrives, the collector falls back to X11 and process data.
-
-## Updates
-
-- Android: once a day, only while charging, idle and on an unmetered network, Wolium checks for a release, downloads the APK into its cache and posts a "ready to install" notification. Tapping it opens the installer at once.
-- Windows, Linux, macOS: the background part checks every 6 hours and after wake-up, unlock, network or power changes, and downloads the installer quietly. If the Wolium window is closed, the update is installed silently and a notification confirms it. If the window is open, a banner offers "Restart and apply". On Windows nothing is shown or installed while a full-screen app or Focus Assist is active.
-- Each device gets a random `device_id` (UUIDv4, no hardware identifiers) and an editable name in Settings, stored in the data folder.
+Proprietary, see [LICENSE](LICENSE). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).

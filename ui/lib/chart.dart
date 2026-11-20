@@ -145,7 +145,7 @@ bool _inMetric(int state, Metric m) {
 }
 
 class _Tip {
-  const _Tip({required this.visible, required this.bucket, required this.anchor, required this.interactive, required this.follow, this.detail});
+  const _Tip({required this.visible, required this.bucket, required this.anchor, required this.interactive, required this.follow, this.detail, this.seriesId});
 
   final bool visible;
   final int bucket;
@@ -153,14 +153,16 @@ class _Tip {
   final bool interactive;
   final bool follow;
   final String? detail;
+  final String? seriesId;
 
-  _Tip copyWith({bool? visible, int? bucket, Offset? anchor, bool? interactive, bool? follow, String? detail, bool clearDetail = false}) => _Tip(
+  _Tip copyWith({bool? visible, int? bucket, Offset? anchor, bool? interactive, bool? follow, String? detail, bool clearDetail = false, String? seriesId, bool clearSeries = false}) => _Tip(
         visible: visible ?? this.visible,
         bucket: bucket ?? this.bucket,
         anchor: anchor ?? this.anchor,
         interactive: interactive ?? this.interactive,
         follow: follow ?? this.follow,
         detail: clearDetail ? null : (detail ?? this.detail),
+        seriesId: clearSeries ? null : (seriesId ?? this.seriesId),
       );
 }
 
@@ -179,6 +181,8 @@ class ActivityChart extends StatefulWidget {
     this.assetUrl,
     this.onView,
     this.series = const [],
+    this.showTime = true,
+    this.onPickApp,
   });
 
   final DateTime first;
@@ -193,6 +197,8 @@ class ActivityChart extends StatefulWidget {
   final double height;
   final void Function(double from, double to, int bucketSec)? onView;
   final List<ResSeries> series;
+  final bool showTime;
+  final void Function(String app)? onPickApp;
 
   @override
   State<ActivityChart> createState() => _ActivityChartState();
@@ -242,9 +248,17 @@ class _ActivityChartState extends State<ActivityChart> {
     return null;
   }
 
+  ResSeries? seriesById(String? id) {
+    if (id == null) return null;
+    for (final s in widget.series) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
+
   String? nearSeries(Offset p) {
     String? best;
-    var d = 12.0;
+    var d = widget.showTime ? 12.0 : 30.0;
     final sec = vx0 + (p.dx - _left) / plotW * span;
     for (final s in widget.series) {
       final v = seriesValueAt(s, sec);
@@ -486,8 +500,11 @@ class _ActivityChartState extends State<ActivityChart> {
       Overlay.of(context).insert(entry!);
     }
     final cur = tip.value;
+    final sid = (cur != null && cur.interactive && !touchMode) ? cur.seriesId : focusSeries?.id;
     final base = cur ?? _Tip(visible: true, bucket: i, anchor: anchor, interactive: touchMode, follow: !touchMode);
     tip.value = base.copyWith(
+      clearSeries: sid == null,
+      seriesId: sid,
       visible: true,
       bucket: i,
       anchor: (cur != null && cur.interactive && !touchMode) ? cur.anchor : anchor,
@@ -506,6 +523,7 @@ class _ActivityChartState extends State<ActivityChart> {
     final t = tip.value;
     if (t == null) return;
     tip.value = t.copyWith(visible: false, interactive: false, clearDetail: true);
+    lineHover.value = null;
     removeTimer?.cancel();
     removeTimer = Timer(const Duration(milliseconds: 260), () {
       entry?.remove();
@@ -543,7 +561,7 @@ class _ActivityChartState extends State<ActivityChart> {
     final near = nearSeries(p);
     setLine(near);
     final lineTop = math.min(lineY(p.dx), math.min(lineY(p.dx - 8), lineY(p.dx + 8)));
-    if (near != null || (p.dy >= lineTop - 34 && p.dy <= _top + plotH + 6)) {
+    if (near != null || (widget.showTime && p.dy >= lineTop - 34 && p.dy <= _top + plotH + 6)) {
       show(p, touchMode: false);
     } else {
       scheduleHide(60);
@@ -625,7 +643,7 @@ class _ActivityChartState extends State<ActivityChart> {
           cursor: dragging ? SystemMouseCursors.grabbing : SystemMouseCursors.basic,
           onHover: onHover,
           onExit: (_) {
-            setLine(null);
+            if (!(tip.value?.interactive ?? false)) setLine(null);
             final t = tip.value;
             scheduleHide(t != null && t.interactive ? 900 : 60);
           },
@@ -669,6 +687,7 @@ class _ActivityChartState extends State<ActivityChart> {
                     painter: _ChartPainter(
                       series: widget.series,
                       focus: focusSeries,
+                      showTime: widget.showTime,
                       buckets: cache,
                       cLo: cLo,
                       bucket: bucket,
@@ -796,7 +815,7 @@ class _ActivityChartState extends State<ActivityChart> {
       builder: (context, _) {
         final t = tip.value;
         if (t == null) return const SizedBox.shrink();
-        final fs = focusSeries;
+        final fs = seriesById(t.seriesId);
         final fa = (t.bucket * bucket).toDouble();
         final fb = math.min(widget.total, (t.bucket + 1) * bucket).toDouble();
         final fApps = fs == null
@@ -865,7 +884,7 @@ class _ActivityChartState extends State<ActivityChart> {
                 key: tipKey,
                 onEnter: (_) => cancelHide(),
                 onExit: (_) => scheduleHide(900),
-                child: animated(fs == null ? _mainTip(b, t, rows, maxH) : _seriesTip(fs, t, fApps, fa, fb, maxH), t.visible),
+                child: animated(pinnable(t, fs == null ? _mainTip(b, t, rows, maxH) : _seriesTip(fs, t, fApps, fa, fb, maxH)), t.visible),
               ),
             ),
           ),
@@ -890,6 +909,8 @@ class _ActivityChartState extends State<ActivityChart> {
       },
     );
   }
+
+  Widget pinnable(_Tip t, Widget child) => t.interactive ? SelectionArea(child: child) : child;
 
   BoxDecoration get _tipDecoration => BoxDecoration(
         color: cBg,
@@ -988,23 +1009,32 @@ class _ActivityChartState extends State<ActivityChart> {
                     padding: EdgeInsets.zero,
                     children: [
                       for (final e in apps)
-                        Container(
-                          height: 36,
-                          margin: const EdgeInsets.only(bottom: 2),
-                          padding: const EdgeInsets.symmetric(horizontal: 6),
-                          child: Row(children: [
-                            widget.icon(e.key, 20),
-                            const SizedBox(width: 8),
-                            Expanded(child: EllipsisText(widget.title(e.key), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
-                            const SizedBox(width: 6),
-                            Text(s.format(e.value), style: const TextStyle(fontSize: 12, color: cMuted)),
-                          ]),
+                        HoverBox(
+                          onTap: t.interactive && widget.onPickApp != null ? () => widget.onPickApp!(e.key) : null,
+                          builder: (hovered) => Container(
+                            height: 36,
+                            margin: const EdgeInsets.only(bottom: 2),
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            decoration: BoxDecoration(
+                              color: t.interactive && hovered ? cSoft.withValues(alpha: 0.5) : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(children: [
+                              widget.icon(e.key, 20),
+                              const SizedBox(width: 8),
+                              Expanded(child: EllipsisText(widget.title(e.key), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
+                              const SizedBox(width: 6),
+                              Text(s.format(e.value), style: const TextStyle(fontSize: 12, color: cMuted)),
+                            ]),
+                          ),
                         ),
                     ],
                   ),
                 ),
               ),
             ],
+            if (!t.interactive && apps.isNotEmpty)
+              Padding(padding: const EdgeInsets.only(top: 4), child: Text(tr('clickToPin'), style: const TextStyle(color: cMuted, fontSize: 11))),
           ]),
         ),
       ),
@@ -1057,10 +1087,11 @@ class _ActivityChartState extends State<ActivityChart> {
 }
 
 class _ChartPainter extends CustomPainter {
-  _ChartPainter({required this.series, required this.focus, required this.buckets, required this.cLo, required this.bucket, required this.first, required this.total, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover});
+  _ChartPainter({required this.series, required this.focus, required this.showTime, required this.buckets, required this.cLo, required this.bucket, required this.first, required this.total, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover});
 
   final List<ResSeries> series;
   final ResSeries? focus;
+  final bool showTime;
   final List<Bucket?> buckets;
   final int cLo;
   final int bucket;
@@ -1089,8 +1120,9 @@ class _ChartPainter extends CustomPainter {
     for (var k = 0; k <= 2; k++) {
       final y = _top + plotH * k / 2;
       canvas.drawLine(Offset(_left, y), Offset(size.width - _right, y), grid);
-      final f = focus;
-      final shown = f == null ? formatMs((yBottom + ySpan * (2 - k) / 2).round()) : (k == 2 ? f.format(0) : f.format(seriesScaleTop(f, vx0, vx1) * (2 - k) / 2));
+      final f = focus ?? (!showTime && series.length == 1 ? series.first : null);
+      final percent = f == null && !showTime && series.length > 1;
+      final shown = percent ? '${(100 * (2 - k) / 2).round()}%' : (f == null ? formatMs((yBottom + ySpan * (2 - k) / 2).round()) : (k == 2 ? f.format(0) : f.format(seriesScaleTop(f, vx0, vx1) * (2 - k) / 2)));
       final tp = TextPainter(text: TextSpan(text: shown, style: f == null ? label : TextStyle(color: f.color, fontSize: 11, fontWeight: FontWeight.w700)), textDirection: TextDirection.ltr)..layout();
       tp.paint(canvas, Offset(math.max(0.0, _left - tp.width - 6), y - tp.height / 2));
     }
@@ -1120,7 +1152,7 @@ class _ChartPainter extends CustomPainter {
     }
     final dim = focus != null;
     final fade = dim ? 0.3 : 1.0;
-    if (buckets.isEmpty) {
+    if (buckets.isEmpty || !showTime) {
       paintSeries(canvas, plotW, plotH, span);
       return;
     }
