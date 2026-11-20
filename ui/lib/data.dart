@@ -382,6 +382,18 @@ class Usage {
     }
   }
 
+  Map<String, int> appCats() {
+    final db = _open();
+    final out = <String, int>{};
+    if (db == null) return out;
+    try {
+      for (final r in db.select('SELECT app, cat FROM appcat')) {
+        out[r['app'] as String] = r['cat'] as int;
+      }
+    } catch (_) {}
+    return out;
+  }
+
   Map<String, AppMeta> names() {
     final db = _open();
     final out = <String, AppMeta>{};

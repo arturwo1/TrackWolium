@@ -153,8 +153,10 @@ class AppEntry {
 Future<void> categoryApps(BuildContext context, Category cat, List<AppEntry> entries) async {
   final all = List<AppEntry>.of(entries)
     ..sort((a, b) {
-      final c = b.ms.compareTo(a.ms);
-      return c != 0 ? c : a.title.toLowerCase().compareTo(b.title.toLowerCase());
+      final x = cat.apps.contains(a.app) ? 0 : (a.ms > 0 ? 1 : 2);
+      final y = cat.apps.contains(b.app) ? 0 : (b.ms > 0 ? 1 : 2);
+      if (x != y) return x.compareTo(y);
+      return a.title.toLowerCase().compareTo(b.title.toLowerCase());
     });
   final ctl = TextEditingController();
   await showDialog<void>(

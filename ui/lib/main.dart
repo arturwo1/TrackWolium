@@ -837,7 +837,15 @@ class _ShellState extends State<Shell> {
     final l = up && from == to && to == today ? usage.live() : null;
     final rk = '$fk|$tk';
     final src = l ?? usage.range(fk, tk);
-    Categories.autoAssign([for (final r in src) r.app]);
+    final paths = {for (final r in src) r.app: r.path};
+    if (rangeKey != rk || ticks % 30 == 0) {
+      for (final e in usage.names().entries) {
+        paths.putIfAbsent(e.key, () => e.value.path);
+      }
+      Categories.autoAssign(paths, sys: Platform.isAndroid ? usage.appCats() : const {});
+    } else {
+      Categories.autoAssign(paths);
+    }
     setState(() {
       hasDb = usage.available;
       days = usage.days();
@@ -1235,7 +1243,7 @@ class _ShellState extends State<Shell> {
           padding: EdgeInsets.zero,
           child: StatefulBuilder(
             builder: (c, set) => ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 240, maxWidth: 340),
+              constraints: const BoxConstraints(minWidth: 260, maxWidth: 380),
               child: body(set),
             ),
           ),
@@ -1323,10 +1331,10 @@ class _ShellState extends State<Shell> {
     );
   }
 
-  Widget durationField(TextEditingController ctl, void Function(int) apply, StateSetter set) {
+  Widget durationField(TextEditingController ctl, void Function(int) apply, StateSetter set, {double right = 14}) {
     final bad = ctl.text.trim().isNotEmpty && parseDuration(ctl.text) == null;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 4),
+      padding: EdgeInsets.fromLTRB(14, 0, right, 4),
       child: TextField(
         controller: ctl,
         style: const TextStyle(fontSize: 14),
@@ -1375,7 +1383,7 @@ class _ShellState extends State<Shell> {
               child: Row(children: [
                 const Icon(Icons.restart_alt, size: 20, color: cMuted),
                 const SizedBox(width: 10),
-                Text(tr('optResetWidths'), style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600)),
+                Expanded(child: Text(tr('optResetWidths'), style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600))),
               ]),
             ),
           ),
@@ -1397,19 +1405,20 @@ class _ShellState extends State<Shell> {
           if (MetricPrefs.has('notime')) Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 6), child: Text(tr('realFocusNeedsTime'), style: const TextStyle(color: cMuted, fontSize: 12))),
         ],
         popHeader(tr('optMinSec')),
-        durationField(minCtl, (n) => ViewPrefs.update(sec: n), set),
-        InkWell(
-          onTap: () => set(() => maxOpen = !maxOpen),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
-            child: Row(children: [
-              Icon(maxOpen ? Icons.arrow_drop_down : Icons.arrow_right, size: 22, color: cMuted),
-              const SizedBox(width: 4),
-              Text(tr('optMaxSec'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800, fontSize: 12)),
-            ]),
+        Row(children: [
+          Expanded(child: durationField(minCtl, (n) => ViewPrefs.update(sec: n), set, right: 4)),
+          Tooltip(
+            message: tr('optMaxSec'),
+            child: InkWell(
+              onTap: () => set(() => maxOpen = !maxOpen),
+              child: Padding(padding: const EdgeInsets.fromLTRB(0, 0, 10, 4), child: Icon(maxOpen ? Icons.arrow_drop_down : Icons.arrow_right, size: 28, color: maxOpen ? cPrimary : cMuted)),
+            ),
           ),
-        ),
-        if (maxOpen) durationField(maxCtl, (n) => ViewPrefs.update(max: n), set),
+        ]),
+        if (maxOpen) ...[
+          popHeader(tr('optMaxSec')),
+          durationField(maxCtl, (n) => ViewPrefs.update(max: n), set),
+        ],
         const SizedBox(height: 6),
       ]);
     });
@@ -1460,7 +1469,7 @@ class _ShellState extends State<Shell> {
           ),
         ]),
         if (!noLines) const SizedBox(height: 10),
-        if (!noLines) ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, previous: previous, avgLine: ViewPrefs.avgLine, compare: ViewPrefs.compare, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has)),
+        if (!noLines) ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, previous: previous, avgLine: ViewPrefs.avgLine, compare: ViewPrefs.compare, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: (a) => !appAllowed(a))),
       ]),
     );
   }

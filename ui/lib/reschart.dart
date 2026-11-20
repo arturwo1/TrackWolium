@@ -126,8 +126,10 @@ List<ResSeries> buildSeries({required Set<String> ids, required List<ResPoint> p
   final bins = <int, Map<String, List<num>>>{};
   final spans = <int, int>{};
   for (final p in pts) {
+    final perApp = bins.putIfAbsent(p.start, () => {});
+    spans[p.start] = p.end - p.start;
     if (skip(p.app) || (only != null && p.app != only)) continue;
-    final b = bins.putIfAbsent(p.start, () => {}).putIfAbsent(p.app, () => [0, 0, 0, 0, 0]);
+    final b = perApp.putIfAbsent(p.app, () => [0, 0, 0, 0, 0]);
     b[0] += p.cpuMs;
     b[1] += p.ramKb;
     b[2] += p.peakKb;

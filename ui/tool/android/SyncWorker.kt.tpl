@@ -86,6 +86,15 @@ object Sync {
     }
   }
 
+  fun systemCategory(ctx: Context, pkg: String): Int {
+    return try {
+      val info = ctx.packageManager.getApplicationInfo(pkg, 0)
+      if (Build.VERSION.SDK_INT >= 26) info.category else if (info.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME != 0) 0 else -1
+    } catch (ex: Exception) {
+      -1
+    }
+  }
+
   fun icon(ctx: Context, pkg: String): ByteArray? {
     return try {
       val d = ctx.packageManager.getApplicationIcon(pkg)
@@ -194,6 +203,7 @@ object Sync {
   private const val SCHEMA_USAGE = "CREATE TABLE IF NOT EXISTS usage(day TEXT NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, app, state)) WITHOUT ROWID"
   private const val SCHEMA_TIMELINE = "CREATE TABLE IF NOT EXISTS timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app, state)) WITHOUT ROWID"
   private const val SCHEMA_SESSIONS = "CREATE TABLE IF NOT EXISTS sessions(app TEXT NOT NULL, start INTEGER NOT NULL, stop INTEGER NOT NULL, state INTEGER NOT NULL, PRIMARY KEY(app, start)) WITHOUT ROWID"
+  private const val SCHEMA_APPCAT = "CREATE TABLE IF NOT EXISTS appcat(app TEXT PRIMARY KEY, cat INTEGER NOT NULL) WITHOUT ROWID"
   private const val SCHEMA_APPS = "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID"
 
   @Synchronized
@@ -219,6 +229,7 @@ object Sync {
       db.execSQL(SCHEMA_TIMELINE)
       db.execSQL(SCHEMA_SESSIONS)
       db.execSQL(SCHEMA_APPS)
+      db.execSQL(SCHEMA_APPCAT)
       store(db, spans, firstDay, lastDay)
       val known = HashSet<String>()
       val c = db.rawQuery("SELECT app, path FROM apps WHERE path != ''", null)
@@ -238,6 +249,19 @@ object Sync {
           iconPath = f.absolutePath
         }
         db.execSQL("INSERT OR REPLACE INTO apps(app, name, path) VALUES(?, ?, ?)", arrayOf<Any>(app, label(ctx, app), iconPath))
+      }
+      val have = HashSet<String>()
+      val hc = db.rawQuery("SELECT app FROM appcat", null)
+      while (hc.moveToNext()) have.add(hc.getString(0))
+      hc.close()
+      val pending = ArrayList<String>()
+      val ac = db.rawQuery("SELECT app FROM apps", null)
+      while (ac.moveToNext()) {
+        if (!have.contains(ac.getString(0))) pending.add(ac.getString(0))
+      }
+      ac.close()
+      for (app in pending) {
+        db.execSQL("INSERT OR REPLACE INTO appcat(app, cat) VALUES(?, ?)", arrayOf<Any>(app, systemCategory(ctx, app)))
       }
       db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).close()
     } finally {

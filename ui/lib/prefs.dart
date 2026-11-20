@@ -152,8 +152,9 @@ class Category {
 }
 
 class _Default {
-  const _Default(this.id, this.key, this.color, this.icon, this.names, this.parts);
+  const _Default(this.id, this.key, this.color, this.icon, this.names, this.parts, this.aliases);
 
+  final List<String> aliases;
   final String id;
   final String key;
   final int color;
@@ -165,25 +166,26 @@ class _Default {
 const _defaults = <_Default>[
   _Default('def_games', 'catDefGames', 0xFFED4245, 'games', {
     'steam', 'epicgameslauncher', 'battle.net', 'battlenet', 'riotclientservices', 'riotclientux', 'valorant', 'leagueclient', 'league of legends', 'minecraft', 'minecraftlauncher', 'robloxplayerbeta', 'robloxstudiobeta', 'rocketleague', 'csgo', 'cs2', 'dota2', 'gta5', 'eldenring', 'genshinimpact', 'yuanshen', 'overwatch', 'r5apex', 'pubg', 'tslgame', 'hearthstone', 'wow', 'galaxyclient', 'eadesktop', 'origin', 'upc', 'ubisoftconnect', 'osu!', 'factorio', 'terraria', 'stardew valley', 'hollow knight', 'fallguys_client', 'cyberpunk2077', 'witcher3', 'starfield', 'baldursgate3', 'bg3', 'helldivers2', 'palworld-win64-shipping', 'com.mojang.minecraftpe', 'com.roblox.client', 'com.supercell.clashofclans', 'com.supercell.brawlstars', 'com.tencent.ig', 'com.activision.callofduty.shooter', 'com.miHoYo.GenshinImpact', 'com.mobile.legends',
-  }, ['-win64-shipping', 'shipping.exe', 'unrealengine']),
+  }, ['-win64-shipping', 'shipping.exe', 'unrealengine', 'minecraft', 'roblox'], ['games', 'game', 'игры', 'игра']),
   _Default('def_browsers', 'catDefBrowsers', 0xFF00A8FC, 'web', {
     'chrome', 'msedge', 'firefox', 'opera', 'opera_gx', 'brave', 'vivaldi', 'iexplore', 'arc', 'browser', 'yandex', 'safari', 'chromium', 'chromium-browser', 'librewolf', 'waterfox', 'tor', 'zen', 'duckduckgo', 'google-chrome', 'microsoft-edge', 'firefox-esr', 'com.android.chrome', 'org.mozilla.firefox', 'org.mozilla.fenix', 'com.brave.browser', 'com.opera.browser', 'com.opera.gx', 'com.microsoft.emmx', 'com.sec.android.app.sbrowser', 'com.vivaldi.browser', 'com.duckduckgo.mobile.android', 'com.yandex.browser', 'org.chromium.chrome', 'com.kiwibrowser.browser',
-  }, []),
+  }, ['chrome', 'opera', 'firefox', 'mozilla', 'sbrowser', 'vivaldi'], ['browsers', 'browser', 'браузеры', 'браузер']),
   _Default('def_dev', 'catDefDev', 0xFF3BA55D, 'code', {
     'code', 'code - insiders', 'devenv', 'idea64', 'idea', 'pycharm64', 'pycharm', 'webstorm64', 'webstorm', 'clion64', 'clion', 'rider64', 'rider', 'studio64', 'goland64', 'goland', 'rubymine64', 'phpstorm64', 'datagrip64', 'cursor', 'windsurf', 'sublime_text', 'notepad++', 'vim', 'nvim', 'emacs', 'gitkraken', 'githubdesktop', 'windowsterminal', 'wt', 'cmd', 'powershell', 'pwsh', 'putty', 'docker desktop', 'postman', 'zed', 'kate', 'gedit', 'konsole', 'gnome-terminal', 'alacritty', 'kitty', 'wezterm', 'xterm', 'flutter', 'dart', 'node', 'python', 'python3', 'git', 'sourcetree', 'insomnia', 'dbeaver', 'heidisql', 'termux', 'com.termux', 'com.github.android', 'com.android.tools.build',
-  }, []),
+  }, [], ['development', 'dev', 'разработка']),
   _Default('def_chat', 'catDefChat', 0xFF5865F2, 'chat', {
     'discord', 'discordptb', 'discordcanary', 'telegram', 'whatsapp', 'slack', 'teams', 'ms-teams', 'skype', 'zoom', 'viber', 'signal', 'element', 'thunderbird', 'outlook', 'olk', 'vk', 'max', 'org.telegram.messenger', 'org.telegram.messenger.web', 'org.thunderdog.challegram', 'com.whatsapp', 'com.discord', 'com.viber.voip', 'org.thoughtcrime.securesms', 'com.vkontakte.android', 'com.facebook.orca', 'com.skype.raider', 'com.slack', 'us.zoom.videomeetings', 'com.microsoft.teams', 'com.google.android.gm', 'com.google.android.apps.messaging', 'com.samsung.android.messaging',
-  }, []),
+  }, ['telegram', 'discord', 'aliucord', 'whatsapp', 'viber', 'skype'], ['communication', 'chat', 'chats', 'общение', 'чаты', 'мессенджеры']),
   _Default('def_media', 'catDefMedia', 0xFFEB459E, 'music', {
     'spotify', 'vlc', 'mpv', 'potplayermini64', 'potplayermini', 'wmplayer', 'itunes', 'music.ui', 'yandexmusic', 'foobar2000', 'aimp', 'musicbee', 'obs64', 'obs', 'netflix', 'kodi', 'plex', 'tidal', 'mpc-hc64', 'mpc-hc', 'mpc-be64', 'groove', 'video.ui', 'com.google.android.youtube', 'com.google.android.apps.youtube.music', 'com.spotify.music', 'org.videolan.vlc', 'com.netflix.mediaclient', 'ru.yandex.music', 'com.zhiliaoapp.musically', 'tv.twitch.android.app', 'com.amazon.avod.thirdpartyclient', 'com.google.android.apps.photos',
-  }, []),
+  }, ['youtube', 'spotify', 'netflix', 'twitch', 'soundcloud'], ['media', 'медиа']),
 ];
 
 class Categories {
   static final ValueNotifier<List<Category>> list = ValueNotifier(<Category>[]);
   static final Set<String> seeded = {};
   static final Set<String> decided = {};
+  static final Map<String, String> links = {};
 
   static File get _file => File(_path('categories.json'));
 
@@ -199,6 +201,11 @@ class Categories {
           for (final k in (raw['decided'] is List ? raw['decided'] as List : const [])) {
             if (k is String) decided.add(k);
           }
+          if (raw['links'] is Map) {
+            (raw['links'] as Map).forEach((k, v) {
+              if (k is String && v is String) links[k] = v;
+            });
+          }
         }
         final out = <Category>[];
         for (final e in items) {
@@ -212,14 +219,31 @@ class Categories {
     seed();
   }
 
+  static bool _named(Category c, _Default d) {
+    final n = c.name.trim().toLowerCase();
+    return n == tr(d.key).toLowerCase() || d.aliases.contains(n);
+  }
+
   static void seed() {
     var changed = false;
     final next = List<Category>.of(list.value);
     for (final d in _defaults) {
-      if (seeded.contains(d.id)) continue;
+      final mine = next.where((c) => c.id == d.id).toList();
+      final other = next.where((c) => c.id != d.id && !c.id.startsWith('def_') && _named(c, d)).toList();
+      if (mine.isNotEmpty && other.isNotEmpty) {
+        other.first.apps.addAll(mine.first.apps);
+        next.removeWhere((c) => c.id == d.id);
+        links[d.id] = other.first.id;
+        changed = true;
+        continue;
+      }
+      if (seeded.contains(d.id) || mine.isNotEmpty) continue;
       seeded.add(d.id);
-      if (next.any((c) => c.id == d.id)) continue;
-      next.add(Category(d.id, tr(d.key), d.color, d.icon, <String>{}));
+      if (other.isNotEmpty) {
+        links[d.id] = other.first.id;
+      } else {
+        next.add(Category(d.id, tr(d.key), d.color, d.icon, <String>{}));
+      }
       changed = true;
     }
     list.value = next;
@@ -229,31 +253,47 @@ class Categories {
   static void save({bool notify = true}) {
     try {
       Directory(dataDir()).createSync(recursive: true);
-      _file.writeAsStringSync(jsonEncode({'v': 2, 'seeded': seeded.toList()..sort(), 'decided': decided.toList()..sort(), 'categories': [for (final c in list.value) c.toJson()]}));
+      _file.writeAsStringSync(jsonEncode({'v': 2, 'seeded': seeded.toList()..sort(), 'decided': decided.toList()..sort(), 'links': links, 'categories': [for (final c in list.value) c.toJson()]}));
     } catch (_) {}
     if (notify) list.value = List<Category>.of(list.value);
   }
 
-  static String? _defaultFor(String app) {
+  static const _gamePaths = ['/steamapps/', '/epic games/', '/riot games/', '/gog games/', '/gog galaxy/games/', '/ubisoft/', '/ea games/', '/origin games/', '/xboxgames/', '/roblox/', '/battle.net/', '/heroic/', '/lutris/'];
+
+  static String? _defaultFor(String app, String path, int sys) {
     var n = app.toLowerCase();
     if (n.endsWith('.exe')) n = n.substring(0, n.length - 4);
+    final p = path.toLowerCase().replaceAll('\\', '/');
+    if (p.isNotEmpty && !p.contains('/icons/') && _gamePaths.any(p.contains)) return 'def_games';
     for (final d in _defaults) {
       if (d.names.any((x) => x.toLowerCase() == n)) return d.id;
     }
     for (final d in _defaults) {
-      for (final p in d.parts) {
-        if (n.contains(p)) return d.id;
+      for (final part in d.parts) {
+        if (n.contains(part)) return d.id;
       }
+    }
+    switch (sys) {
+      case 0:
+        return 'def_games';
+      case 1:
+      case 2:
+        return 'def_media';
+      case 4:
+        return 'def_chat';
+      case 7:
+        return 'def_dev';
     }
     return null;
   }
 
-  static bool autoAssign(Iterable<String> apps) {
+  static bool autoAssign(Map<String, String> paths, {Map<String, int> sys = const {}}) {
     var changed = false;
-    for (final app in apps) {
+    for (final e in paths.entries) {
+      final app = e.key;
       if (decided.contains(app) || of(app) != null) continue;
-      final id = _defaultFor(app);
-      final cat = byId(id);
+      final id = _defaultFor(app, e.value, sys[app] ?? -1);
+      final cat = byId(id == null ? null : (links[id] ?? id));
       if (cat == null) continue;
       cat.apps.add(app);
       changed = true;
