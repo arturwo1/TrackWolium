@@ -397,6 +397,10 @@ class _ShellState extends State<Shell> {
     });
   }
 
+  double resizeStartX = 0;
+  double resizeStartW = 0;
+  bool resizing = false;
+
   Widget sortHead(String label, String k, TextStyle head, {bool resize = false}) {
     final on = sortKey == k;
     final box = HoverBox(
@@ -410,37 +414,10 @@ class _ShellState extends State<Shell> {
       ),
     );
     if (Platform.isAndroid) return GestureDetector(behavior: HitTestBehavior.translucent, onLongPress: columnsSheet, child: box);
-    final sized = !resize
-        ? box
-        : LayoutBuilder(builder: (context, c) {
-            var w = c.maxWidth;
-            return Stack(children: [
-              box,
-              Positioned(
-                right: 0,
-                top: 0,
-                bottom: 0,
-                width: 10,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.resizeColumn,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onHorizontalDragStart: (_) => w = ColumnPrefs.widths[k] ?? c.maxWidth,
-                    onHorizontalDragUpdate: (d) {
-                      w = (w + d.delta.dx).clamp(60.0, 420.0).toDouble();
-                      ColumnPrefs.setWidth(k, w, persist: false);
-                    },
-                    onHorizontalDragEnd: (_) => ColumnPrefs.persistWidths(),
-                    child: const Align(alignment: Alignment.centerRight, child: SizedBox(width: 2, child: ColoredBox(color: cBorder))),
-                  ),
-                ),
-              ),
-            ]);
-          });
-    Widget out = sized;
+    Widget label0 = box;
     if (resize && k != 'app') {
-      final inner = sized;
-      out = DragTarget<String>(
+      final inner = box;
+      label0 = DragTarget<String>(
         onWillAcceptWithDetails: (d) => d.data != k,
         onAcceptWithDetails: (d) => ColumnPrefs.move(d.data, k, columnChoices()),
         builder: (context, cand, rej) => DecoratedBox(
@@ -460,6 +437,43 @@ class _ShellState extends State<Shell> {
         ),
       );
     }
+    final Widget out = !resize
+        ? label0
+        : LayoutBuilder(builder: (context, c) {
+            return Stack(children: [
+              Padding(padding: const EdgeInsets.only(right: 8), child: label0),
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                width: 18,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.resizeColumn,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onHorizontalDragStart: (d) {
+                      resizeStartX = d.globalPosition.dx;
+                      resizeStartW = ColumnPrefs.widths[k] ?? c.maxWidth;
+                      resizing = true;
+                    },
+                    onHorizontalDragUpdate: (d) {
+                      final w = (resizeStartW + (d.globalPosition.dx - resizeStartX)).clamp(60.0, 420.0).toDouble();
+                      ColumnPrefs.setWidth(k, w, persist: false);
+                    },
+                    onHorizontalDragEnd: (_) {
+                      resizing = false;
+                      ColumnPrefs.persistWidths();
+                    },
+                    onHorizontalDragCancel: () {
+                      resizing = false;
+                      ColumnPrefs.persistWidths();
+                    },
+                    child: const Align(alignment: Alignment.centerRight, child: Padding(padding: EdgeInsets.only(right: 7), child: SizedBox(width: 2, child: ColoredBox(color: cBorder)))),
+                  ),
+                ),
+              ),
+            ]);
+          });
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onSecondaryTapUp: (d) => columnMenu(d.globalPosition),
@@ -837,14 +851,18 @@ class _ShellState extends State<Shell> {
     final l = up && from == to && to == today ? usage.live() : null;
     final rk = '$fk|$tk';
     final src = l ?? usage.range(fk, tk);
-    final paths = {for (final r in src) r.app: r.path};
+    final paths = {for (final r in src) if (r.visible > 0 || Platform.isAndroid) r.app: r.path};
+    final titles = {for (final r in src) r.app: r.title};
     if (rangeKey != rk || ticks % 30 == 0) {
-      for (final e in usage.names().entries) {
-        paths.putIfAbsent(e.key, () => e.value.path);
+      final all = usage.names();
+      final real = Platform.isAndroid ? all.keys.toSet() : usage.windowed();
+      for (final e in all.entries) {
+        if (real.contains(e.key)) paths.putIfAbsent(e.key, () => e.value.path);
+        titles.putIfAbsent(e.key, () => e.value.name);
       }
-      Categories.autoAssign(paths, sys: Platform.isAndroid ? usage.appCats() : const {});
+      Categories.autoAssign(paths, sys: Platform.isAndroid ? usage.appCats() : const {}, titles: titles, windowed: real);
     } else {
-      Categories.autoAssign(paths);
+      Categories.autoAssign(paths, titles: titles);
     }
     setState(() {
       hasDb = usage.available;
@@ -914,6 +932,64 @@ class _ShellState extends State<Shell> {
     );
   }
 
+  List<String> exportChoices() => multiState
+      ? ['focused', if (!Platform.isAndroid) 'realcol', 'open', 'minimized', 'background', 'total', 'category', ...procMetricIds]
+      : ['total', 'category'];
+
+  Future<Set<String>?> exportColumnsDialog() {
+    final choices = exportChoices();
+    final picked = <String>{for (final id in activeColumns()) if (choices.contains(id)) id, if (Categories.list.value.isNotEmpty) 'category'};
+    if (picked.isEmpty) picked.add('total');
+    return showDialog<Set<String>>(
+      context: context,
+      builder: (c) => StatefulBuilder(
+        builder: (c, set) => AlertDialog(
+          backgroundColor: cPanel,
+          title: Text(tr('exportWhat')),
+          content: SizedBox(
+            width: 340,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Wrap(spacing: 8, children: [
+                  OutlinedButton(
+                    onPressed: () => set(() {
+                      picked
+                        ..clear()
+                        ..addAll([for (final id in activeColumns()) if (choices.contains(id)) id])
+                        ..add('category');
+                    }),
+                    child: Text(tr('exportVisible')),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => set(() {
+                      picked
+                        ..clear()
+                        ..addAll(choices);
+                    }),
+                    child: Text(tr('exportAll')),
+                  ),
+                ]),
+                const SizedBox(height: 6),
+                for (final id in choices)
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    value: picked.contains(id),
+                    title: Text(columnLabel(id)),
+                    onChanged: (v) => set(() => v == true ? picked.add(id) : picked.remove(id)),
+                  ),
+              ]),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('cancel'))),
+            TextButton(onPressed: picked.isEmpty ? null : () => Navigator.pop(c, Set<String>.of(picked)), child: Text(tr('exportCsv'))),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<String?> exportCsv() async {
     final today = dateOnly(DateTime.now());
     final picked = await showDateRangePicker(
@@ -929,20 +1005,54 @@ class _ShellState extends State<Shell> {
     if (picked == null) return null;
     final fk = keyOf(dateOnly(picked.start));
     final tk = keyOf(dateOnly(picked.end));
+    final cols = await exportColumnsDialog();
+    if (cols == null || cols.isEmpty) return null;
     requestFlush();
     String q(String v) => '"${v.replaceAll('"', '""')}"';
-    final b = StringBuffer('\uFEFF');
-    if (multiState) {
-      b.writeln('${tr('app')},${tr('focused')} (s),${tr('open')} (s),${tr('minimized')} (s),${tr('background')} (s),${tr('total')} (s)');
-    } else {
-      b.writeln('${tr('app')},${tr('total')} (s)');
+    final idle = cols.contains('realcol') ? usage.afk(fk, tk) : <String, int>{};
+    final res = cols.any(procMetricIds.contains) ? usage.resources(fk, tk) : <String, ResAgg>{};
+    String unit(String id) {
+      if (id == 'category') return '';
+      if (id == 'cpu') return ' (s)';
+      if (id == 'ram' || id == 'peak') return ' (KB)';
+      if (id == 'ior' || id == 'iow') return ' (B)';
+      return ' (s)';
     }
-    for (final r in usage.range(fk, tk)) {
-      if (multiState) {
-        b.writeln('${q(r.title)},${r.ms[0] ~/ 1000},${r.ms[1] ~/ 1000},${r.ms[2] ~/ 1000},${r.ms[3] ~/ 1000},${r.total ~/ 1000}');
-      } else {
-        b.writeln('${q(r.title)},${r.total ~/ 1000}');
+    String value(String id, AppUsage r) {
+      final a = res[r.app];
+      switch (id) {
+        case 'focused':
+          return '${r.ms[0] ~/ 1000}';
+        case 'realcol':
+          return '${math.max(0, r.ms[0] - (idle[r.app] ?? 0)) ~/ 1000}';
+        case 'open':
+          return '${r.ms[1] ~/ 1000}';
+        case 'minimized':
+          return '${r.ms[2] ~/ 1000}';
+        case 'background':
+          return '${r.ms[3] ~/ 1000}';
+        case 'total':
+          return '${r.total ~/ 1000}';
+        case 'category':
+          return q(Categories.of(r.app)?.name ?? '');
+        case 'cpu':
+          return a == null ? '' : '${a.cpuMs ~/ 1000}';
+        case 'ram':
+          return a == null || a.ramN == 0 ? '' : '${a.ramKb}';
+        case 'peak':
+          return a == null ? '' : '${a.peakKb}';
+        case 'ior':
+          return a == null ? '' : '${a.ior}';
+        case 'iow':
+          return a == null ? '' : '${a.iow}';
       }
+      return '';
+    }
+    final ids = [for (final id in exportChoices()) if (cols.contains(id)) id];
+    final b = StringBuffer('\uFEFF');
+    b.writeln([tr('app'), for (final id in ids) '${columnLabel(id)}${unit(id)}'].join(','));
+    for (final r in usage.range(fk, tk)) {
+      b.writeln([q(r.title), for (final id in ids) value(id, r)].join(','));
     }
     final fileName = 'wolium_${fk}_$tk.csv';
     if (Platform.isAndroid) {
@@ -1496,7 +1606,7 @@ class _ShellState extends State<Shell> {
   Widget wideTableBody(TextStyle head, List<String> ids, int cols, double maxWidth, Widget Function(String?, Widget, {AppUsage? row}) hov, Widget Function(String, AppUsage, {TextStyle? style}) cell) {
     final w = ColumnPrefs.widths;
     final fixedSum = [for (final k in ['app', ...ids]) w[k] ?? 0.0].fold<double>(0, (a, b) => a + b) + 44;
-    final useWidths = fixedSum + 120 < maxWidth;
+    final useWidths = resizing || fixedSum + 120 < maxWidth;
     double? width(String k) => useWidths ? w[k] : null;
     return Table(
       columnWidths: <int, TableColumnWidth>{
@@ -1835,7 +1945,8 @@ class _SettingsPageState extends State<SettingsPage> {
           final first = today.subtract(const Duration(days: 30));
           String k(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
           final seen = {for (final r in metricsUsage.range(k(first), k(today))) r.app: r.visible};
-          return [for (final e in m.entries) AppEntry(e.key, e.value.name.isNotEmpty ? e.value.name : prettyApp(e.key), e.value.path, seen[e.key] ?? 0)];
+          final real = Platform.isAndroid ? m.keys.toSet() : metricsUsage.windowed();
+          return [for (final e in m.entries) AppEntry(e.key, e.value.name.isNotEmpty ? e.value.name : prettyApp(e.key), e.value.path, seen[e.key] ?? 0, real.contains(e.key))];
         }
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [

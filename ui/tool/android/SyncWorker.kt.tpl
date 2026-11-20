@@ -250,24 +250,52 @@ object Sync {
         }
         db.execSQL("INSERT OR REPLACE INTO apps(app, name, path) VALUES(?, ?, ?)", arrayOf<Any>(app, label(ctx, app), iconPath))
       }
-      val have = HashSet<String>()
-      val hc = db.rawQuery("SELECT app FROM appcat", null)
-      while (hc.moveToNext()) have.add(hc.getString(0))
-      hc.close()
-      val pending = ArrayList<String>()
-      val ac = db.rawQuery("SELECT app FROM apps", null)
-      while (ac.moveToNext()) {
-        if (!have.contains(ac.getString(0))) pending.add(ac.getString(0))
-      }
-      ac.close()
-      for (app in pending) {
-        db.execSQL("INSERT OR REPLACE INTO appcat(app, cat) VALUES(?, ?)", arrayOf<Any>(app, systemCategory(ctx, app)))
-      }
       db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).close()
     } finally {
       db.close()
     }
     marker.writeText(now.toString())
+    try {
+      categorize(ctx)
+    } catch (ex: Exception) {
+    }
+  }
+
+  fun categorize(ctx: Context) {
+    val file = File(dir(ctx), "usage.db")
+    if (!file.exists()) return
+    val db = SQLiteDatabase.openOrCreateDatabase(file, null)
+    try {
+      db.enableWriteAheadLogging()
+      db.execSQL(SCHEMA_APPS)
+      db.execSQL(SCHEMA_APPCAT)
+      val known = HashSet<String>()
+      val kc = db.rawQuery("SELECT app FROM apps", null)
+      while (kc.moveToNext()) known.add(kc.getString(0))
+      kc.close()
+      val launcher = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+      for (ri in ctx.packageManager.queryIntentActivities(launcher, 0)) {
+        val pkg = ri.activityInfo.packageName
+        if (pkg == ctx.packageName || known.contains(pkg)) continue
+        db.execSQL("INSERT OR IGNORE INTO apps(app, name, path) VALUES(?, ?, '')", arrayOf<Any>(pkg, ri.loadLabel(ctx.packageManager).toString()))
+        known.add(pkg)
+      }
+      val have = HashSet<String>()
+      val hc = db.rawQuery("SELECT app FROM appcat", null)
+      while (hc.moveToNext()) have.add(hc.getString(0))
+      hc.close()
+      db.beginTransaction()
+      try {
+        for (app in known) {
+          if (!have.contains(app)) db.execSQL("INSERT OR REPLACE INTO appcat(app, cat) VALUES(?, ?)", arrayOf<Any>(app, systemCategory(ctx, app)))
+        }
+        db.setTransactionSuccessful()
+      } finally {
+        db.endTransaction()
+      }
+    } finally {
+      db.close()
+    }
   }
 
   private fun http(url: String): String {

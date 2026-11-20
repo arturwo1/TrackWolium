@@ -292,6 +292,10 @@
     "catDefChat": "Communication",
     "catDefMedia": "Media",
     "catDeleteConfirm": "Delete the category \"{name}\"? Its apps will stay, only the grouping is removed.",
-    "realcol": "Real focus"
+    "realcol": "Real focus",
+    "exportWhat": "What to export",
+    "exportVisible": "Visible columns",
+    "exportAll": "All metrics",
+    "catShowBackground": "Show background processes"
   }
 }

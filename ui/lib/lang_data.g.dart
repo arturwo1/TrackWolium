@@ -234,6 +234,10 @@ const strings = {
     'catDefMedia': 'Media',
     'catDeleteConfirm': 'Delete the category "{name}"? Its apps will stay, only the grouping is removed.',
     'realcol': 'Real focus',
+    'exportWhat': 'What to export',
+    'exportVisible': 'Visible columns',
+    'exportAll': 'All metrics',
+    'catShowBackground': 'Show background processes',
   },
   'ru': {
     'brandSub': 'Трекер активности',
@@ -465,5 +469,9 @@ const strings = {
     'catDefMedia': 'Медиа',
     'catDeleteConfirm': 'Удалить категорию «{name}»? Приложения останутся, уберётся только группировка.',
     'realcol': 'Реальный фокус',
+    'exportWhat': 'Что экспортировать',
+    'exportVisible': 'Видимые колонки',
+    'exportAll': 'Все метрики',
+    'catShowBackground': 'Показать фоновые процессы',
   },
 };

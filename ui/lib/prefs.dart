@@ -166,7 +166,7 @@ class _Default {
 const _defaults = <_Default>[
   _Default('def_games', 'catDefGames', 0xFFED4245, 'games', {
     'steam', 'epicgameslauncher', 'battle.net', 'battlenet', 'riotclientservices', 'riotclientux', 'valorant', 'leagueclient', 'league of legends', 'minecraft', 'minecraftlauncher', 'robloxplayerbeta', 'robloxstudiobeta', 'rocketleague', 'csgo', 'cs2', 'dota2', 'gta5', 'eldenring', 'genshinimpact', 'yuanshen', 'overwatch', 'r5apex', 'pubg', 'tslgame', 'hearthstone', 'wow', 'galaxyclient', 'eadesktop', 'origin', 'upc', 'ubisoftconnect', 'osu!', 'factorio', 'terraria', 'stardew valley', 'hollow knight', 'fallguys_client', 'cyberpunk2077', 'witcher3', 'starfield', 'baldursgate3', 'bg3', 'helldivers2', 'palworld-win64-shipping', 'com.mojang.minecraftpe', 'com.roblox.client', 'com.supercell.clashofclans', 'com.supercell.brawlstars', 'com.tencent.ig', 'com.activision.callofduty.shooter', 'com.miHoYo.GenshinImpact', 'com.mobile.legends',
-  }, ['-win64-shipping', 'shipping.exe', 'unrealengine', 'minecraft', 'roblox'], ['games', 'game', 'игры', 'игра']),
+  }, ['shipping', 'minecraft', 'roblox'], ['games', 'game', 'игры', 'игра']),
   _Default('def_browsers', 'catDefBrowsers', 0xFF00A8FC, 'web', {
     'chrome', 'msedge', 'firefox', 'opera', 'opera_gx', 'brave', 'vivaldi', 'iexplore', 'arc', 'browser', 'yandex', 'safari', 'chromium', 'chromium-browser', 'librewolf', 'waterfox', 'tor', 'zen', 'duckduckgo', 'google-chrome', 'microsoft-edge', 'firefox-esr', 'com.android.chrome', 'org.mozilla.firefox', 'org.mozilla.fenix', 'com.brave.browser', 'com.opera.browser', 'com.opera.gx', 'com.microsoft.emmx', 'com.sec.android.app.sbrowser', 'com.vivaldi.browser', 'com.duckduckgo.mobile.android', 'com.yandex.browser', 'org.chromium.chrome', 'com.kiwibrowser.browser',
   }, ['chrome', 'opera', 'firefox', 'mozilla', 'sbrowser', 'vivaldi'], ['browsers', 'browser', 'браузеры', 'браузер']),
@@ -186,6 +186,7 @@ class Categories {
   static final Set<String> seeded = {};
   static final Set<String> decided = {};
   static final Map<String, String> links = {};
+  static const rulesVersion = 3;
 
   static File get _file => File(_path('categories.json'));
 
@@ -207,13 +208,25 @@ class Categories {
             });
           }
         }
+        final purge = raw is Map ? raw['rules'] != rulesVersion : false;
+        if (raw is List) {
+          for (final e in raw) {
+            if (e is Map && e['apps'] is List) decided.addAll((e['apps'] as List).whereType<String>());
+          }
+        }
         final out = <Category>[];
         for (final e in items) {
           if (e is! Map || e['id'] is! String || e['name'] is! String) continue;
           out.add(Category(e['id'] as String, e['name'] as String, e['color'] is int ? e['color'] as int : categoryColors.first, e['icon'] is String ? e['icon'] as String : 'folder',
               {for (final a in (e['apps'] is List ? e['apps'] as List : const []) as List) if (a is String) a}));
         }
+        if (purge) {
+          for (final c in out) {
+            c.apps.removeWhere((a) => !decided.contains(a));
+          }
+        }
         list.value = out;
+        if (purge) save(notify: false);
       }
     } catch (_) {}
     seed();
@@ -253,12 +266,18 @@ class Categories {
   static void save({bool notify = true}) {
     try {
       Directory(dataDir()).createSync(recursive: true);
-      _file.writeAsStringSync(jsonEncode({'v': 2, 'seeded': seeded.toList()..sort(), 'decided': decided.toList()..sort(), 'links': links, 'categories': [for (final c in list.value) c.toJson()]}));
+      _file.writeAsStringSync(jsonEncode({'v': 2, 'rules': rulesVersion, 'seeded': seeded.toList()..sort(), 'decided': decided.toList()..sort(), 'links': links, 'categories': [for (final c in list.value) c.toJson()]}));
     } catch (_) {}
     if (notify) list.value = List<Category>.of(list.value);
   }
 
   static const _gamePaths = ['/steamapps/', '/epic games/', '/riot games/', '/gog games/', '/gog galaxy/games/', '/ubisoft/', '/ea games/', '/origin games/', '/xboxgames/', '/roblox/', '/battle.net/', '/heroic/', '/lutris/'];
+
+  static Set<String> _tokens(String text) => text.toLowerCase().split(RegExp(r'[^a-z0-9]+')).where((e) => e.isNotEmpty).toSet();
+
+  static const _noise = {'updater', 'update', 'updates', 'helper', 'crash', 'crashreporter', 'crashpad', 'reporter', 'service', 'services', 'bootstrapper', 'bootstrap', 'redist', 'redistributable', 'setup', 'installer', 'install', 'uninstall', 'uninst', 'sfx', 'splash'};
+
+  static bool isNoise(String app, [String title = '']) => _tokens('$app $title').any(_noise.contains);
 
   static String? _defaultFor(String app, String path, int sys) {
     var n = app.toLowerCase();
@@ -268,10 +287,9 @@ class Categories {
     for (final d in _defaults) {
       if (d.names.any((x) => x.toLowerCase() == n)) return d.id;
     }
+    final tokens = _tokens(n);
     for (final d in _defaults) {
-      for (final part in d.parts) {
-        if (n.contains(part)) return d.id;
-      }
+      if (d.parts.any(tokens.contains)) return d.id;
     }
     switch (sys) {
       case 0:
@@ -287,11 +305,13 @@ class Categories {
     return null;
   }
 
-  static bool autoAssign(Map<String, String> paths, {Map<String, int> sys = const {}}) {
+  static bool autoAssign(Map<String, String> paths, {Map<String, int> sys = const {}, Map<String, String> titles = const {}, Set<String>? windowed}) {
     var changed = false;
     for (final e in paths.entries) {
       final app = e.key;
       if (decided.contains(app) || of(app) != null) continue;
+      if (windowed != null && !windowed.contains(app)) continue;
+      if (isNoise(app, titles[app] ?? '')) continue;
       final id = _defaultFor(app, e.value, sys[app] ?? -1);
       final cat = byId(id == null ? null : (links[id] ?? id));
       if (cat == null) continue;

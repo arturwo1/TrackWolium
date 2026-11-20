@@ -142,8 +142,9 @@ Future<void> categoryEditor(BuildContext context, {Category? edit, UsageBridge? 
 }
 
 class AppEntry {
-  AppEntry(this.app, this.title, this.path, this.ms);
+  AppEntry(this.app, this.title, this.path, this.ms, this.windowed);
 
+  final bool windowed;
   final String app;
   final String title;
   final String path;
@@ -159,12 +160,15 @@ Future<void> categoryApps(BuildContext context, Category cat, List<AppEntry> ent
       return a.title.toLowerCase().compareTo(b.title.toLowerCase());
     });
   final ctl = TextEditingController();
+  var background = false;
   await showDialog<void>(
     context: context,
     builder: (c) => StatefulBuilder(
       builder: (c, set) {
         final q = ctl.text.trim().toLowerCase();
-        final shown = q.isEmpty ? all : [for (final e in all) if (e.title.toLowerCase().contains(q) || e.app.toLowerCase().contains(q)) e];
+        bool real(AppEntry e) => cat.apps.contains(e.app) || (e.windowed && !Categories.isNoise(e.app, e.title));
+        final pool = background ? all : [for (final e in all) if (real(e)) e];
+        final shown = q.isEmpty ? pool : [for (final e in pool) if (e.title.toLowerCase().contains(q) || e.app.toLowerCase().contains(q)) e];
         return AlertDialog(
           backgroundColor: cPanel,
           title: Text('${tr('catApps')}: ${cat.name}'),
@@ -203,6 +207,14 @@ Future<void> categoryApps(BuildContext context, Category cat, List<AppEntry> ent
                           );
                         },
                       ),
+              ),
+              CheckboxListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: background,
+                title: Text(tr('catShowBackground'), style: const TextStyle(fontSize: 13)),
+                onChanged: (v) => set(() => background = v == true),
               ),
             ]),
           ),

@@ -382,6 +382,18 @@ class Usage {
     }
   }
 
+  Set<String> windowed() {
+    final db = _open();
+    final out = <String>{};
+    if (db == null) return out;
+    try {
+      for (final r in db.select('SELECT DISTINCT app FROM usage WHERE state IN (0, 1, 2) AND ms > 0')) {
+        out.add(r['app'] as String);
+      }
+    } catch (_) {}
+    return out;
+  }
+
   Map<String, int> appCats() {
     final db = _open();
     final out = <String, int>{};

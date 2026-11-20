@@ -17,7 +17,7 @@ const seriesColors = [
   Color(0xFF9AA5B1),
 ];
 
-const _idColor = {'cpu': 0, 'ram': 1, 'peak': 2, 'ior': 3, 'iow': 4, 'sysram': 5};
+const _idColor = {'cpu': 0, 'ram': 1, 'peak': 2, 'ior': 3, 'iow': 4, 'sysram': 5, 'sysdisk': 6};
 
 Color metricColor(String id) => seriesColors[_idColor[id] ?? 0];
 
