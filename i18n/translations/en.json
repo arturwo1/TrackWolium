@@ -253,7 +253,7 @@
     "linesHint": "Enable resource metrics in Settings to add more lines.",
     "optMode": "Count",
     "optColumns": "Columns",
-    "optResetWidths": "Reset column widths",
+    "optResetWidths": "Reset column widths and order",
     "chartTitleOpen": "Open windows time",
     "chartTitleMin": "Minimized time",
     "chartTitleVisible": "Visible time",
@@ -264,10 +264,8 @@
     "realFocus": "Show only real focus (no AFK)",
     "realFocusNeedsTime": "Turn on focus time collection in Settings first.",
     "optMinSec": "Min. seconds",
-    "minSecOff": "Off",
     "category": "Category",
     "catAll": "All categories",
-    "catSummary": "Categories",
     "catAssign": "Category...",
     "catNew": "New category",
     "catEdit": "Edit category",
@@ -284,7 +282,16 @@
     "catTitle": "App categories",
     "catHint": "Group apps to filter and sort the table and chart. Assign apps here or from a row's context menu.",
     "afkTitle": "AFK threshold",
-    "afkOff": "Off",
-    "afkHint": "Focus time with no keyboard or mouse input for longer than this counts as AFK. Hide it with Options - Show only real focus."
+    "afkHint": "Focus time with no keyboard or mouse input for longer than this counts as AFK. 30s to 1h, 0 turns it off. Examples: 90s, 5m, 1h.",
+    "optMaxSec": "Max. seconds",
+    "durationHint": "e.g. 30s, 5m, 1h 30m",
+    "durationBad": "Unknown format",
+    "catDefGames": "Games",
+    "catDefBrowsers": "Browsers",
+    "catDefDev": "Development",
+    "catDefChat": "Communication",
+    "catDefMedia": "Media",
+    "catDeleteConfirm": "Delete the category \"{name}\"? Its apps will stay, only the grouping is removed.",
+    "realcol": "Real focus"
   }
 }

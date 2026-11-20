@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'android_collector.dart';
 import 'data.dart';
+import 'icons.dart';
 import 'l10n.dart';
 import 'prefs.dart';
 import 'theme.dart';
@@ -140,36 +141,72 @@ Future<void> categoryEditor(BuildContext context, {Category? edit, UsageBridge? 
   );
 }
 
-Future<void> categoryApps(BuildContext context, Category cat, Map<String, String> titles) async {
-  final apps = titles.keys.toList()..sort((a, b) => titles[a]!.toLowerCase().compareTo(titles[b]!.toLowerCase()));
+class AppEntry {
+  AppEntry(this.app, this.title, this.path, this.ms);
+
+  final String app;
+  final String title;
+  final String path;
+  final int ms;
+}
+
+Future<void> categoryApps(BuildContext context, Category cat, List<AppEntry> entries) async {
+  final all = List<AppEntry>.of(entries)
+    ..sort((a, b) {
+      final c = b.ms.compareTo(a.ms);
+      return c != 0 ? c : a.title.toLowerCase().compareTo(b.title.toLowerCase());
+    });
+  final ctl = TextEditingController();
   await showDialog<void>(
     context: context,
     builder: (c) => StatefulBuilder(
-      builder: (c, set) => AlertDialog(
-        backgroundColor: cPanel,
-        title: Text('${tr('catApps')}: ${cat.name}'),
-        content: SizedBox(
-          width: 360,
-          height: 420,
-          child: apps.isEmpty
-              ? Text(tr('noData'), style: const TextStyle(color: cMuted))
-              : ListView(children: [
-                  for (final a in apps)
-                    CheckboxListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      value: cat.apps.contains(a),
-                      title: Text(titles[a]!, overflow: TextOverflow.ellipsis),
-                      subtitle: Categories.of(a) != null && Categories.of(a) != cat ? Text(Categories.of(a)!.name, style: const TextStyle(color: cMuted, fontSize: 12)) : null,
-                      onChanged: (v) {
-                        Categories.assign(a, v == true ? cat.id : null);
-                        set(() {});
-                      },
-                    ),
-                ]),
-        ),
-        actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok')))],
-      ),
+      builder: (c, set) {
+        final q = ctl.text.trim().toLowerCase();
+        final shown = q.isEmpty ? all : [for (final e in all) if (e.title.toLowerCase().contains(q) || e.app.toLowerCase().contains(q)) e];
+        return AlertDialog(
+          backgroundColor: cPanel,
+          title: Text('${tr('catApps')}: ${cat.name}'),
+          content: SizedBox(
+            width: 380,
+            height: 460,
+            child: Column(children: [
+              TextField(
+                controller: ctl,
+                autofocus: true,
+                onChanged: (_) => set(() {}),
+                decoration: InputDecoration(isDense: true, prefixIcon: const Icon(Icons.search, size: 20), hintText: tr('search')),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: shown.isEmpty
+                    ? Align(alignment: Alignment.topLeft, child: Text(tr('noData'), style: const TextStyle(color: cMuted)))
+                    : ListView.builder(
+                        itemCount: shown.length,
+                        itemExtent: 52,
+                        itemBuilder: (c, i) {
+                          final e = shown[i];
+                          final other = Categories.of(e.app);
+                          return CheckboxListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.trailing,
+                            value: cat.apps.contains(e.app),
+                            secondary: AppIcon(title: e.title, path: e.path, size: 28),
+                            title: Text(e.title, overflow: TextOverflow.ellipsis),
+                            subtitle: other != null && other != cat ? Text(other.name, style: const TextStyle(color: cMuted, fontSize: 12)) : null,
+                            onChanged: (v) {
+                              Categories.assign(e.app, v == true ? cat.id : null);
+                              set(() {});
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ]),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok')))],
+        );
+      },
     ),
   );
 }

@@ -538,6 +538,44 @@ class ColumnPrefs {
   static File get _file => File('${dataDir()}${Platform.pathSeparator}columns');
 
   static Map<String, double> widths = {};
+  static List<String> order = [];
+
+  static File get _orderFile => File('${dataDir()}${Platform.pathSeparator}colorder');
+
+  static List<String> sorted(List<String> ids) {
+    final idx = {for (var i = 0; i < order.length; i++) order[i]: i};
+    final base = {for (var i = 0; i < ids.length; i++) ids[i]: i};
+    final out = List<String>.of(ids);
+    out.sort((a, b) {
+      final x = idx[a] ?? (1000 + base[a]!);
+      final y = idx[b] ?? (1000 + base[b]!);
+      return x.compareTo(y);
+    });
+    return out;
+  }
+
+  static void move(String drag, String target, List<String> ids) {
+    final list = sorted(ids);
+    final from = list.indexOf(drag);
+    final to = list.indexOf(target);
+    if (from < 0 || to < 0 || from == to) return;
+    list.removeAt(from);
+    list.insert(to, drag);
+    order = list;
+    hidden.value = Set<String>.of(hidden.value);
+    persistOrder();
+  }
+
+  static void persistOrder() {
+    try {
+      if (order.isEmpty) {
+        if (_orderFile.existsSync()) _orderFile.deleteSync();
+      } else {
+        Directory(dataDir()).createSync(recursive: true);
+        _orderFile.writeAsStringSync('${order.join('\n')}\n');
+      }
+    } catch (_) {}
+  }
 
   static File get _widthFile => File('${dataDir()}${Platform.pathSeparator}colwidths');
 
@@ -556,6 +594,9 @@ class ColumnPrefs {
       }
       widths = next;
     } catch (_) {}
+    try {
+      order = _orderFile.existsSync() ? _orderFile.readAsLinesSync().map((e) => e.trim()).where((e) => e.isNotEmpty).toList() : [];
+    } catch (_) {}
   }
 
   static void setWidth(String id, double w, {bool persist = true}) {
@@ -566,8 +607,10 @@ class ColumnPrefs {
 
   static void resetWidths() {
     widths = {};
+    order = [];
     hidden.value = Set<String>.of(hidden.value);
     persistWidths();
+    persistOrder();
   }
 
   static void persistWidths() {

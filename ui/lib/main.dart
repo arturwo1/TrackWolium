@@ -248,7 +248,7 @@ class _ShellState extends State<Shell> {
   final resSel = <String>{};
   String? catFilter;
   List<Contrib> previous = [];
-  Map<String, int> catTotals = {};
+  Map<String, int> afkMs = {};
   Set<String> rowApps = {};
   bool dirty = false;
 
@@ -260,13 +260,15 @@ class _ShellState extends State<Shell> {
     if (Hidden.has(app)) return false;
     final cat = Categories.byId(catFilter);
     if (cat != null && !cat.apps.contains(app)) return false;
-    return ViewPrefs.minSec == 0 || rowApps.contains(app);
+    return (ViewPrefs.minSec == 0 && ViewPrefs.maxSec == 0) || rowApps.contains(app);
   }
 
   List<AppUsage> prepareRows(List<AppUsage> src, String fk, String tk) {
     var list = src.where((r) => !Hidden.has(r.app)).toList();
+    final timeOn = !Platform.isAndroid && !MetricPrefs.has('notime');
+    final idle = realFocusOn || (timeOn && ColumnPrefs.shown('realcol')) ? usage.afk(fk, tk) : <String, int>{};
+    afkMs = idle;
     if (realFocusOn) {
-      final idle = usage.afk(fk, tk);
       for (final r in list) {
         final v = idle[r.app];
         if (v != null) r.ms[0] = math.max(0, r.ms[0] - v);
@@ -276,13 +278,10 @@ class _ShellState extends State<Shell> {
     if (ViewPrefs.minSec > 0) {
       list = list.where((r) => (r.visible > 0 ? r.visible : r.total) >= ViewPrefs.minSec * 1000).toList();
     }
-    rowApps = {for (final r in list) r.app};
-    final totals = <String, int>{};
-    for (final r in list) {
-      final c = Categories.of(r.app);
-      if (c != null) totals[c.id] = (totals[c.id] ?? 0) + metricValue(r);
+    if (ViewPrefs.maxSec > 0) {
+      list = list.where((r) => (r.visible > 0 ? r.visible : r.total) <= ViewPrefs.maxSec * 1000).toList();
     }
-    catTotals = totals;
+    rowApps = {for (final r in list) r.app};
     final cat = Categories.byId(catFilter);
     if (cat != null) list = list.where((r) => cat.apps.contains(r.app)).toList();
     return list;
@@ -438,22 +437,47 @@ class _ShellState extends State<Shell> {
               ),
             ]);
           });
+    Widget out = sized;
+    if (resize && k != 'app') {
+      final inner = sized;
+      out = DragTarget<String>(
+        onWillAcceptWithDetails: (d) => d.data != k,
+        onAcceptWithDetails: (d) => ColumnPrefs.move(d.data, k, columnChoices()),
+        builder: (context, cand, rej) => DecoratedBox(
+          decoration: BoxDecoration(border: Border(left: BorderSide(color: cand.isNotEmpty ? cPrimary : Colors.transparent, width: 2))),
+          child: Draggable<String>(
+            data: k,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: Material(
+              color: cPanel,
+              elevation: 6,
+              borderRadius: BorderRadius.circular(rSm),
+              child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), child: Text(label, style: head.copyWith(color: cPrimary))),
+            ),
+            childWhenDragging: Opacity(opacity: 0.35, child: inner),
+            child: inner,
+          ),
+        ),
+      );
+    }
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onSecondaryTapUp: (d) => columnMenu(d.globalPosition),
-      child: sized,
+      child: out,
     );
   }
 
   List<String> columnChoices() => [
         if (Categories.list.value.isNotEmpty) 'category',
         if (liveMode) 'now',
-        if (multiState) ...['focused', 'open', 'minimized', 'background'],
+        if (multiState) ...['focused', if (!Platform.isAndroid && !MetricPrefs.has('notime')) 'realcol', 'open', 'minimized', 'background'],
         'total',
         if (multiState) ...procMetricIds.where(MetricPrefs.enabled.value.contains),
       ];
 
-  List<String> activeColumns() => [for (final c in columnChoices()) if (ColumnPrefs.shown(c)) c];
+  List<String> activeColumns() => ColumnPrefs.sorted([for (final c in columnChoices()) if (ColumnPrefs.shown(c)) c]);
+
+  int realMs(AppUsage r) => realFocusOn ? r.ms[0] : math.max(0, r.ms[0] - (afkMs[r.app] ?? 0));
 
   String columnLabel(String id) => procMetricIds.contains(id) ? metricName(id) : tr(id);
 
@@ -618,6 +642,8 @@ class _ShellState extends State<Shell> {
     switch (id) {
       case 'focused':
         return r.ms[0] == 0 ? '-' : formatMs(r.ms[0]);
+      case 'realcol':
+        return realMs(r) == 0 ? '-' : formatMs(realMs(r));
       case 'open':
         return r.ms[1] == 0 ? '-' : formatMs(r.ms[1]);
       case 'minimized':
@@ -810,13 +836,15 @@ class _ShellState extends State<Shell> {
     final up = b != null && b <= const Duration(seconds: staleSeconds);
     final l = up && from == to && to == today ? usage.live() : null;
     final rk = '$fk|$tk';
+    final src = l ?? usage.range(fk, tk);
+    Categories.autoAssign([for (final r in src) r.app]);
     setState(() {
       hasDb = usage.available;
       days = usage.days();
       beat = b;
       isPaused = usage.paused;
       liveMode = l != null;
-      rows = prepareRows(l ?? usage.range(fk, tk), fk, tk);
+      rows = prepareRows(src, fk, tk);
       final every = dayCount > 1 ? 30 : 5;
       final changed = rangeKey != rk;
       if (changed) {
@@ -1059,6 +1087,8 @@ class _ShellState extends State<Shell> {
       switch (sortKey) {
         case 'focused':
           return r.ms[0];
+        case 'realcol':
+          return realMs(r);
         case 'open':
           return r.ms[1];
         case 'minimized':
@@ -1293,7 +1323,27 @@ class _ShellState extends State<Shell> {
     );
   }
 
+  Widget durationField(TextEditingController ctl, void Function(int) apply, StateSetter set) {
+    final bad = ctl.text.trim().isNotEmpty && parseDuration(ctl.text) == null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 4),
+      child: TextField(
+        controller: ctl,
+        style: const TextStyle(fontSize: 14),
+        decoration: InputDecoration(isDense: true, hintText: tr('durationHint'), errorText: bad ? tr('durationBad') : null),
+        onChanged: (v) {
+          final n = v.trim().isEmpty ? 0 : parseDuration(v);
+          if (n != null) apply(n);
+          set(() {});
+        },
+      ),
+    );
+  }
+
   Future<void> optionsPopover(BuildContext ctx, bool narrow) {
+    final minCtl = TextEditingController(text: ViewPrefs.minSec == 0 ? '' : durationText(ViewPrefs.minSec));
+    final maxCtl = TextEditingController(text: ViewPrefs.maxSec == 0 ? '' : durationText(ViewPrefs.maxSec));
+    var maxOpen = ViewPrefs.maxSec > 0;
     return popover(ctx, (set) {
       final cols = columnChoices();
       return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1313,7 +1363,7 @@ class _ShellState extends State<Shell> {
               set(() {});
             }),
         ],
-        if (!narrow && !Platform.isAndroid && ColumnPrefs.widths.isNotEmpty) ...[
+        if (!narrow && !Platform.isAndroid && (ColumnPrefs.widths.isNotEmpty || ColumnPrefs.order.isNotEmpty)) ...[
           popHeader(tr('optColumns')),
           InkWell(
             onTap: () {
@@ -1347,17 +1397,26 @@ class _ShellState extends State<Shell> {
           if (MetricPrefs.has('notime')) Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 6), child: Text(tr('realFocusNeedsTime'), style: const TextStyle(color: cMuted, fontSize: 12))),
         ],
         popHeader(tr('optMinSec')),
-        for (final n in const [0, 5, 10, 30, 60])
-          popRow(n == 0 ? tr('minSecOff') : '$n ${tr('unitS')}', ViewPrefs.minSec == n, () {
-            ViewPrefs.update(sec: n);
-            set(() {});
-          }, radio: true),
+        durationField(minCtl, (n) => ViewPrefs.update(sec: n), set),
+        InkWell(
+          onTap: () => set(() => maxOpen = !maxOpen),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
+            child: Row(children: [
+              Icon(maxOpen ? Icons.arrow_drop_down : Icons.arrow_right, size: 22, color: cMuted),
+              const SizedBox(width: 4),
+              Text(tr('optMaxSec'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800, fontSize: 12)),
+            ]),
+          ),
+        ),
+        if (maxOpen) durationField(maxCtl, (n) => ViewPrefs.update(max: n), set),
         const SizedBox(height: 6),
       ]);
     });
   }
 
   Widget chartPanelBody(bool narrow) {
+    final noLines = !Platform.isAndroid && !showTime && resSel.where(MetricPrefs.enabled.value.contains).isEmpty;
     return Panel(
       padding: EdgeInsets.all(narrow ? 12 : 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1400,8 +1459,8 @@ class _ShellState extends State<Shell> {
             onPressed: showChartHelp,
           ),
         ]),
-        const SizedBox(height: 10),
-        ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, previous: previous, avgLine: ViewPrefs.avgLine, compare: ViewPrefs.compare, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has)),
+        if (!noLines) const SizedBox(height: 10),
+        if (!noLines) ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, previous: previous, avgLine: ViewPrefs.avgLine, compare: ViewPrefs.compare, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: Hidden.has)),
       ]),
     );
   }
@@ -1568,54 +1627,12 @@ class _ShellState extends State<Shell> {
         },
       );
 
-  Widget catSummary() {
-    final cats = Categories.list.value;
-    if (cats.isEmpty) return const SizedBox.shrink();
-    Widget chip(Category c) {
-      final on = catFilter == c.id;
-      return HoverBox(
-        onTap: () {
-          buzz(0);
-          catFilter = on ? null : c.id;
-          onViewChanged();
-        },
-        builder: (hovered) => Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-          decoration: BoxDecoration(
-            color: on || hovered ? cSoft : cPanel,
-            borderRadius: BorderRadius.circular(rMd),
-            border: Border.all(color: on ? c.tint : cBorder),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            c.iconWidget(18),
-            const SizedBox(width: 8),
-            Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(width: 8),
-            Text(formatMs(catTotals[c.id] ?? 0), style: const TextStyle(color: cMuted, fontSize: 12)),
-          ]),
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Panel(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(tr('catSummary'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          Wrap(spacing: 8, runSpacing: 8, children: [for (final c in cats) chip(c)]),
-        ]),
-      ),
-    );
-  }
-
   Widget activity(bool narrow) {
     const head = TextStyle(color: cMuted, fontWeight: FontWeight.w800);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       leaderCard(),
       chartPanel(narrow),
       const SizedBox(height: 12),
-      catSummary(),
       if (rows.isEmpty)
         Panel(child: Text(tr('noData')))
       else
@@ -1778,16 +1795,38 @@ class _SettingsPageState extends State<SettingsPage> {
   late bool discord = prefs.flag('discordrpc');
   String rpcStatus = '';
   late int afkSeconds = readAfkSeconds();
+  late final TextEditingController afkCtl = TextEditingController(text: afkSeconds == 0 ? '0' : durationText(afkSeconds));
+  bool afkBad = false;
   bool rpcRestarting = false;
   Timer? rpcTimer;
+
+  Future<void> confirmDelete(Category c) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: cPanel,
+        title: Text(tr('catDelete')),
+        content: Text(tr('catDeleteConfirm').replaceAll('{name}', c.name)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: Text(tr('cancel'))),
+          TextButton(onPressed: () => Navigator.pop(d, true), child: Text(tr('catDelete'), style: const TextStyle(color: cDanger))),
+        ],
+      ),
+    );
+    if (ok == true) Categories.remove(c.id);
+  }
 
   Widget categoriesSection() {
     return ValueListenableBuilder<List<Category>>(
       valueListenable: Categories.list,
       builder: (context, cats, _) {
-        Map<String, String> titles() {
+        List<AppEntry> entries() {
           final m = metricsUsage.names();
-          return {for (final e in m.entries) e.key: e.value.name.isNotEmpty ? e.value.name : prettyApp(e.key)};
+          final today = DateTime.now();
+          final first = today.subtract(const Duration(days: 30));
+          String k(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+          final seen = {for (final r in metricsUsage.range(k(first), k(today))) r.app: r.visible};
+          return [for (final e in m.entries) AppEntry(e.key, e.value.name.isNotEmpty ? e.value.name : prettyApp(e.key), e.value.path, seen[e.key] ?? 0)];
         }
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
@@ -1811,9 +1850,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     Text('${tr('catApps')}: ${c.apps.length}', style: const TextStyle(color: cMuted, fontSize: 12)),
                   ]),
                 ),
-                IconButton(tooltip: tr('catApps'), visualDensity: VisualDensity.compact, icon: const Icon(Icons.apps, size: 20), onPressed: () => categoryApps(context, c, titles())),
+                IconButton(tooltip: tr('catApps'), visualDensity: VisualDensity.compact, icon: const Icon(Icons.apps, size: 20), onPressed: () => categoryApps(context, c, entries())),
                 IconButton(tooltip: tr('catEdit'), visualDensity: VisualDensity.compact, icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () => categoryEditor(context, edit: c, bridge: collector?.bridge)),
-                IconButton(tooltip: tr('catDelete'), visualDensity: VisualDensity.compact, icon: const Icon(Icons.delete_outline, size: 20, color: cDanger), onPressed: () => Categories.remove(c.id)),
+                IconButton(tooltip: tr('catDelete'), visualDensity: VisualDensity.compact, icon: const Icon(Icons.delete_outline, size: 20, color: cDanger), onPressed: () => confirmDelete(c)),
               ]),
             ),
         ]);
@@ -1833,6 +1872,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void dispose() {
     rpcTimer?.cancel();
     metricsUsage.close();
+    afkCtl.dispose();
     super.dispose();
   }
 
@@ -2127,14 +2167,19 @@ class _SettingsPageState extends State<SettingsPage> {
         if (!Platform.isAndroid) ...[
           Row(children: [
             Expanded(child: Text(tr('afkTitle'), style: const TextStyle(fontWeight: FontWeight.w700))),
-            SelectBox<int>(
-              value: afkSeconds,
-              items: [for (final n in afkChoices) DropdownMenuItem(value: n, child: Text(n == 0 ? tr('afkOff') : '${n ~/ 60} ${tr('unitM')}'))],
-              onChanged: (v) {
-                if (v == null) return;
-                writeAfkSeconds(v);
-                setState(() => afkSeconds = v);
-              },
+            SizedBox(
+              width: 150,
+              child: TextField(
+                controller: afkCtl,
+                decoration: InputDecoration(isDense: true, hintText: tr('durationHint'), errorText: afkBad ? tr('durationBad') : null),
+                onChanged: (v) {
+                  final n = v.trim() == '0' ? 0 : parseDuration(v);
+                  setState(() => afkBad = n == null);
+                  if (n == null) return;
+                  afkSeconds = n == 0 ? 0 : n.clamp(30, 3600).toInt();
+                  writeAfkSeconds(afkSeconds);
+                },
+              ),
             ),
           ]),
           Align(alignment: Alignment.centerLeft, child: Text(tr('afkHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
