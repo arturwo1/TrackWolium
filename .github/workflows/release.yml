@@ -194,10 +194,20 @@ jobs:
           codesign --force -s - "$MACOS/trackwolium-core"
           codesign --force --deep -s - "$APP"
           ditto -c -k --keepParent "$APP" Wolium-macos.zip
-          mkdir dmg
-          cp -R "$APP" dmg/
+          rm -rf dmg
+          mkdir -p dmg
+          ditto "$APP" dmg/Wolium.app
           ln -s /Applications dmg/Applications
-          hdiutil create -volname Wolium -srcfolder dmg -ov -format UDZO Wolium-macos.dmg
+          sudo mdutil -a -i off >/dev/null 2>&1 || true
+          for i in 1 2 3 4 5; do
+            hdiutil detach "/Volumes/Wolium" -force >/dev/null 2>&1 || true
+            if hdiutil create -volname Wolium -srcfolder dmg -ov -format UDZO Wolium-macos.dmg; then
+              break
+            fi
+            echo "hdiutil failed (attempt $i/5), retrying..."
+            [ "$i" -eq 5 ] && exit 1
+            sleep 5
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: wolium-macos
