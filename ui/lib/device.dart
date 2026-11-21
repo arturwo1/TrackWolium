@@ -33,15 +33,20 @@ String _defaultName = '';
 Future<void> loadDefaultDeviceName() async {
   if (Platform.isAndroid) {
     try {
-      _defaultName = await const MethodChannel('wolium/usage').invokeMethod<String>('deviceName') ?? '';
+      _defaultName = (await const MethodChannel('wolium/usage').invokeMethod<String>('deviceName') ?? '').trim();
     } catch (_) {}
     return;
   }
   if (Platform.isWindows) {
-    _defaultName = Platform.environment['COMPUTERNAME'] ?? Platform.localHostname;
+    final host = Platform.localHostname.trim();
+    if (host.isNotEmpty && host.toLowerCase() != 'localhost') {
+      _defaultName = host;
+      return;
+    }
+    _defaultName = (Platform.environment['COMPUTERNAME'] ?? '').trim();
     return;
   }
-  _defaultName = Platform.localHostname;
+  _defaultName = Platform.localHostname.trim();
 }
 
 String defaultDeviceName() => _defaultName.isEmpty ? Platform.operatingSystem : _defaultName;

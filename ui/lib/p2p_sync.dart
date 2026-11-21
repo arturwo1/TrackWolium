@@ -5,8 +5,18 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'data.dart';
+import 'device.dart' as dev;
+import 'icons.dart';
 
 const int kP2pPort = 9096;
+
+class LocalAddress {
+  const LocalAddress(this.address, this.iface, this.virtual);
+
+  final String address;
+  final String iface;
+  final bool virtual;
+}
 
 class PeerDevice {
   PeerDevice({
@@ -87,25 +97,31 @@ class P2pSync {
     }
   }
 
-  String get deviceName {
-    try {
-      final h = Platform.localHostname.trim();
-      if (h.isNotEmpty && h != 'localhost') return h;
-    } catch (_) {}
-    return Platform.isAndroid ? 'Android' : 'Wolium PC';
-  }
+  String get deviceName => dev.deviceName();
 
   String get platformName => Platform.operatingSystem;
 
   static void ensureSchema(Database db) {
     db.execute('''
-      CREATE TABLE IF NOT EXISTS browser_usage(day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, browser, domain)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS browser_usage(day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', PRIMARY KEY(day, browser, domain)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS browser_timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', ms INTEGER NOT NULL, PRIMARY KEY(day, slot, browser, domain)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 9096, last_sync INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_usage(device TEXT NOT NULL, day TEXT NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(device, day, app, state)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_timeline(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(device, day, slot, app, state)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_apps(device TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, app)) WITHOUT ROWID;
-      CREATE TABLE IF NOT EXISTS remote_browser_usage(device TEXT NOT NULL, day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(device, day, browser, domain)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS remote_browser_usage(device TEXT NOT NULL, day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, day, browser, domain)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS remote_browser_timeline(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', ms INTEGER NOT NULL, PRIMARY KEY(device, day, slot, browser, domain)) WITHOUT ROWID;
     ''');
+    for (final sql in [
+      "ALTER TABLE browser_usage ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE browser_usage ADD COLUMN url TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE remote_browser_usage ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE remote_browser_usage ADD COLUMN url TEXT NOT NULL DEFAULT ''",
+    ]) {
+      try {
+        db.execute(sql);
+      } catch (_) {}
+    }
   }
 
   void loadPeers() {
@@ -134,24 +150,46 @@ class P2pSync {
     } catch (_) {}
   }
 
-  Future<List<String>> localIpAddresses() async {
-    final ips = <String>[];
+  static bool _isVirtualIface(String name, String ip) {
+    final n = name.toLowerCase();
+    const markers = ['vethernet', 'wsl', 'hyper-v', 'docker', 'vmware', 'vmnet', 'virtual', 'vbox', 'tailscale', 'zerotier', 'wireguard', 'wg', 'tun', 'tap', 'br-'];
+    if (markers.any(n.contains)) return true;
+    if (ip.startsWith('169.254.')) return true;
+    if (ip.startsWith('172.')) {
+      final parts = ip.split('.');
+      final second = parts.length > 1 ? int.tryParse(parts[1]) : null;
+      if (second != null && second >= 16 && second <= 31) return true;
+    }
+    return false;
+  }
+
+  Future<List<LocalAddress>> localIpDetails() async {
+    final out = <LocalAddress>[];
+    final seen = <String>{};
     try {
       final ifaces = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLinkLocal: false);
       for (final iface in ifaces) {
         for (final addr in iface.addresses) {
-          if (!addr.isLoopback && !ips.contains(addr.address)) ips.add(addr.address);
+          if (!addr.isLoopback && seen.add(addr.address)) {
+            out.add(LocalAddress(addr.address, iface.name, _isVirtualIface(iface.name, addr.address)));
+          }
         }
       }
     } catch (_) {}
-    int rank(String ip) {
-      if (ip.startsWith('192.168.')) return 0;
-      if (ip.startsWith('10.')) return 1;
-      if (ip.startsWith('172.')) return 2;
-      return 3;
+    int rank(LocalAddress a) {
+      final v = a.virtual ? 10 : 0;
+      if (a.address.startsWith('192.168.')) return v;
+      if (a.address.startsWith('10.')) return v + 1;
+      if (a.address.startsWith('172.')) return v + 2;
+      return v + 3;
     }
-    ips.sort((a, b) => rank(a).compareTo(rank(b)));
-    return ips;
+    out.sort((a, b) => rank(a).compareTo(rank(b)));
+    return out;
+  }
+
+  Future<List<String>> localIpAddresses() async {
+    final list = await localIpDetails();
+    return [for (final a in list) a.address];
   }
 
   static ({String host, int port})? parseEndpoint(String raw, {int defaultPort = kP2pPort}) {
@@ -427,6 +465,10 @@ class P2pSync {
   void unpair(String id) {
     _savePeers(peers.value.where((p) => p.id != id).toList());
     try {
+      final dir = Directory('${dataDir()}${Platform.pathSeparator}remote_icons${Platform.pathSeparator}${_safeSeg(id)}');
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    } catch (_) {}
+    try {
       if (!File(dbPath()).existsSync()) return;
       final db = sqlite3.open(dbPath());
       try {
@@ -436,12 +478,17 @@ class P2pSync {
         db.execute('DELETE FROM remote_timeline WHERE device = ?', [id]);
         db.execute('DELETE FROM remote_apps WHERE device = ?', [id]);
         db.execute('DELETE FROM remote_browser_usage WHERE device = ?', [id]);
+        db.execute('DELETE FROM remote_browser_timeline WHERE device = ?', [id]);
       } finally {
         db.dispose();
       }
       version.value++;
     } catch (_) {}
   }
+
+  static String _safeSeg(String s) => s.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+
+  static String _iconFileName(String app) => '${base64Url.encode(utf8.encode(app)).replaceAll('=', '')}.png';
 
   void _upsertDeviceRow(PeerDevice peer) {
     try {
@@ -468,6 +515,7 @@ class P2pSync {
     final timeline = <Map<String, dynamic>>[];
     final apps = <Map<String, dynamic>>[];
     final browser = <Map<String, dynamic>>[];
+    final browserTimeline = <Map<String, dynamic>>[];
     if (File(dbPath()).existsSync()) {
       final db = sqlite3.open(dbPath(), mode: OpenMode.readOnly);
       try {
@@ -480,13 +528,51 @@ class P2pSync {
           }
         } catch (_) {}
         try {
-          for (final r in db.select('SELECT app, name FROM apps')) {
-            apps.add({'app': r['app'], 'name': r['name']});
+          var iconBudget = 0;
+          var iconCount = 0;
+          const maxIcons = 180;
+          const maxIconBytes = 65536;
+          const maxTotalIconBytes = 2000000;
+          final rows = db.select('''
+            SELECT a.app, a.name, a.path, COALESCE(u.ms, 0) AS total_ms
+            FROM apps a
+            LEFT JOIN (SELECT app, SUM(ms) AS ms FROM usage GROUP BY app) u ON u.app = a.app
+            ORDER BY total_ms DESC
+          ''');
+          for (final r in rows) {
+            final item = <String, dynamic>{'app': r['app'], 'name': r['name']};
+            final p = r['path'] as String? ?? '';
+            if (p.isNotEmpty && iconCount < maxIcons && iconBudget < maxTotalIconBytes) {
+              final png = iconPng(p);
+              if (png != null && png.isNotEmpty && png.length <= maxIconBytes && iconBudget + png.length <= maxTotalIconBytes) {
+                item['icon'] = base64Encode(png);
+                iconBudget += png.length;
+                iconCount++;
+              }
+            }
+            apps.add(item);
           }
-        } catch (_) {}
+        } catch (_) {
+          try {
+            for (final r in db.select('SELECT app, name FROM apps')) {
+              apps.add({'app': r['app'], 'name': r['name']});
+            }
+          } catch (_) {}
+        }
         try {
-          for (final r in db.select('SELECT day, browser, domain, ms FROM browser_usage WHERE day >= ?', [fromDay])) {
-            browser.add({'day': r['day'], 'browser': r['browser'], 'domain': r['domain'], 'ms': r['ms']});
+          for (final r in db.select('SELECT day, browser, domain, ms, title, url FROM browser_usage WHERE day >= ?', [fromDay])) {
+            browser.add({'day': r['day'], 'browser': r['browser'], 'domain': r['domain'], 'ms': r['ms'], 'title': r['title'], 'url': r['url']});
+          }
+        } catch (_) {
+          try {
+            for (final r in db.select('SELECT day, browser, domain, ms FROM browser_usage WHERE day >= ?', [fromDay])) {
+              browser.add({'day': r['day'], 'browser': r['browser'], 'domain': r['domain'], 'ms': r['ms']});
+            }
+          } catch (_) {}
+        }
+        try {
+          for (final r in db.select('SELECT day, slot, browser, domain, title, ms FROM browser_timeline WHERE day >= ?', [fromDay])) {
+            browserTimeline.add({'day': r['day'], 'slot': r['slot'], 'browser': r['browser'], 'domain': r['domain'], 'title': r['title'], 'ms': r['ms']});
           }
         } catch (_) {}
       } finally {
@@ -499,16 +585,26 @@ class P2pSync {
       'timeline': timeline,
       'apps': apps,
       'browser_usage': browser,
+      'browser_timeline': browserTimeline,
     };
   }
 
   void _importSnapshot(String peerId, Map<String, dynamic> data, String host, int port) {
-    final dev = data['device'] as Map<String, dynamic>? ?? const {};
-    final name = dev['name'] as String? ?? 'Device';
-    final plat = dev['platform'] as String? ?? 'unknown';
+    final devInfo = data['device'] as Map<String, dynamic>? ?? const {};
+    final rawName = (devInfo['name'] as String? ?? '').trim();
+    var existingName = '';
+    for (final p in peers.value) {
+      if (p.id == peerId && p.name.trim().isNotEmpty) {
+        existingName = p.name.trim();
+        break;
+      }
+    }
+    final name = rawName.isNotEmpty ? rawName : (existingName.isNotEmpty ? existingName : 'Device');
+    final plat = (devInfo['platform'] as String? ?? 'unknown').trim();
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
     Directory(dataDir()).createSync(recursive: true);
+    final iconDir = Directory('${dataDir()}${Platform.pathSeparator}remote_icons${Platform.pathSeparator}${_safeSeg(peerId)}');
     final db = sqlite3.open(dbPath());
     try {
       ensureSchema(db);
@@ -539,18 +635,48 @@ class P2pSync {
 
         final aList = data['apps'] as List<dynamic>? ?? const [];
         if (aList.isNotEmpty) {
-          final st = db.prepare("INSERT OR REPLACE INTO remote_apps(device, app, name, path) VALUES(?, ?, ?, '')");
+          final st = db.prepare('''
+            INSERT INTO remote_apps(device, app, name, path) VALUES(?, ?, ?, ?)
+            ON CONFLICT(device, app) DO UPDATE SET
+              name = excluded.name,
+              path = CASE WHEN excluded.path != '' THEN excluded.path ELSE remote_apps.path END
+          ''');
           for (final item in aList.whereType<Map<String, dynamic>>()) {
-            st.execute([peerId, item['app'], item['name']]);
+            final appId = item['app'] as String? ?? '';
+            if (appId.isEmpty) continue;
+            var iconPath = '';
+            final b64 = item['icon'] as String?;
+            if (b64 != null && b64.isNotEmpty) {
+              try {
+                final bytes = base64Decode(b64);
+                if (bytes.isNotEmpty) {
+                  if (!iconDir.existsSync()) iconDir.createSync(recursive: true);
+                  iconPath = '${iconDir.path}${Platform.pathSeparator}${_iconFileName(appId)}';
+                  File(iconPath).writeAsBytesSync(bytes);
+                }
+              } catch (_) {
+                iconPath = '';
+              }
+            }
+            st.execute([peerId, appId, item['name'] ?? '', iconPath]);
           }
           st.dispose();
         }
 
         final bList = data['browser_usage'] as List<dynamic>? ?? const [];
         if (bList.isNotEmpty) {
-          final st = db.prepare('INSERT OR REPLACE INTO remote_browser_usage(device, day, browser, domain, ms) VALUES(?, ?, ?, ?, ?)');
+          final st = db.prepare('INSERT OR REPLACE INTO remote_browser_usage(device, day, browser, domain, ms, title, url) VALUES(?, ?, ?, ?, ?, ?, ?)');
           for (final item in bList.whereType<Map<String, dynamic>>()) {
-            st.execute([peerId, item['day'], item['browser'], item['domain'], item['ms']]);
+            st.execute([peerId, item['day'], item['browser'], item['domain'], item['ms'], item['title'] ?? '', item['url'] ?? '']);
+          }
+          st.dispose();
+        }
+
+        final btList = data['browser_timeline'] as List<dynamic>? ?? const [];
+        if (btList.isNotEmpty) {
+          final st = db.prepare('INSERT OR REPLACE INTO remote_browser_timeline(device, day, slot, browser, domain, title, ms) VALUES(?, ?, ?, ?, ?, ?, ?)');
+          for (final item in btList.whereType<Map<String, dynamic>>()) {
+            st.execute([peerId, item['day'], item['slot'], item['browser'], item['domain'], item['title'] ?? '', item['ms']]);
           }
           st.dispose();
         }

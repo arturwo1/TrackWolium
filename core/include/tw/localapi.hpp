@@ -28,6 +28,8 @@ struct BrowserRow {
   std::string browser;
   std::string domain;
   long long ms;
+  std::string title;
+  std::string url;
 };
 
 class ApiData {
@@ -41,6 +43,12 @@ public:
     (void)domain;
     (void)ms;
     return false;
+  }
+  virtual bool add_browser_usage(const std::string& day, int slot, const std::string& browser, const std::string& domain, const std::string& title, const std::string& url, long long ms) {
+    (void)slot;
+    (void)title;
+    (void)url;
+    return add_browser_usage(day, browser, domain, ms);
   }
   virtual std::vector<BrowserRow> browser_usage(const std::string& from_day, const std::string& to_day) {
     (void)from_day;

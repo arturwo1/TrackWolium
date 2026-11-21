@@ -76,6 +76,10 @@ class WoliumApp extends StatelessWidget {
         locale: materialLocale(language.value),
         supportedLocales: [for (final c in languages.keys) materialLocale(c)],
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
+        builder: (context, child) => DefaultSelectionStyle(
+          mouseCursor: SystemMouseCursors.basic,
+          child: child ?? const SizedBox.shrink(),
+        ),
         home: const Root(),
       ),
     );
@@ -125,29 +129,35 @@ class _RootState extends State<Root> {
   @override
   Widget build(BuildContext context) {
     if (accepted) return Shell(onWithdraw: withdraw);
-    return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
-            child: Panel(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Brand(),
-                  const SizedBox(height: 16),
-                  Text(tr('welcome'), style: const TextStyle(height: 1.5)),
-                  const SizedBox(height: 8),
-                  TextButton(onPressed: () => open(privacyUrl), child: Text(tr('privacy'))),
-                  const SizedBox(height: 8),
-                  Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                    FilledButton(onPressed: accept, child: Text(tr('accept'))),
-                    LanguagePicker(onChanged: () => setState(() {})),
-                  ]),
-                ],
+    return DefaultSelectionStyle(
+      mouseCursor: SystemMouseCursors.basic,
+      child: SelectionArea(
+        contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
+        child: Scaffold(
+          body: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: Panel(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Brand(),
+                      const SizedBox(height: 16),
+                      Text(tr('welcome'), style: const TextStyle(height: 1.5)),
+                      const SizedBox(height: 8),
+                      TextButton(onPressed: () => open(privacyUrl), child: Text(tr('privacy'))),
+                      const SizedBox(height: 8),
+                      Wrap(spacing: 12, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                        FilledButton(onPressed: accept, child: Text(tr('accept'))),
+                        LanguagePicker(onChanged: () => setState(() {})),
+                      ]),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
@@ -257,10 +267,18 @@ class _ShellState extends State<Shell> {
   Set<String> rowApps = {};
   bool dirty = false;
   final ScrollController tableHScroll = ScrollController();
-  String deviceFilter = 'local';
+  Set<String> selectedDevices = {'local'};
   List<DeviceInfo> peerDevices = [];
   Map<String, List<SiteUsage>> sitesByBrowser = {};
+  List<SiteContrib> siteContribs = [];
   final Set<String> expandedBrowsers = {};
+
+  bool get isLocalOnly => selectedDevices.length == 1 && selectedDevices.contains('local');
+  bool get includesLocal => selectedDevices.isEmpty || selectedDevices.contains('local');
+  String get deviceFilterKey {
+    final list = selectedDevices.toList()..sort();
+    return list.join(',');
+  }
 
   bool get realFocusOn => ViewPrefs.realFocus && !Platform.isAndroid && !MetricPrefs.has('notime');
 
@@ -315,12 +333,13 @@ class _ShellState extends State<Shell> {
     if (!force && inside && bin == loadBin && useSess == loadSess) return;
     final w0 = math.max(0, viewFrom - sp).floor();
     final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
-    contribs = usage.contribs(from, w0, w1, bin, useSess, realFocus: realFocusOn, deviceFilter: deviceFilter).where((c) => appAllowed(c.app)).toList();
-    previous = ViewPrefs.compare ? usage.contribs(prevFrom(), w0, w1, bin, false, realFocus: realFocusOn, deviceFilter: deviceFilter).where((c) => appAllowed(c.app)).toList() : [];
-    presenceRows = deviceFilter == 'local' ? usage.presence(from, w0, w1) : [];
+    contribs = usage.contribs(from, w0, w1, bin, useSess, realFocus: realFocusOn, devices: selectedDevices).where((c) => appAllowed(c.app)).toList();
+    previous = ViewPrefs.compare ? usage.contribs(prevFrom(), w0, w1, bin, false, realFocus: realFocusOn, devices: selectedDevices).where((c) => appAllowed(c.app)).toList() : [];
+    siteContribs = usage.browserContribs(from, w0, w1, bin, devices: selectedDevices);
+    presenceRows = includesLocal ? usage.presence(from, w0, w1) : [];
     final en = MetricPrefs.enabled.value;
-    resPts = deviceFilter == 'local' && en.any(procMetricIds.contains) ? usage.resPoints(from, w0, w1, bin) : [];
-    sysPts = deviceFilter == 'local' && en.any(sysMetricIds.contains) ? usage.sysPoints(from, w0, w1) : [];
+    resPts = includesLocal && en.any(procMetricIds.contains) ? usage.resPoints(from, w0, w1, bin) : [];
+    sysPts = includesLocal && en.any(sysMetricIds.contains) ? usage.sysPoints(from, w0, w1) : [];
     for (final r in presenceRows) {
       if (r.name.isEmpty && r.clientId.isNotEmpty) resolveRpcName(r.clientId);
     }
@@ -423,7 +442,7 @@ class _ShellState extends State<Shell> {
         ]),
       ),
     );
-    if (Platform.isAndroid) return GestureDetector(behavior: HitTestBehavior.translucent, onLongPress: columnsSheet, child: box);
+    if (Platform.isAndroid) return box;
     Widget label0 = box;
     if (resize && k != 'app') {
       final inner = box;
@@ -543,13 +562,21 @@ class _ShellState extends State<Shell> {
       ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
   }
 
+  Widget selectableDialog(Widget child) => DefaultSelectionStyle(
+        mouseCursor: SystemMouseCursors.basic,
+        child: SelectionArea(
+          contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
+          child: child,
+        ),
+      );
+
   Future<bool> confirmEnd(AppUsage r) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
         backgroundColor: cPanel,
         title: Text(tr('actEnd')),
-        content: Text(tr('actEndConfirm').replaceAll('{app}', r.title)),
+        content: selectableDialog(Text(tr('actEndConfirm').replaceAll('{app}', r.title))),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('cancel'))),
           TextButton(style: TextButton.styleFrom(foregroundColor: cDanger), onPressed: () => Navigator.pop(c, true), child: Text(tr('actEnd'))),
@@ -557,6 +584,113 @@ class _ShellState extends State<Shell> {
       ),
     );
     return ok == true;
+  }
+
+  AppUsage? _findBrowserRow(String browserId) {
+    final low = browserId.toLowerCase();
+    for (final r in rows) {
+      final b = Usage.browserIdForApp(r.app);
+      if (b == low || r.app.toLowerCase().contains(low)) return r;
+    }
+    return null;
+  }
+
+  ({String? exe, String? macApp}) _resolveBrowserLauncher(SiteUsage s, AppUsage? browserRow) {
+    if (Platform.isAndroid) return (exe: null, macApp: null);
+    if (browserRow != null) {
+      if (browserRow.path.isNotEmpty && File(browserRow.path).existsSync()) {
+        return (exe: browserRow.path, macApp: browserRow.title);
+      }
+      if (Platform.isMacOS && browserRow.title.isNotEmpty) {
+        return (exe: null, macApp: browserRow.title);
+      }
+    }
+    final bId = (Usage.browserIdForApp(browserRow?.app ?? s.browser) ?? s.browser).toLowerCase();
+    for (final t in detectBrowserTargets(usage)) {
+      if (t.id == bId || t.name.toLowerCase().contains(bId)) {
+        return (exe: t.exe, macApp: t.name);
+      }
+    }
+    return (exe: null, macApp: null);
+  }
+
+  Future<void> openSiteDefault(SiteUsage s) async {
+    final uri = Uri.tryParse(s.openUrl);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> openSiteInBrowser(SiteUsage s, AppUsage? browserRow) async {
+    final uri = Uri.tryParse(s.openUrl);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) return;
+    final target = _resolveBrowserLauncher(s, browserRow);
+    try {
+      if ((Platform.isWindows || Platform.isLinux) && target.exe != null && File(target.exe!).existsSync()) {
+        await Process.start(target.exe!, [uri.toString()], mode: ProcessStartMode.detached);
+        return;
+      }
+      if (Platform.isMacOS && target.macApp != null && target.macApp!.isNotEmpty) {
+        final res = await Process.run('open', ['-a', target.macApp!, uri.toString()]);
+        if (res.exitCode == 0) return;
+      }
+    } catch (_) {}
+    await openSiteDefault(s);
+  }
+
+  Future<void> openSiteFromChart(SiteUsage s, String? browserApp) async {
+    final row = browserApp != null ? rows.cast<AppUsage?>().firstWhere((r) => r?.app == browserApp, orElse: () => null) : _findBrowserRow(s.browser);
+    await siteMenu(s, row, null);
+  }
+
+  Future<void> siteMenu(SiteUsage s, AppUsage? browserRow, Offset? at) async {
+    final target = _resolveBrowserLauncher(s, browserRow);
+    final canSame = !Platform.isAndroid && ((target.exe != null && File(target.exe!).existsSync()) || (Platform.isMacOS && (target.macApp?.isNotEmpty ?? false)));
+    String? action;
+    if (at != null) {
+      Widget item(IconData icon, String text, {bool on = true}) {
+        final c = on ? cPrimary : cMuted.withValues(alpha: 0.45);
+        return Row(children: [Icon(icon, size: 18, color: on ? cMuted : c), const SizedBox(width: 10), Text(text, style: TextStyle(color: c))]);
+      }
+
+      action = await darkMenu<String>(at, [
+        PopupMenuItem<String>(enabled: false, height: 32, child: Text(s.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800, fontSize: 12))),
+        PopupMenuItem<String>(value: 'default', child: item(Icons.open_in_browser, tr('siteOpenDefault'))),
+        PopupMenuItem<String>(value: 'same', enabled: canSame, child: item(Icons.launch, tr('siteOpenSameBrowser'), on: canSame)),
+        PopupMenuItem<String>(value: 'copy', child: item(Icons.copy, tr('siteCopyUrl'))),
+      ]);
+    } else {
+      action = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: cPanel,
+        builder: (c) => SafeArea(
+          child: selectableDialog(
+            Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                leading: const Icon(Icons.public, color: cPrimary),
+                title: Text(s.displayTitle, style: const TextStyle(fontWeight: FontWeight.w800), maxLines: 2, overflow: TextOverflow.ellipsis),
+                subtitle: Text('${s.domain} · ${s.openUrl}', style: const TextStyle(color: cMuted, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+              const Divider(height: 1),
+              ListTile(leading: const Icon(Icons.open_in_browser), title: Text(tr('siteOpenDefault')), onTap: () => Navigator.pop(c, 'default')),
+              if (canSame) ListTile(leading: const Icon(Icons.launch), title: Text(tr('siteOpenSameBrowser')), onTap: () => Navigator.pop(c, 'same')),
+              ListTile(leading: const Icon(Icons.copy), title: Text(tr('siteCopyUrl')), onTap: () => Navigator.pop(c, 'copy')),
+            ]),
+          ),
+        ),
+      );
+    }
+    switch (action) {
+      case 'default':
+        await openSiteDefault(s);
+        break;
+      case 'same':
+        await openSiteInBrowser(s, browserRow);
+        break;
+      case 'copy':
+        Clipboard.setData(ClipboardData(text: s.openUrl));
+        toast('${tr('urlCopied')}: ${s.openUrl}');
+        break;
+    }
   }
 
   Future<void> rowMenu(AppUsage r, Offset at) async {
@@ -868,16 +1002,20 @@ class _ShellState extends State<Shell> {
     final today = dateOnly(DateTime.now());
     final fk = keyOf(from);
     final tk = keyOf(to);
+    final latestPeers = usage.devices();
+    final validIds = {'local', for (final d in latestPeers) d.id};
+    selectedDevices.removeWhere((id) => !validIds.contains(id));
+    if (selectedDevices.isEmpty) selectedDevices.add('local');
     final b = usage.sinceHeartbeat();
     final up = b != null && b <= const Duration(seconds: staleSeconds);
-    final l = deviceFilter == 'local' && up && from == to && to == today ? usage.live() : null;
-    final rk = '$fk|$tk|$deviceFilter';
-    final src = l ?? usage.range(fk, tk, deviceFilter: deviceFilter);
-    final paths = {for (final r in src) if (r.visible > 0 || Platform.isAndroid) r.app: r.path};
+    final l = isLocalOnly && up && from == to && to == today ? usage.live() : null;
+    final rk = '$fk|$tk|$deviceFilterKey';
+    final src = l ?? usage.range(fk, tk, devices: selectedDevices);
+    final paths = {for (final r in src) if (r.visible > 0 || Platform.isAndroid || !isLocalOnly) r.app: r.path};
     final titles = {for (final r in src) r.app: r.title};
     if (rangeKey != rk || ticks % 30 == 0) {
-      final all = usage.names(deviceFilter: deviceFilter);
-      final real = Platform.isAndroid || deviceFilter != 'local' ? all.keys.toSet() : usage.windowed();
+      final all = usage.names(devices: selectedDevices);
+      final real = Platform.isAndroid || !isLocalOnly ? all.keys.toSet() : usage.windowed();
       for (final e in all.entries) {
         if (real.contains(e.key)) paths.putIfAbsent(e.key, () => e.value.path);
         titles.putIfAbsent(e.key, () => e.value.name);
@@ -889,10 +1027,7 @@ class _ShellState extends State<Shell> {
     setState(() {
       hasDb = usage.available;
       days = usage.days();
-      peerDevices = usage.devices();
-      if (deviceFilter != 'local' && deviceFilter != 'all' && !peerDevices.any((d) => d.id == deviceFilter)) {
-        deviceFilter = 'local';
-      }
+      peerDevices = latestPeers;
       beat = b;
       isPaused = usage.paused;
       liveMode = l != null;
@@ -907,9 +1042,9 @@ class _ShellState extends State<Shell> {
       if (changed || dirty || ticks % every == 0) {
         dirty = false;
         loadChart(force: true);
-        names = usage.names(deviceFilter: deviceFilter);
-        sitesByBrowser = usage.browserSites(fk, tk, deviceFilter: deviceFilter);
-        resMap = deviceFilter == 'local' && MetricPrefs.enabled.value.any(procMetricIds.contains) ? usage.resources(fk, tk) : {};
+        names = usage.names(devices: selectedDevices);
+        sitesByBrowser = usage.browserSites(fk, tk, devices: selectedDevices);
+        resMap = includesLocal && MetricPrefs.enabled.value.any(procMetricIds.contains) ? usage.resources(fk, tk) : {};
         rangeKey = rk;
       }
     });
@@ -963,54 +1098,85 @@ class _ShellState extends State<Shell> {
       ? ['focused', if (!Platform.isAndroid) 'realcol', 'open', 'minimized', 'background', 'total', 'category', ...procMetricIds]
       : ['total', 'category'];
 
-  Future<Set<String>?> exportColumnsDialog() {
+  Future<({Set<String> cols, String browserMode})?> exportColumnsDialog() {
     final choices = exportChoices();
     final picked = <String>{for (final id in activeColumns()) if (choices.contains(id)) id, if (Categories.list.value.isNotEmpty) 'category'};
     if (picked.isEmpty) picked.add('total');
-    return showDialog<Set<String>>(
+    var browserMode = 'apps';
+    return showDialog<({Set<String> cols, String browserMode})>(
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, set) => AlertDialog(
           backgroundColor: cPanel,
           title: Text(tr('exportWhat')),
           content: SizedBox(
-            width: 340,
-            child: SingleChildScrollView(
-              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Wrap(spacing: 8, children: [
-                  OutlinedButton(
-                    onPressed: () => set(() {
-                      picked
-                        ..clear()
-                        ..addAll([for (final id in activeColumns()) if (choices.contains(id)) id])
-                        ..add('category');
+            width: 360,
+            child: selectableDialog(
+              SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Wrap(spacing: 8, children: [
+                    OutlinedButton(
+                      onPressed: () => set(() {
+                        picked
+                          ..clear()
+                          ..addAll([for (final id in activeColumns()) if (choices.contains(id)) id])
+                          ..add('category');
+                      }),
+                      child: Text(tr('exportVisible')),
+                    ),
+                    OutlinedButton(
+                      onPressed: () => set(() {
+                        picked
+                          ..clear()
+                          ..addAll(choices);
+                      }),
+                      child: Text(tr('exportAll')),
+                    ),
+                  ]),
+                  const SizedBox(height: 6),
+                  for (final id in choices)
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: picked.contains(id),
+                      title: Text(columnLabel(id)),
+                      onChanged: (v) => set(() => v == true ? picked.add(id) : picked.remove(id)),
+                    ),
+                  const Divider(height: 18),
+                  Text(tr('exportBrowserMode'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  const SizedBox(height: 4),
+                  for (final m in const ['apps', 'both', 'sites']) ...[
+                    Builder(builder: (_) {
+                      final modeKey = m == 'apps' ? 'exportModeApps' : (m == 'both' ? 'exportModeBoth' : 'exportModeSites');
+                      return InkWell(
+                        onTap: () => set(() => browserMode = m),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(children: [
+                            Icon(browserMode == m ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 18, color: browserMode == m ? cPrimary : cMuted),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                tr(modeKey),
+                                style: TextStyle(color: browserMode == m ? cPrimary : cMuted, fontSize: 13, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ]),
+                        ),
+                      );
                     }),
-                    child: Text(tr('exportVisible')),
-                  ),
-                  OutlinedButton(
-                    onPressed: () => set(() {
-                      picked
-                        ..clear()
-                        ..addAll(choices);
-                    }),
-                    child: Text(tr('exportAll')),
-                  ),
+                  ],
                 ]),
-                const SizedBox(height: 6),
-                for (final id in choices)
-                  CheckboxListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    value: picked.contains(id),
-                    title: Text(columnLabel(id)),
-                    onChanged: (v) => set(() => v == true ? picked.add(id) : picked.remove(id)),
-                  ),
-              ]),
+              ),
             ),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('cancel'))),
-            TextButton(onPressed: picked.isEmpty ? null : () => Navigator.pop(c, Set<String>.of(picked)), child: Text(tr('exportCsv'))),
+            TextButton(
+              onPressed: picked.isEmpty ? null : () => Navigator.pop(c, (cols: Set<String>.of(picked), browserMode: browserMode)),
+              child: Text(tr('exportCsv')),
+            ),
           ],
         ),
       ),
@@ -1032,12 +1198,15 @@ class _ShellState extends State<Shell> {
     if (picked == null) return null;
     final fk = keyOf(dateOnly(picked.start));
     final tk = keyOf(dateOnly(picked.end));
-    final cols = await exportColumnsDialog();
-    if (cols == null || cols.isEmpty) return null;
+    final resDlg = await exportColumnsDialog();
+    if (resDlg == null || resDlg.cols.isEmpty) return null;
+    final cols = resDlg.cols;
+    final browserMode = resDlg.browserMode;
     requestFlush();
     String q(String v) => '"${v.replaceAll('"', '""')}"';
     final idle = cols.contains('realcol') ? usage.afk(fk, tk) : <String, int>{};
-    final res = cols.any(procMetricIds.contains) ? usage.resources(fk, tk) : <String, ResAgg>{};
+    final res = includesLocal && cols.any(procMetricIds.contains) ? usage.resources(fk, tk) : <String, ResAgg>{};
+    final sitesByB = browserMode == 'apps' ? const <String, List<SiteUsage>>{} : usage.browserSites(fk, tk, devices: selectedDevices);
     String unit(String id) {
       if (id == 'category') return '';
       if (id == 'cpu') return ' (s)';
@@ -1075,11 +1244,42 @@ class _ShellState extends State<Shell> {
       }
       return '';
     }
+    String siteValue(String id, SiteUsage s, String catName) {
+      switch (id) {
+        case 'focused':
+        case 'total':
+          return '${s.ms ~/ 1000}';
+        case 'category':
+          return q(catName);
+        default:
+          return '';
+      }
+    }
+    String siteCsvLabel(SiteUsage s, {String prefix = '', String suffix = ''}) {
+      final t = s.displayTitle;
+      final core = t == s.domain ? s.domain : '$t (${s.domain})';
+      return '$prefix$core$suffix';
+    }
+
     final ids = [for (final id in exportChoices()) if (cols.contains(id)) id];
     final b = StringBuffer('\uFEFF');
     b.writeln([tr('app'), for (final id in ids) '${columnLabel(id)}${unit(id)}'].join(','));
-    for (final r in usage.range(fk, tk)) {
-      b.writeln([q(r.title), for (final id in ids) value(id, r)].join(','));
+    for (final r in usage.range(fk, tk, devices: selectedDevices)) {
+      final bId = Usage.browserIdForApp(r.app);
+      final sites = bId == null ? const <SiteUsage>[] : (sitesByB[bId] ?? const <SiteUsage>[]);
+      final catName = Categories.of(r.app)?.name ?? '';
+      if (browserMode == 'sites' && sites.isNotEmpty) {
+        for (final s in sites) {
+          b.writeln([q(siteCsvLabel(s, suffix: ' — ${r.title}')), for (final id in ids) siteValue(id, s, catName)].join(','));
+        }
+      } else {
+        b.writeln([q(r.title), for (final id in ids) value(id, r)].join(','));
+        if (browserMode == 'both' && sites.isNotEmpty) {
+          for (final s in sites) {
+            b.writeln([q(siteCsvLabel(s, prefix: '  • ')), for (final id in ids) siteValue(id, s, catName)].join(','));
+          }
+        }
+      }
     }
     final fileName = 'wolium_${fk}_$tk.csv';
     if (Platform.isAndroid) {
@@ -1296,16 +1496,19 @@ class _ShellState extends State<Shell> {
       builder: (context) => AlertDialog(
         backgroundColor: cPanel,
         title: Text(tr('helpTitle')),
-        content: SelectionArea(
-          contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
-          child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(tr('helpWhat')),
-              const SizedBox(height: 12),
-              Text(tr('helpMouse'), style: const TextStyle(color: cMuted)),
-              const SizedBox(height: 8),
-              Text(tr('helpTouch'), style: const TextStyle(color: cMuted)),
-            ]),
+        content: DefaultSelectionStyle(
+          mouseCursor: SystemMouseCursors.basic,
+          child: SelectionArea(
+            contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(tr('helpWhat')),
+                const SizedBox(height: 12),
+                Text(tr('helpMouse'), style: const TextStyle(color: cMuted)),
+                const SizedBox(height: 8),
+                Text(tr('helpTouch'), style: const TextStyle(color: cMuted)),
+              ]),
+            ),
           ),
         ),
         actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(tr('ok')))],
@@ -1314,7 +1517,7 @@ class _ShellState extends State<Shell> {
   }
 
   Widget chartPanel(bool narrow) {
-    return SelectionContainer.disabled(child: chartPanelBody(narrow));
+    return chartPanelBody(narrow);
   }
 
   String chartHeading() {
@@ -1398,9 +1601,10 @@ class _ShellState extends State<Shell> {
         child: Text(text, style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w800)),
       );
 
-  Widget popRow(String text, bool on, VoidCallback tap, {Color? dot, bool radio = false, VoidCallback? enter, VoidCallback? leave, bool enabled = true}) {
+  Widget popRow(String text, bool on, VoidCallback tap, {Color? dot, IconData? leading, bool radio = false, VoidCallback? enter, VoidCallback? leave, bool enabled = true}) {
     final icon = radio ? (on ? Icons.radio_button_checked : Icons.radio_button_unchecked) : (on ? Icons.check_box : Icons.check_box_outline_blank);
     return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: enter == null ? null : (_) => enter(),
       onExit: leave == null ? null : (_) => leave(),
       child: InkWell(
@@ -1410,6 +1614,10 @@ class _ShellState extends State<Shell> {
           child: Row(children: [
             Icon(icon, size: 20, color: !enabled ? cMuted.withValues(alpha: 0.4) : (on ? cPrimary : cMuted)),
             const SizedBox(width: 10),
+            if (leading != null) ...[
+              Icon(leading, size: 16, color: cMuted),
+              const SizedBox(width: 8),
+            ],
             if (dot != null) ...[
               Container(width: 10, height: 10, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
               const SizedBox(width: 8),
@@ -1417,6 +1625,99 @@ class _ShellState extends State<Shell> {
             Expanded(child: Text(text, style: TextStyle(color: enabled ? cPrimary : cMuted.withValues(alpha: 0.5), fontWeight: FontWeight.w600))),
           ]),
         ),
+      ),
+    );
+  }
+
+  IconData platformIcon(String platform) {
+    switch (platform.toLowerCase()) {
+      case 'android':
+        return Icons.smartphone;
+      case 'macos':
+      case 'windows':
+      case 'linux':
+        return Icons.computer;
+      default:
+        return Icons.devices_other;
+    }
+  }
+
+  String deviceButtonLabel() {
+    if (isLocalOnly) return tr('devLocal');
+    if (selectedDevices.length == 1 + peerDevices.length && includesLocal) return tr('devAll');
+    if (selectedDevices.length == 1) {
+      final id = selectedDevices.first;
+      for (final d in peerDevices) {
+        if (d.id == id) return d.name;
+      }
+    }
+    return tr('devicesCount').replaceAll('{n}', '${selectedDevices.length}');
+  }
+
+  String? deviceButtonBadge() {
+    if (selectedDevices.length <= 1) return null;
+    return '${selectedDevices.length}/${1 + peerDevices.length}';
+  }
+
+  Future<void> devicesPopover(BuildContext ctx) {
+    return popover(ctx, (set) {
+      final allIds = {'local', for (final d in peerDevices) d.id};
+      final allSelected = allIds.every(selectedDevices.contains);
+      void toggle(String id) {
+        setState(() {
+          if (selectedDevices.contains(id)) {
+            if (selectedDevices.length > 1) selectedDevices.remove(id);
+          } else {
+            selectedDevices.add(id);
+          }
+          only = null;
+          expandedBrowsers.clear();
+          loadW0 = -1;
+          dirty = true;
+        });
+        set(() {});
+        refresh();
+      }
+
+      return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        popHeader(tr('devicesBtn')),
+        popRow(tr('devAll'), allSelected, () {
+          setState(() {
+            selectedDevices
+              ..clear()
+              ..addAll(allSelected ? const ['local'] : allIds);
+            only = null;
+            expandedBrowsers.clear();
+            loadW0 = -1;
+            dirty = true;
+          });
+          set(() {});
+          refresh();
+        }, leading: Icons.devices),
+        const Divider(height: 8),
+        popRow('${deviceName()} (${tr('devThisTag')})', selectedDevices.contains('local'), () => toggle('local'), leading: platformIcon(Platform.operatingSystem)),
+        for (final d in peerDevices)
+          popRow(d.name, selectedDevices.contains(d.id), () => toggle(d.id), leading: platformIcon(d.platform)),
+        const SizedBox(height: 6),
+      ]);
+    });
+  }
+
+  Widget? remoteDeviceBadge(AppUsage r) {
+    final remotes = [for (final id in r.devices) if (id != 'local') id];
+    if (remotes.isEmpty) return null;
+    final peerMap = {for (final d in peerDevices) d.id: d};
+    final names = <String>[
+      if (r.devices.contains('local')) deviceName(),
+      for (final id in remotes) peerMap[id]?.name ?? id,
+    ];
+    final icon = r.devices.length > 1 ? Icons.devices : platformIcon(peerMap[remotes.first]?.platform ?? '');
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: Tooltip(
+        message: names.join(', '),
+        waitDuration: const Duration(milliseconds: 200),
+        child: Icon(icon, size: 15, color: cMuted),
       ),
     );
   }
@@ -1513,18 +1814,21 @@ class _ShellState extends State<Shell> {
         ],
         if (!narrow && !Platform.isAndroid && (ColumnPrefs.widths.isNotEmpty || ColumnPrefs.order.isNotEmpty)) ...[
           popHeader(tr('optColumns')),
-          InkWell(
-            onTap: () {
-              ColumnPrefs.resetWidths();
-              set(() {});
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              child: Row(children: [
-                const Icon(Icons.restart_alt, size: 20, color: cMuted),
-                const SizedBox(width: 10),
-                Expanded(child: Text(tr('optResetWidths'), style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600))),
-              ]),
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: InkWell(
+              onTap: () {
+                ColumnPrefs.resetWidths();
+                set(() {});
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                child: Row(children: [
+                  const Icon(Icons.restart_alt, size: 20, color: cMuted),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(tr('optResetWidths'), style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600))),
+                ]),
+              ),
             ),
           ),
         ],
@@ -1547,11 +1851,14 @@ class _ShellState extends State<Shell> {
         popHeader(tr('optMinSec')),
         Row(children: [
           Expanded(child: durationField(minCtl, (n) => ViewPrefs.update(sec: n), set, right: 4)),
-          Tooltip(
-            message: tr('optMaxSec'),
-            child: InkWell(
-              onTap: () => set(() => maxOpen = !maxOpen),
-              child: Padding(padding: const EdgeInsets.fromLTRB(0, 0, 10, 4), child: Icon(maxOpen ? Icons.arrow_drop_down : Icons.arrow_right, size: 28, color: maxOpen ? cPrimary : cMuted)),
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: Tooltip(
+              message: tr('optMaxSec'),
+              child: InkWell(
+                onTap: () => set(() => maxOpen = !maxOpen),
+                child: Padding(padding: const EdgeInsets.fromLTRB(0, 0, 10, 4), child: Icon(maxOpen ? Icons.arrow_drop_down : Icons.arrow_right, size: 28, color: maxOpen ? cPrimary : cMuted)),
+              ),
             ),
           ),
         ]),
@@ -1597,20 +1904,7 @@ class _ShellState extends State<Shell> {
           ],
           if (peerDevices.isNotEmpty) ...[
             toolDivider(),
-            SelectBox<String>(
-              value: deviceFilter,
-              items: [
-                DropdownMenuItem(value: 'local', child: Text(tr('devLocal'))),
-                DropdownMenuItem(value: 'all', child: Text(tr('devAll'))),
-                for (final d in peerDevices) DropdownMenuItem(value: d.id, child: Text(d.name)),
-              ],
-              onChanged: (v) {
-                if (v == null) return;
-                deviceFilter = v;
-                only = null;
-                onViewChanged();
-              },
-            ),
+            Builder(builder: (ctx) => toolButton(deviceButtonLabel(), Icons.devices, () => devicesPopover(ctx), badge: deviceButtonBadge())),
           ],
           if (!Platform.isAndroid) ...[
             toolDivider(),
@@ -1626,7 +1920,7 @@ class _ShellState extends State<Shell> {
           ),
         ]),
         if (!noLines) const SizedBox(height: 10),
-        if (!noLines) ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, previous: previous, avgLine: ViewPrefs.avgLine, compare: ViewPrefs.compare, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: (a) => !appAllowed(a))),
+        if (!noLines) ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], siteContribs: siteContribs, onOpenSite: openSiteFromChart, assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, previous: previous, avgLine: ViewPrefs.avgLine, compare: ViewPrefs.compare, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: (a) => !appAllowed(a))),
       ]),
     );
   }
@@ -1682,26 +1976,34 @@ class _ShellState extends State<Shell> {
                   behavior: HitTestBehavior.opaque,
                   onTap: () => toggleOnly(r.app),
                   onSecondaryTapUp: (d) => rowMenu(r, d.globalPosition),
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    onEnter: (_) => setState(() => hoverApp = r.app),
-                    onExit: (_) => setState(() => hoverApp = hoverApp == r.app ? null : hoverApp),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-                      child: Row(children: [
-                        AppIcon(title: r.title, path: r.path, size: 22),
-                        const SizedBox(width: 8),
-                        Expanded(child: EllipsisText(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null))),
-                        if (sites.isNotEmpty)
-                          InkWell(
-                            borderRadius: BorderRadius.circular(6),
-                            onTap: () => setState(() => expanded ? expandedBrowsers.remove(r.app) : expandedBrowsers.add(r.app)),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                              child: Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 18, color: cPrimary),
-                            ),
+                  child: DefaultSelectionStyle(
+                    mouseCursor: SystemMouseCursors.click,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      onEnter: (_) => setState(() => hoverApp = r.app),
+                      onExit: (_) => setState(() => hoverApp = hoverApp == r.app ? null : hoverApp),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                        child: Row(children: [
+                          AppIcon(title: r.title, path: r.path, size: 22),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              Flexible(child: EllipsisText(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null))),
+                              if (remoteDeviceBadge(r) case final b?) b,
+                            ]),
                           ),
-                      ]),
+                          if (sites.isNotEmpty)
+                            InkWell(
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: () => setState(() => expanded ? expandedBrowsers.remove(r.app) : expandedBrowsers.add(r.app)),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                child: Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 18, color: cPrimary),
+                              ),
+                            ),
+                        ]),
+                      ),
                     ),
                   ),
                 ),
@@ -1716,20 +2018,32 @@ class _ShellState extends State<Shell> {
               TableRow(
                 decoration: BoxDecoration(color: cSoft.withValues(alpha: 0.18)),
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(36, 4, 6, 4),
-                    child: Row(children: [
-                      const Icon(Icons.public, size: 14, color: cMuted),
-                      const SizedBox(width: 6),
-                      Expanded(child: EllipsisText(s.domain, style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w600))),
-                    ]),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onSecondaryTapUp: (d) => siteMenu(s, r, d.globalPosition),
+                    child: Tooltip(
+                      message: s.title.trim().isNotEmpty && s.title.trim() != s.domain ? '${s.displayTitle}\n${s.domain}' : s.openUrl,
+                      waitDuration: const Duration(milliseconds: 350),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(36, 4, 6, 4),
+                        child: Row(children: [
+                          const Icon(Icons.public, size: 14, color: cMuted),
+                          const SizedBox(width: 6),
+                          Expanded(child: EllipsisText(s.displayTitle, style: const TextStyle(color: cPrimary, fontSize: 12, fontWeight: FontWeight.w600))),
+                        ]),
+                      ),
+                    ),
                   ),
                   for (final id in ids)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                      child: EllipsisText(
-                        id == 'focused' || id == 'total' ? formatMs(s.ms) : '',
-                        style: const TextStyle(color: cMuted, fontSize: 12),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onSecondaryTapUp: (d) => siteMenu(s, r, d.globalPosition),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        child: EllipsisText(
+                          id == 'focused' || id == 'total' ? formatMs(s.ms) : '',
+                          style: const TextStyle(color: cMuted, fontSize: 12),
+                        ),
                       ),
                     ),
                   const SizedBox.shrink(),
@@ -1769,10 +2083,20 @@ class _ShellState extends State<Shell> {
             Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
           ]),
         );
-    return Column(children: [
-      Wrap(children: [
-        sortHead(tr('app'), 'app', head),
-        for (final id in ids) sortHead(columnLabel(id), id, head),
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Expanded(
+          child: Wrap(children: [
+            sortHead(tr('app'), 'app', head),
+            for (final id in ids) sortHead(columnLabel(id), id, head),
+          ]),
+        ),
+        IconButton(
+          tooltip: tr('optColumns'),
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.view_column_outlined, size: 18, color: cMuted),
+          onPressed: columnsSheet,
+        ),
       ]),
       for (final r in sortedRows()) ...[
         () {
@@ -1781,7 +2105,6 @@ class _ShellState extends State<Shell> {
           final expanded = sites.isNotEmpty && expandedBrowsers.contains(r.app);
           return GestureDetector(
             onTap: () => toggleOnly(r.app),
-            onLongPress: Platform.isAndroid ? () => androidMenu(r) : null,
             child: Container(
               width: double.infinity,
               margin: const EdgeInsets.only(top: 8),
@@ -1798,7 +2121,12 @@ class _ShellState extends State<Shell> {
                   ],
                   AppIcon(title: r.title, path: r.path, size: 22),
                   const SizedBox(width: 8),
-                  Expanded(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
+                  Expanded(
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Flexible(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
+                      if (remoteDeviceBadge(r) case final b?) b,
+                    ]),
+                  ),
                   if (sites.isNotEmpty)
                     IconButton(
                       visualDensity: VisualDensity.compact,
@@ -1806,6 +2134,12 @@ class _ShellState extends State<Shell> {
                       onPressed: () => setState(() => expanded ? expandedBrowsers.remove(r.app) : expandedBrowsers.add(r.app)),
                     ),
                   if (ids.contains('total')) Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
+                  if (Platform.isAndroid)
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.more_vert, size: 18, color: cMuted),
+                      onPressed: () => androidMenu(r),
+                    ),
                   hideButton(r),
                 ]),
                 Wrap(children: [
@@ -1815,14 +2149,19 @@ class _ShellState extends State<Shell> {
                 if (expanded) ...[
                   const Divider(height: 14),
                   for (final s in sites.take(6))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 3),
-                      child: Row(children: [
-                        const Icon(Icons.public, size: 14, color: cMuted),
-                        const SizedBox(width: 6),
-                        Expanded(child: EllipsisText(s.domain, style: const TextStyle(color: cMuted, fontSize: 12))),
-                        Text(formatMs(s.ms), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
-                      ]),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => siteMenu(s, r, null),
+                      onSecondaryTapUp: (d) => siteMenu(s, r, d.globalPosition),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(children: [
+                          const Icon(Icons.public, size: 14, color: cMuted),
+                          const SizedBox(width: 6),
+                          Expanded(child: EllipsisText(s.displayTitle, style: const TextStyle(color: cPrimary, fontSize: 12))),
+                          Text(formatMs(s.ms), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+                        ]),
+                      ),
                     ),
                 ],
               ]),
@@ -1862,6 +2201,7 @@ class _ShellState extends State<Shell> {
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          if (remoteDeviceBadge(best) case final b?) b,
         ]),
       ),
     );
@@ -1962,7 +2302,13 @@ class _ShellState extends State<Shell> {
               valueListenable: chartPinch,
               builder: (context, pinching, _) => column(narrow, title, pad, pinching),
             );
-            return Platform.isAndroid ? content : DefaultSelectionStyle(mouseCursor: MouseCursor.defer, child: SelectionArea(contextMenuBuilder: copyOnlyMenu, child: content));
+            return DefaultSelectionStyle(
+              mouseCursor: SystemMouseCursors.basic,
+              child: SelectionArea(
+                contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
+                child: content,
+              ),
+            );
           }),
         ),
       );
@@ -2052,7 +2398,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String? extStatusText;
   bool extConnected = false;
   bool p2pEnabled = P2pSync.instance.enabled;
-  List<String> localIps = [];
+  List<LocalAddress> localIps = [];
   String? p2pStatusText;
   late bool crashLogs = !prefs.flag('nocrashlogs');
 
@@ -2064,9 +2410,12 @@ class _SettingsPageState extends State<SettingsPage> {
       ..showSnackBar(SnackBar(content: Text('${tr('copied')}: $value'), duration: const Duration(seconds: 2)));
   }
 
-  Widget wrapSelectable(Widget child) => SelectionArea(
-        contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
-        child: child,
+  Widget wrapSelectable(Widget child) => DefaultSelectionStyle(
+        mouseCursor: SystemMouseCursors.basic,
+        child: SelectionArea(
+          contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
+          child: child,
+        ),
       );
 
   List<AppEntry> appEntries() {
@@ -2105,7 +2454,7 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (d) => AlertDialog(
         backgroundColor: cPanel,
         title: Text(tr('catDelete')),
-        content: Text(tr('catDeleteConfirm').replaceAll('{name}', c.name)),
+        content: wrapSelectable(Text(tr('catDeleteConfirm').replaceAll('{name}', c.name))),
         actions: [
           TextButton(onPressed: () => Navigator.pop(d, false), child: Text(tr('cancel'))),
           TextButton(onPressed: () => Navigator.pop(d, true), child: Text(tr('catDelete'), style: const TextStyle(color: cDanger))),
@@ -2336,12 +2685,14 @@ class _SettingsPageState extends State<SettingsPage> {
       context: context,
       builder: (c) => AlertDialog(
         title: Text(tr('thisDevice')),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 64,
-          decoration: InputDecoration(hintText: tr('deviceNameHint')),
-          onSubmitted: (v) => Navigator.pop(c, v),
+        content: wrapSelectable(
+          TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 64,
+            decoration: InputDecoration(hintText: tr('deviceNameHint')),
+            onSubmitted: (v) => Navigator.pop(c, v),
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, ''), child: Text(tr('deviceReset'))),
@@ -2354,6 +2705,10 @@ class _SettingsPageState extends State<SettingsPage> {
     if (result == null) return;
     saveDeviceName(result);
     if (mounted) setState(() => deviceLabel = deviceName());
+    P2pSync.instance.version.value++;
+    if (P2pSync.instance.peers.value.isNotEmpty) {
+      unawaited(P2pSync.instance.syncAll());
+    }
   }
 
   Future<void> toggleApi(bool v) async {
@@ -2388,7 +2743,7 @@ class _SettingsPageState extends State<SettingsPage> {
     autostartEnabled().then((v) {
       if (mounted && v != auto) setState(() => auto = v);
     });
-    P2pSync.instance.localIpAddresses().then((ips) {
+    P2pSync.instance.localIpDetails().then((ips) {
       if (mounted) setState(() => localIps = ips);
     });
   }
@@ -2398,43 +2753,94 @@ class _SettingsPageState extends State<SettingsPage> {
     return Directory(extDir).existsSync() ? extDir : installDir();
   }
 
+  Future<bool> _openBrowserExtensionsTab(({String id, String name, String? exe, String url}) target) async {
+    try {
+      if (Platform.isWindows && target.exe != null && File(target.exe!).existsSync()) {
+        await Process.start(target.exe!, [target.url], mode: ProcessStartMode.detached);
+        return true;
+      }
+      if (Platform.isMacOS && target.name.isNotEmpty) {
+        final res = await Process.run('open', ['-a', target.name, target.url]);
+        if (res.exitCode == 0) return true;
+      }
+      if (Platform.isLinux && target.exe != null && File(target.exe!).existsSync()) {
+        await Process.start(target.exe!, [target.url], mode: ProcessStartMode.detached);
+        return true;
+      }
+    } catch (_) {}
+    Clipboard.setData(ClipboardData(text: target.url));
+    return false;
+  }
+
   Future<void> openExtensionGuide() async {
     final extDir = _extFolderPath();
-    String? copiedHint;
+    final detected = detectBrowserTargets(metricsUsage);
+    final targets = detected.isNotEmpty
+        ? detected
+        : <({String id, String name, String? exe, String url})>[
+            (id: 'chrome', name: 'Chrome', exe: null, url: 'chrome://extensions'),
+          ];
+    var selectedIdx = 0;
+    Clipboard.setData(ClipboardData(text: extDir));
+    String? notice = tr('extPathAutoCopied');
+    var noticeOk = true;
     await showDialog<void>(
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, setDlg) {
-          Widget urlChip(String label, String url) => ActionChip(
-                avatar: const Icon(Icons.copy, size: 15, color: cPrimary),
-                label: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: url));
-                  setDlg(() => copiedHint = '${tr('copied')}: $url');
-                },
-              );
+          final target = targets[selectedIdx];
+          final openLabel = target.name.isNotEmpty ? tr('extOpenTabNamed').replaceAll('{browser}', target.name) : tr('extOpenTab');
           return AlertDialog(
             backgroundColor: cPanel,
             title: Text(tr('extGuideTitle')),
             content: SizedBox(
-              width: 520,
+              width: 540,
               child: wrapSelectable(
                 SingleChildScrollView(
                   child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(tr('extGuideIntro'), style: const TextStyle(color: cMuted, fontSize: 13)),
+                    if (targets.length > 1) ...[
+                      const SizedBox(height: 10),
+                      Text(tr('extMultiBrowserHint'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 6),
+                      Wrap(spacing: 6, runSpacing: 6, children: [
+                        for (var i = 0; i < targets.length; i++)
+                          ChoiceChip(
+                            label: Text(targets[i].name),
+                            selected: i == selectedIdx,
+                            onSelected: (_) => setDlg(() => selectedIdx = i),
+                          ),
+                      ]),
+                    ],
                     const SizedBox(height: 12),
                     Text(tr('extGuideStep1'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 6, runSpacing: 6, children: [
-                      urlChip('Chrome / Edge / Yandex / Brave', 'chrome://extensions'),
-                      urlChip('Opera', 'opera://extensions'),
-                      urlChip('Firefox', 'about:debugging#/runtime/this-firefox'),
-                    ]),
-                    if (copiedHint != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(copiedHint!, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 8),
+                    Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                      FilledButton.icon(
+                        icon: const Icon(Icons.open_in_new, size: 17),
+                        label: Text(openLabel, overflow: TextOverflow.ellipsis),
+                        onPressed: () async {
+                          final ok = await _openBrowserExtensionsTab(target);
+                          if (c.mounted) {
+                            setDlg(() {
+                              noticeOk = ok;
+                              notice = ok ? target.url : tr('extOpenFallback');
+                            });
+                          }
+                        },
                       ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.copy, size: 16),
+                        label: Text(tr('extCopyUrl')),
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: target.url));
+                          setDlg(() {
+                            noticeOk = true;
+                            notice = '${tr('copied')}: ${target.url}';
+                          });
+                        },
+                      ),
+                    ]),
                     const SizedBox(height: 12),
                     Text(tr('extGuideStep2'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
                     const SizedBox(height: 10),
@@ -2445,26 +2851,26 @@ class _SettingsPageState extends State<SettingsPage> {
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(color: cSoft, borderRadius: BorderRadius.circular(rSm), border: Border.fromBorderSide(line)),
                       child: Row(children: [
-                        Expanded(child: SelectableText(extDir, style: const TextStyle(fontSize: 12))),
+                        Expanded(child: Text(extDir, style: const TextStyle(fontSize: 12))),
                         IconButton(
                           visualDensity: VisualDensity.compact,
                           tooltip: tr('extCopyPath'),
                           icon: const Icon(Icons.copy, size: 17),
                           onPressed: () {
                             Clipboard.setData(ClipboardData(text: extDir));
-                            setDlg(() => copiedHint = '${tr('copied')}: $extDir');
+                            setDlg(() {
+                              noticeOk = true;
+                              notice = '${tr('copied')}: $extDir';
+                            });
                           },
                         ),
                       ]),
                     ),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 8, runSpacing: 6, children: [
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.folder_open, size: 17),
-                        label: Text(tr('openFolder')),
-                        onPressed: () => openPath(extDir),
+                    if (notice != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(notice!, style: TextStyle(color: noticeOk ? cOk : cWarn, fontSize: 12, fontWeight: FontWeight.w700)),
                       ),
-                    ]),
                     const SizedBox(height: 8),
                     Text(tr('extGuideFirefox'), style: const TextStyle(color: cMuted, fontSize: 12)),
                     const SizedBox(height: 10),
@@ -2483,17 +2889,14 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> wizardStep1() async {
-    prefs.setFlag('localapi', true);
-    if (Platform.isAndroid) collector?.bridge.setApiService(true);
-    setState(() {
-      localApi = true;
-      extStatusText = tr('extStep1Done');
-    });
-    if (!Platform.isAndroid) await openPath(_extFolderPath());
+    if (!localApi) return;
+    Clipboard.setData(ClipboardData(text: _extFolderPath()));
+    setState(() => extStatusText = tr('extStep1Done'));
     if (mounted) await openExtensionGuide();
   }
 
   Future<void> wizardStep2() async {
+    if (!localApi) return;
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
     try {
       final req = await client.getUrl(Uri.parse('http://127.0.0.1:9095/v1/browser/top?days=1&limit=3'));
@@ -2547,7 +2950,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: SelectableText(err!, style: const TextStyle(color: cDanger, fontSize: 12))),
+                    Expanded(child: Text(err!, style: const TextStyle(color: cDanger, fontSize: 12))),
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       tooltip: tr('copy'),
@@ -2595,23 +2998,27 @@ class _SettingsPageState extends State<SettingsPage> {
       Text(tr('extTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
       const SizedBox(height: 2),
       Text(tr('extHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+      if (!localApi) ...[
+        const SizedBox(height: 6),
+        Text(tr('extRequiresApi'), style: const TextStyle(color: cWarn, fontSize: 12, fontWeight: FontWeight.w700)),
+      ],
       const SizedBox(height: 8),
       Wrap(spacing: 8, runSpacing: 8, children: [
         OutlinedButton.icon(
           icon: const Icon(Icons.extension_outlined, size: 18),
           label: Text(tr('extStep1')),
-          onPressed: wizardStep1,
+          onPressed: localApi ? wizardStep1 : null,
         ),
         OutlinedButton.icon(
           icon: const Icon(Icons.check_circle_outline, size: 18),
           label: Text(tr('extStep2')),
-          onPressed: wizardStep2,
+          onPressed: localApi ? wizardStep2 : null,
         ),
       ]),
       if (extStatusText != null)
         Padding(
           padding: const EdgeInsets.only(top: 8),
-          child: SelectableText(extStatusText!, style: TextStyle(color: extConnected ? cOk : cMuted, fontWeight: FontWeight.w700, fontSize: 12)),
+          child: Text(extStatusText!, style: TextStyle(color: extConnected ? cOk : cMuted, fontWeight: FontWeight.w700, fontSize: 12)),
         ),
     ]);
   }
@@ -2640,9 +3047,12 @@ class _SettingsPageState extends State<SettingsPage> {
             Wrap(spacing: 6, runSpacing: 6, children: [
               for (final ip in localIps)
                 ActionChip(
-                  avatar: const Icon(Icons.copy, size: 14, color: cPrimary),
-                  label: Text('$ip:$kP2pPort', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-                  onPressed: () => copyText('$ip:$kP2pPort'),
+                  avatar: Icon(Icons.copy, size: 14, color: ip.virtual ? cMuted : cPrimary),
+                  label: Text(
+                    ip.virtual ? '${ip.address}:$kP2pPort · ${tr('p2pVirtual')}' : '${ip.address}:$kP2pPort',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ip.virtual ? cMuted : cPrimary),
+                  ),
+                  onPressed: () => copyText('${ip.address}:$kP2pPort'),
                 ),
             ]),
           ],
@@ -2685,7 +3095,7 @@ class _SettingsPageState extends State<SettingsPage> {
               decoration: BoxDecoration(color: cPrimary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cPrimary)),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Text('${tr('p2pPinLabel')}: ', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
-                SelectableText(pin, style: const TextStyle(color: cPrimary, fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 4)),
+                Text(pin, style: const TextStyle(color: cPrimary, fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 4)),
                 const SizedBox(width: 6),
                 IconButton(
                   visualDensity: VisualDensity.compact,
@@ -2698,15 +3108,15 @@ class _SettingsPageState extends State<SettingsPage> {
           if (p2pStatusText != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: SelectableText(p2pStatusText!, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
+              child: Text(p2pStatusText!, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
             ),
           for (final d in peers)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Row(children: [
-                const Icon(Icons.devices_other, size: 18, color: cMuted),
+                Icon(d.platform.toLowerCase() == 'android' ? Icons.smartphone : Icons.computer, size: 18, color: cMuted),
                 const SizedBox(width: 8),
-                Expanded(child: SelectableText('${d.name} (${d.host}:${d.port})', style: const TextStyle(fontWeight: FontWeight.w600))),
+                Expanded(child: Text('${d.name} (${d.host}:${d.port})', style: const TextStyle(fontWeight: FontWeight.w600))),
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   tooltip: tr('p2pSyncNow'),
@@ -2887,8 +3297,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 onPressed: showRpcHelp,
               ),
             ]),
-        ],
-        const Divider(height: 28),
+          ],
+          const Divider(height: 28),
         ],
         if (Platform.isAndroid) ...[
           Row(children: [
@@ -2941,13 +3351,12 @@ class _SettingsPageState extends State<SettingsPage> {
           Text(tr('dataFolder'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
           Row(children: [
-            Expanded(child: SelectableText(dataDir())),
-            if (!Platform.isAndroid)
-              IconButton(
-                tooltip: tr('openFolder'),
-                icon: const Icon(Icons.folder_open, size: 18),
-                onPressed: () => openPath(dataDir()),
-              ),
+            Expanded(child: Text(dataDir())),
+            IconButton(
+              tooltip: tr('openFolder'),
+              icon: const Icon(Icons.folder_open, size: 18),
+              onPressed: () => openPath(dataDir()),
+            ),
             IconButton(
               tooltip: tr('copy'),
               icon: const Icon(Icons.copy, size: 18),
@@ -3021,7 +3430,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onPressed: () => setState(() => exportedPath = null),
                 ),
               ]),
-              SelectableText(exportedPath!, style: const TextStyle(color: cMuted, fontSize: 12)),
+              Text(exportedPath!, style: const TextStyle(color: cMuted, fontSize: 12)),
               const SizedBox(height: 8),
               Wrap(spacing: 8, runSpacing: 8, children: [
                 if (!Platform.isAndroid) OutlinedButton(onPressed: () => openPath(exportedPath!, select: true), child: Text(tr('openFolder'))),
@@ -3040,8 +3449,147 @@ class _SettingsPageState extends State<SettingsPage> {
         ]),
       ]),
     );
-    return Platform.isAndroid ? SelectionArea(child: panel) : panel;
+    return panel;
   }
+}
+
+String _extUrlForBrowser(String idOrName) {
+  final l = idOrName.toLowerCase();
+  if (l.contains('opera')) return 'opera://extensions';
+  if (l.contains('msedge') || l.contains('edge')) return 'edge://extensions';
+  if (l.contains('firefox') || l.contains('librewolf') || l.contains('floorp') || l.contains('waterfox') || l.contains('zen') || l.contains('mullvad') || l.contains('palemoon')) {
+    return 'about:debugging#/runtime/this-firefox';
+  }
+  if (l.contains('vivaldi')) return 'vivaldi://extensions';
+  if (l.contains('brave')) return 'brave://extensions';
+  return 'chrome://extensions';
+}
+
+List<({String id, String name, String? exe, String url})> detectBrowserTargets(Usage metricsUsage) {
+  final out = <({String id, String name, String? exe, String url})>[];
+  final seenExes = <String>{};
+  final seenNames = <String>{};
+
+  void addTarget(String rawId, String name, String? exe) {
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) return;
+    final normExe = exe?.trim() ?? '';
+    if (normExe.isNotEmpty) {
+      final key = Platform.isWindows ? normExe.toLowerCase() : normExe;
+      if (seenExes.contains(key)) return;
+      seenExes.add(key);
+    } else {
+      final nKey = cleanName.toLowerCase();
+      if (seenNames.contains(nKey)) return;
+    }
+    seenNames.add(cleanName.toLowerCase());
+    final bId = Usage.browserIdForApp(rawId) ?? Usage.browserIdForApp(cleanName) ?? rawId.toLowerCase();
+    out.add((id: bId, name: cleanName, exe: normExe.isEmpty ? null : normExe, url: _extUrlForBrowser('$bId $rawId $cleanName')));
+  }
+
+  try {
+    final today = DateTime.now();
+    final from = today.subtract(const Duration(days: 30));
+    String fmt(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    final rows = metricsUsage.range(fmt(from), fmt(today));
+    for (final r in rows) {
+      final bId = Usage.browserIdForApp(r.app) ?? Usage.browserIdForApp(r.title);
+      if (bId == null) continue;
+      final exe = r.path.isNotEmpty && File(r.path).existsSync() ? r.path : null;
+      final name = r.title.isNotEmpty ? r.title : prettyApp(r.app);
+      if (exe != null || Platform.isMacOS) addTarget(r.app, name, exe);
+    }
+  } catch (_) {}
+
+  if (Platform.isWindows) {
+    try {
+      final uc = Process.runSync('reg', ['query', r'HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice', '/v', 'ProgId']);
+      if (uc.exitCode == 0) {
+        final m = RegExp(r'ProgId\s+REG_SZ\s+(.+)').firstMatch(uc.stdout.toString());
+        final progId = m?.group(1)?.trim() ?? '';
+        if (progId.isNotEmpty) {
+          final cmd = Process.runSync('reg', ['query', 'HKCR\\$progId\\shell\\open\\command', '/ve']);
+          if (cmd.exitCode == 0) {
+            final cm = RegExp(r'REG_SZ\s+"?([^"\r\n]+\.exe)', caseSensitive: false).firstMatch(cmd.stdout.toString());
+            final exe = cm?.group(1)?.trim();
+            if (exe != null && File(exe).existsSync()) {
+              final base = exe.split(Platform.pathSeparator).last;
+              addTarget(base, prettyApp(base), exe);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    final local = Platform.environment['LOCALAPPDATA'] ?? '';
+    final pf = Platform.environment['ProgramFiles'] ?? r'C:\Program Files';
+    final pf86 = Platform.environment['ProgramFiles(x86)'] ?? r'C:\Program Files (x86)';
+    final sep = Platform.pathSeparator;
+    final candidates = <({String id, String name, List<String> paths})>[
+      (id: 'opera', name: 'Opera GX', paths: ['$local${sep}Programs${sep}Opera GX${sep}opera.exe', '$local${sep}Programs${sep}Opera GX${sep}launcher.exe']),
+      (id: 'opera', name: 'Opera', paths: ['$local${sep}Programs${sep}Opera${sep}opera.exe', '$pf${sep}Opera${sep}opera.exe']),
+      (id: 'chrome', name: 'Google Chrome', paths: ['$pf${sep}Google${sep}Chrome${sep}Application${sep}chrome.exe', '$pf86${sep}Google${sep}Chrome${sep}Application${sep}chrome.exe', '$local${sep}Google${sep}Chrome${sep}Application${sep}chrome.exe']),
+      (id: 'edge', name: 'Microsoft Edge', paths: ['$pf86${sep}Microsoft${sep}Edge${sep}Application${sep}msedge.exe', '$pf${sep}Microsoft${sep}Edge${sep}Application${sep}msedge.exe']),
+      (id: 'brave', name: 'Brave Browser', paths: ['$pf${sep}BraveSoftware${sep}Brave-Browser${sep}Application${sep}brave.exe', '$local${sep}BraveSoftware${sep}Brave-Browser${sep}Application${sep}brave.exe']),
+      (id: 'vivaldi', name: 'Vivaldi', paths: ['$local${sep}Vivaldi${sep}Application${sep}vivaldi.exe', '$pf${sep}Vivaldi${sep}Application${sep}vivaldi.exe']),
+      (id: 'yandex', name: 'Yandex Browser', paths: ['$local${sep}Yandex${sep}YandexBrowser${sep}Application${sep}browser.exe']),
+      (id: 'firefox', name: 'Mozilla Firefox', paths: ['$pf${sep}Mozilla Firefox${sep}firefox.exe', '$pf86${sep}Mozilla Firefox${sep}firefox.exe']),
+      (id: 'firefox', name: 'Zen Browser', paths: ['$pf${sep}Zen Browser${sep}zen.exe', '$local${sep}Zen Browser${sep}zen.exe']),
+      (id: 'firefox', name: 'LibreWolf', paths: ['$pf${sep}LibreWolf${sep}librewolf.exe']),
+      (id: 'firefox', name: 'Floorp', paths: ['$pf${sep}Ablaze Floorp${sep}floorp.exe']),
+      (id: 'firefox', name: 'Waterfox', paths: ['$pf${sep}Waterfox${sep}waterfox.exe']),
+    ];
+    for (final c in candidates) {
+      for (final p in c.paths) {
+        if (p.isNotEmpty && File(p).existsSync()) {
+          addTarget(c.id, c.name, p);
+          break;
+        }
+      }
+    }
+  } else if (Platform.isMacOS) {
+    const macApps = <({String id, String app, String name})>[
+      (id: 'opera', app: '/Applications/Opera GX.app', name: 'Opera GX'),
+      (id: 'opera', app: '/Applications/Opera.app', name: 'Opera'),
+      (id: 'chrome', app: '/Applications/Google Chrome.app', name: 'Google Chrome'),
+      (id: 'edge', app: '/Applications/Microsoft Edge.app', name: 'Microsoft Edge'),
+      (id: 'brave', app: '/Applications/Brave Browser.app', name: 'Brave Browser'),
+      (id: 'vivaldi', app: '/Applications/Vivaldi.app', name: 'Vivaldi'),
+      (id: 'arc', app: '/Applications/Arc.app', name: 'Arc'),
+      (id: 'yandex', app: '/Applications/Yandex.app', name: 'Yandex'),
+      (id: 'firefox', app: '/Applications/Firefox.app', name: 'Firefox'),
+      (id: 'firefox', app: '/Applications/Zen Browser.app', name: 'Zen Browser'),
+      (id: 'firefox', app: '/Applications/LibreWolf.app', name: 'LibreWolf'),
+    ];
+    for (final c in macApps) {
+      if (Directory(c.app).existsSync()) addTarget(c.id, c.name, null);
+    }
+  } else if (Platform.isLinux) {
+    const bins = <({String id, String bin, String name})>[
+      (id: 'opera', bin: 'opera', name: 'Opera'),
+      (id: 'chrome', bin: 'google-chrome', name: 'Google Chrome'),
+      (id: 'chrome', bin: 'chromium', name: 'Chromium'),
+      (id: 'chrome', bin: 'chromium-browser', name: 'Chromium'),
+      (id: 'edge', bin: 'microsoft-edge', name: 'Microsoft Edge'),
+      (id: 'brave', bin: 'brave-browser', name: 'Brave Browser'),
+      (id: 'vivaldi', bin: 'vivaldi', name: 'Vivaldi'),
+      (id: 'yandex', bin: 'yandex-browser', name: 'Yandex Browser'),
+      (id: 'firefox', bin: 'firefox', name: 'Firefox'),
+      (id: 'firefox', bin: 'librewolf', name: 'LibreWolf'),
+      (id: 'firefox', bin: 'floorp', name: 'Floorp'),
+      (id: 'firefox', bin: 'zen-browser', name: 'Zen Browser'),
+    ];
+    for (final c in bins) {
+      try {
+        final res = Process.runSync('which', [c.bin]);
+        if (res.exitCode == 0) {
+          final p = res.stdout.toString().trim().split('\n').first.trim();
+          if (p.isNotEmpty) addTarget(c.id, c.name, p);
+        }
+      } catch (_) {}
+    }
+  }
+  return out;
 }
 
 String updateStatus() {

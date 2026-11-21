@@ -13,6 +13,7 @@ class AppUsage {
   String name;
   String path = '';
   int? now;
+  final Set<String> devices = {};
 
   String get title => name.isNotEmpty ? name : prettyApp(app);
   final List<int> ms = [0, 0, 0, 0];
@@ -88,10 +89,11 @@ void saveLanguage(String code) {
 }
 
 class AppMeta {
-  AppMeta(this.name, this.path);
+  AppMeta(this.name, this.path, [Set<String>? devices]) : devices = devices ?? <String>{};
 
   final String name;
   final String path;
+  final Set<String> devices;
 }
 
 class Contrib {
@@ -160,10 +162,27 @@ class DeviceInfo {
 }
 
 class SiteUsage {
-  const SiteUsage(this.browser, this.domain, this.ms);
+  const SiteUsage(this.browser, this.domain, this.ms, [this.title = '', this.url = '']);
 
   final String browser;
   final String domain;
+  final int ms;
+  final String title;
+  final String url;
+
+  String get displayTitle => title.trim().isNotEmpty ? title.trim() : domain;
+
+  String get openUrl => (url.startsWith('http://') || url.startsWith('https://')) ? url : 'https://$domain';
+}
+
+class SiteContrib {
+  const SiteContrib(this.start, this.end, this.browser, this.domain, this.title, this.ms);
+
+  final int start;
+  final int end;
+  final String browser;
+  final String domain;
+  final String title;
   final int ms;
 }
 
@@ -209,35 +228,40 @@ class Usage {
     }
   }
 
-  List<AppUsage> day(String day, {String deviceFilter = 'local'}) => range(day, day, deviceFilter: deviceFilter);
+  static bool _hasLocal(Set<String> devices) => devices.isEmpty || devices.contains('local');
+  static List<String> _remoteIds(Set<String> devices) => [for (final d in devices) if (d != 'local') d];
 
-  List<AppUsage> range(String from, String to, {String deviceFilter = 'local'}) {
+  List<AppUsage> day(String day, {Set<String> devices = const {'local'}}) => range(day, day, devices: devices);
+
+  List<AppUsage> range(String from, String to, {Set<String> devices = const {'local'}}) {
     final db = _open();
     if (db == null) return [];
     final map = <String, AppUsage>{};
-    final names = this.names(deviceFilter: deviceFilter);
-    void feed(Iterable<Row> rows) {
+    final names = this.names(devices: devices);
+    void feed(Iterable<Row> rows, {String? forcedDevice}) {
       for (final r in rows) {
         final state = r['state'] as int;
         if (state < 0 || state > 3) continue;
-        map.putIfAbsent(r['app'] as String, () {
-          final m = names[r['app'] as String];
-          return AppUsage(r['app'] as String, m?.name ?? '')..path = m?.path ?? '';
-        }).ms[state] += r['ms'] as int;
+        final app = r['app'] as String;
+        final u = map.putIfAbsent(app, () {
+          final m = names[app];
+          return AppUsage(app, m?.name ?? '')..path = m?.path ?? '';
+        });
+        u.ms[state] += r['ms'] as int;
+        final dev = forcedDevice ?? (r['device'] as String? ?? '');
+        if (dev.isNotEmpty) u.devices.add(dev);
       }
     }
 
     try {
-      if (deviceFilter == 'local' || deviceFilter == 'all') {
-        feed(db.select('SELECT app, state, ms FROM usage WHERE day BETWEEN ? AND ?', [from, to]));
+      if (_hasLocal(devices)) {
+        feed(db.select('SELECT app, state, ms FROM usage WHERE day BETWEEN ? AND ?', [from, to]), forcedDevice: 'local');
       }
-      if (deviceFilter == 'all') {
+      final remotes = _remoteIds(devices);
+      if (remotes.isNotEmpty) {
         try {
-          feed(db.select('SELECT app, state, ms FROM remote_usage WHERE day BETWEEN ? AND ?', [from, to]));
-        } catch (_) {}
-      } else if (deviceFilter != 'local') {
-        try {
-          feed(db.select('SELECT app, state, ms FROM remote_usage WHERE device = ? AND day BETWEEN ? AND ?', [deviceFilter, from, to]));
+          final ph = List.filled(remotes.length, '?').join(',');
+          feed(db.select('SELECT device, app, state, ms FROM remote_usage WHERE device IN ($ph) AND day BETWEEN ? AND ?', [...remotes, from, to]));
         } catch (_) {}
       }
     } catch (_) {
@@ -254,51 +278,119 @@ class Usage {
 
   static String? browserIdForApp(String app) {
     final a = app.toLowerCase();
-    if (a == 'chrome.exe' || a.contains('google-chrome') || a == 'com.android.chrome') return 'chrome';
-    if (a == 'msedge.exe' || a.contains('microsoft-edge') || a == 'com.microsoft.emmx') return 'edge';
-    if (a == 'opera.exe' || a.contains('opera') || a == 'com.opera.browser' || a == 'com.opera.gx') return 'opera';
+    if (a == 'chrome.exe' || a.contains('google-chrome') || a == 'com.android.chrome' || a == 'chromium.exe' || a.contains('chromium')) return 'chrome';
+    if (a == 'msedge.exe' || a.contains('microsoft-edge') || a == 'com.microsoft.emmx' || a.contains('msedge')) return 'edge';
+    if (a == 'opera.exe' || a == 'opera_gx.exe' || a.contains('opera') || a == 'com.opera.browser' || a == 'com.opera.gx') return 'opera';
     if (a == 'brave.exe' || a.contains('brave') || a == 'com.brave.browser') return 'brave';
     if (a == 'vivaldi.exe' || a.contains('vivaldi')) return 'vivaldi';
     if (a == 'browser.exe' || a.contains('yandex')) return 'yandex';
-    if (a == 'firefox.exe' || a.contains('firefox') || a == 'org.mozilla.firefox') return 'firefox';
+    if (a == 'arc.exe' || a == 'arc' || a.contains('arc browser')) return 'arc';
+    if (a == 'firefox.exe' || a.contains('firefox') || a == 'org.mozilla.firefox' || a == 'zen.exe' || a.contains('zen browser') || a == 'librewolf.exe' || a.contains('librewolf') || a == 'floorp.exe' || a.contains('floorp') || a == 'waterfox.exe' || a.contains('waterfox')) return 'firefox';
     return null;
   }
 
-  Map<String, List<SiteUsage>> browserSites(String from, String to, {String deviceFilter = 'local'}) {
+  Map<String, List<SiteUsage>> browserSites(String from, String to, {Set<String> devices = const {'local'}}) {
     final db = _open();
     final out = <String, List<SiteUsage>>{};
     if (db == null) return out;
-    final agg = <String, Map<String, int>>{};
-    void feed(Iterable<Row> rows) {
+    final agg = <String, Map<String, ({int ms, String title, String url})>>{};
+    void feed(Iterable<Row> rows, {bool withMeta = true}) {
       for (final r in rows) {
         final b = (r['browser'] as String).toLowerCase();
         final d = r['domain'] as String;
         final ms = r['ms'] as int;
         if (ms <= 0 || d.isEmpty) continue;
+        final t = withMeta ? (r['title'] as String? ?? '').trim() : '';
+        final u = withMeta ? (r['url'] as String? ?? '').trim() : '';
         final map = agg.putIfAbsent(b, () => {});
-        map[d] = (map[d] ?? 0) + ms;
+        final prev = map[d];
+        map[d] = (
+          ms: (prev?.ms ?? 0) + ms,
+          title: t.isNotEmpty ? t : (prev?.title ?? ''),
+          url: u.isNotEmpty ? u : (prev?.url ?? ''),
+        );
       }
     }
 
-    if (deviceFilter == 'local' || deviceFilter == 'all') {
+    if (_hasLocal(devices)) {
       try {
-        feed(db.select('SELECT browser, domain, SUM(ms) AS ms FROM browser_usage WHERE day BETWEEN ? AND ? GROUP BY browser, domain', [from, to]));
-      } catch (_) {}
+        feed(db.select('''
+          SELECT b.browser, b.domain, SUM(b.ms) AS ms,
+            COALESCE((SELECT b2.title FROM browser_usage b2 WHERE b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.title != '' ORDER BY b2.day DESC LIMIT 1), '') AS title,
+            COALESCE((SELECT b2.url FROM browser_usage b2 WHERE b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.url != '' ORDER BY b2.day DESC LIMIT 1), '') AS url
+          FROM browser_usage b WHERE b.day BETWEEN ?1 AND ?2 GROUP BY b.browser, b.domain
+        ''', [from, to]));
+      } catch (_) {
+        try {
+          feed(db.select('SELECT browser, domain, SUM(ms) AS ms FROM browser_usage WHERE day BETWEEN ? AND ? GROUP BY browser, domain', [from, to]), withMeta: false);
+        } catch (_) {}
+      }
     }
-    if (deviceFilter == 'all') {
+    final remotes = _remoteIds(devices);
+    if (remotes.isNotEmpty) {
+      final ph = List.filled(remotes.length, '?').join(',');
+      final ph2 = List.generate(remotes.length, (i) => '?${3 + i}').join(',');
       try {
-        feed(db.select('SELECT browser, domain, SUM(ms) AS ms FROM remote_browser_usage WHERE day BETWEEN ? AND ? GROUP BY browser, domain', [from, to]));
-      } catch (_) {}
-    } else if (deviceFilter != 'local') {
-      try {
-        feed(db.select('SELECT browser, domain, SUM(ms) AS ms FROM remote_browser_usage WHERE device = ? AND day BETWEEN ? AND ? GROUP BY browser, domain', [deviceFilter, from, to]));
-      } catch (_) {}
+        feed(db.select('''
+          SELECT b.browser, b.domain, SUM(b.ms) AS ms,
+            COALESCE((SELECT b2.title FROM remote_browser_usage b2 WHERE b2.device IN ($ph2) AND b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.title != '' ORDER BY b2.day DESC LIMIT 1), '') AS title,
+            COALESCE((SELECT b2.url FROM remote_browser_usage b2 WHERE b2.device IN ($ph2) AND b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.url != '' ORDER BY b2.day DESC LIMIT 1), '') AS url
+          FROM remote_browser_usage b WHERE b.day BETWEEN ?1 AND ?2 AND b.device IN ($ph2) GROUP BY b.browser, b.domain
+        ''', [from, to, ...remotes]));
+      } catch (_) {
+        try {
+          feed(db.select('SELECT browser, domain, SUM(ms) AS ms FROM remote_browser_usage WHERE device IN ($ph) AND day BETWEEN ? AND ? GROUP BY browser, domain', [...remotes, from, to]), withMeta: false);
+        } catch (_) {}
+      }
     }
 
     agg.forEach((b, m) {
-      final list = m.entries.map((e) => SiteUsage(b, e.key, e.value)).toList()..sort((a, b) => b.ms.compareTo(a.ms));
+      final list = m.entries.map((e) => SiteUsage(b, e.key, e.value.ms, e.value.title, e.value.url)).toList()
+        ..sort((a, b) => b.ms.compareTo(a.ms));
       out[b] = list;
     });
+    return out;
+  }
+
+  List<SiteContrib> browserContribs(DateTime first, int w0, int w1, int bin, {Set<String> devices = const {'local'}}) {
+    final db = _open();
+    if (db == null) return [];
+    final out = <SiteContrib>[];
+    final a = first.add(Duration(seconds: w0));
+    final b = first.add(Duration(seconds: w1));
+    String key(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    final ka = key(a);
+    final kb = key(b);
+
+    void feed(Iterable<Row> rows) {
+      for (final r in rows) {
+        final ms = r['ms'] as int;
+        if (ms <= 0) continue;
+        final midnight = DateTime.parse('${r['day']}T00:00:00');
+        final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
+        final end = start + bin * 300;
+        out.add(SiteContrib(start, end, (r['browser'] as String).toLowerCase(), r['domain'] as String, (r['title'] as String? ?? '').trim(), ms));
+      }
+    }
+
+    if (_hasLocal(devices)) {
+      try {
+        feed(db.select(
+          "SELECT day, (slot / ?3) * ?3 AS bslot, browser, domain, MAX(title) AS title, SUM(ms) AS ms FROM browser_timeline WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, browser, domain",
+          [ka, kb, bin],
+        ));
+      } catch (_) {}
+    }
+    final remotes = _remoteIds(devices);
+    if (remotes.isNotEmpty) {
+      try {
+        final ph = List.generate(remotes.length, (i) => '?${4 + i}').join(',');
+        feed(db.select(
+          "SELECT day, (slot / ?3) * ?3 AS bslot, browser, domain, MAX(title) AS title, SUM(ms) AS ms FROM remote_browser_timeline WHERE day BETWEEN ?1 AND ?2 AND device IN ($ph) GROUP BY day, slot / ?3, browser, domain",
+          [ka, kb, bin, ...remotes],
+        ));
+      } catch (_) {}
+    }
     return out;
   }
 
@@ -331,14 +423,16 @@ class Usage {
     return maxSpan + (now - maxSpanAt) + 60;
   }
 
-  List<Contrib> contribs(DateTime first, int w0, int w1, int bin, bool sessions, {bool realFocus = false, String deviceFilter = 'local'}) {
+  List<Contrib> contribs(DateTime first, int w0, int w1, int bin, bool sessions, {bool realFocus = false, Set<String> devices = const {'local'}}) {
     final db = _open();
     if (db == null) return [];
     final out = <Contrib>[];
     if (realFocus) sessions = false;
+    final hasLocal = _hasLocal(devices);
+    final remotes = _remoteIds(devices);
     final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
     int? cutoff;
-    if (sessions && deviceFilter == 'local') {
+    if (sessions && hasLocal) {
       try {
         final r = db.select('SELECT MIN(start) AS m FROM sessions');
         if (r.isNotEmpty && r.first['m'] != null) cutoff = (r.first['m'] as int) - firstUnix;
@@ -349,14 +443,14 @@ class Usage {
       final b = first.add(Duration(seconds: w1));
       String key(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
       final idle = <String, int>{};
-      if (realFocus && (deviceFilter == 'local' || deviceFilter == 'all')) {
+      if (realFocus && hasLocal) {
         try {
           for (final r in db.select('SELECT day, (slot / ?3) * ?3 AS bslot, app, SUM(ms) AS ms FROM afk WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app', [key(a), key(b), bin])) {
             idle['${r['day']}|${r['bslot']}|${r['app']}'] = r['ms'] as int;
           }
         } catch (_) {}
       }
-      if (deviceFilter == 'local' || deviceFilter == 'all') {
+      if (hasLocal) {
         final rows = db.select(
             'SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM timeline WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, state',
             [key(a), key(b), bin]);
@@ -371,25 +465,14 @@ class Usage {
           out.add(Contrib(start, end, r['app'] as String, r['state'] as int, ms));
         }
       }
-      if (deviceFilter == 'all') {
+      if (remotes.isNotEmpty) {
         try {
+          final ka = key(a);
+          final kb = key(b);
+          final ph = List.generate(remotes.length, (i) => '?${4 + i}').join(',');
           final rows = db.select(
-              'SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM remote_timeline WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, state',
-              [key(a), key(b), bin]);
-          for (final r in rows) {
-            final midnight = DateTime.parse('${r['day']}T00:00:00');
-            final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
-            final end = start + bin * 300;
-            final ms = r['ms'] as int;
-            if (ms == 0) continue;
-            out.add(Contrib(start, end, r['app'] as String, r['state'] as int, ms));
-          }
-        } catch (_) {}
-      } else if (deviceFilter != 'local') {
-        try {
-          final rows = db.select(
-              'SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM remote_timeline WHERE device = ?4 AND day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, state',
-              [key(a), key(b), bin, deviceFilter]);
+              'SELECT day, (slot / ?3) * ?3 AS bslot, app, state, SUM(ms) AS ms FROM remote_timeline WHERE day BETWEEN ?1 AND ?2 AND device IN ($ph) GROUP BY day, slot / ?3, app, state',
+              [ka, kb, bin, ...remotes]);
           for (final r in rows) {
             final midnight = DateTime.parse('${r['day']}T00:00:00');
             final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
@@ -401,7 +484,7 @@ class Usage {
         } catch (_) {}
       }
     } catch (_) {}
-    if (cutoff != null && deviceFilter == 'local') {
+    if (cutoff != null && hasLocal) {
       try {
         final lowest = firstUnix + w0 - sessionLowerSlack(db);
         for (final r in db.select('SELECT app, state, start, stop FROM sessions WHERE start >= ?3 AND start <= ?2 AND stop >= ?1', [firstUnix + w0, firstUnix + w1, lowest])) {
@@ -532,29 +615,48 @@ class Usage {
     return out;
   }
 
-  Map<String, AppMeta> names({String deviceFilter = 'local'}) {
+  Map<String, AppMeta> names({Set<String> devices = const {'local'}}) {
     final db = _open();
     final out = <String, AppMeta>{};
     if (db == null) return out;
-    if (deviceFilter != 'local') {
+    final remotes = _remoteIds(devices);
+    if (remotes.isNotEmpty) {
       try {
-        final q = deviceFilter == 'all'
-            ? db.select('SELECT app, name, path FROM remote_apps')
-            : db.select('SELECT app, name, path FROM remote_apps WHERE device = ?', [deviceFilter]);
-        for (final r in q) {
-          out[r['app'] as String] = AppMeta(r['name'] as String, r['path'] as String);
+        final ph = List.filled(remotes.length, '?').join(',');
+        for (final r in db.select('SELECT device, app, name, path FROM remote_apps WHERE device IN ($ph)', remotes)) {
+          final app = r['app'] as String;
+          final dev = r['device'] as String;
+          final rName = r['name'] as String;
+          final rPath = r['path'] as String;
+          final cur = out[app];
+          if (cur == null) {
+            out[app] = AppMeta(rName, rPath, {dev});
+          } else {
+            out[app] = AppMeta(cur.name.isNotEmpty ? cur.name : rName, cur.path.isNotEmpty ? cur.path : rPath, {...cur.devices, dev});
+          }
         }
       } catch (_) {}
     }
-    if (deviceFilter == 'local' || deviceFilter == 'all') {
+    if (_hasLocal(devices)) {
       try {
         for (final r in db.select('SELECT app, name, path FROM apps')) {
-          out[r['app'] as String] = AppMeta(r['name'] as String, r['path'] as String);
+          final app = r['app'] as String;
+          final lName = r['name'] as String;
+          final lPath = r['path'] as String;
+          final cur = out[app];
+          out[app] = cur == null
+              ? AppMeta(lName, lPath, {'local'})
+              : AppMeta(lName.isNotEmpty ? lName : cur.name, lPath.isNotEmpty ? lPath : cur.path, {...cur.devices, 'local'});
         }
       } catch (_) {
         try {
           for (final r in db.select('SELECT app, name FROM apps')) {
-            out[r['app'] as String] = AppMeta(r['name'] as String, '');
+            final app = r['app'] as String;
+            final lName = r['name'] as String;
+            final cur = out[app];
+            out[app] = cur == null
+                ? AppMeta(lName, '', {'local'})
+                : AppMeta(lName.isNotEmpty ? lName : cur.name, cur.path, {...cur.devices, 'local'});
           }
         } catch (_) {}
       }
@@ -574,6 +676,7 @@ class Usage {
       final u = AppUsage(p.sublist(7).join(' '), '');
       u.name = names[u.app]?.name ?? '';
       u.path = names[u.app]?.path ?? '';
+      u.devices.add('local');
       if (p[1] == '1') u.now = int.tryParse(p[2]);
       for (var i = 0; i < 4; i++) {
         u.ms[i] = int.tryParse(p[3 + i]) ?? 0;

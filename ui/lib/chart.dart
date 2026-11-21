@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -178,6 +179,8 @@ class ActivityChart extends StatefulWidget {
     required this.first,
     required this.total,
     this.presence = const [],
+    this.siteContribs = const [],
+    this.onOpenSite,
     this.assetUrl,
     this.onView,
     this.series = const [],
@@ -192,6 +195,8 @@ class ActivityChart extends StatefulWidget {
   final int total;
   final List<Contrib> contribs;
   final List<PresenceMark> presence;
+  final List<SiteContrib> siteContribs;
+  final void Function(SiteUsage site, String? browserApp)? onOpenSite;
   final String? Function(String client, String key)? assetUrl;
   final String? only;
   final Metric metric;
@@ -641,8 +646,9 @@ class _ActivityChartState extends State<ActivityChart> {
       plotW = math.max(1.0, c.maxWidth - _left - _right);
       plotH = math.max(1.0, widget.height - _top - _bottom);
       rebuildData();
-      return Listener(
-        onPointerMove: pinchMove,
+      return SelectionContainer.disabled(
+        child: Listener(
+          onPointerMove: pinchMove,
         onPointerUp: (e) {
           pts.remove(e.pointer);
           endPress();
@@ -751,8 +757,43 @@ class _ActivityChartState extends State<ActivityChart> {
             ),
           ),
         ),
+        ),
       );
     });
+  }
+
+  List<SiteUsage> sitesIn(int bucketIndex, [String? appFilter]) {
+    if (widget.siteContribs.isEmpty) return const [];
+    final bid = appFilter != null
+        ? Usage.browserIdForApp(appFilter)
+        : (widget.only != null ? Usage.browserIdForApp(widget.only!) : null);
+    if ((appFilter != null || widget.only != null) && bid == null) return const [];
+    final a = bucketIndex * bucket;
+    final b = math.min(widget.total, (bucketIndex + 1) * bucket);
+    if (b <= a) return const [];
+    final agg = <String, ({String browser, int ms, String title})>{};
+    for (final s in widget.siteContribs) {
+      if (bid != null && s.browser != bid) continue;
+      final cs = s.start;
+      final ce = s.end > s.start ? s.end : s.start + 1;
+      if (ce <= a || cs >= b) continue;
+      final ov = math.min(ce, b) - math.max(cs, a);
+      if (ov <= 0) continue;
+      final share = (s.ms * ov / (ce - cs)).round();
+      if (share <= 0) continue;
+      final key = '${s.browser}\u0000${s.domain}';
+      final prev = agg[key];
+      agg[key] = (
+        browser: s.browser,
+        ms: (prev?.ms ?? 0) + share,
+        title: s.title.isNotEmpty ? s.title : (prev?.title ?? ''),
+      );
+    }
+    final out = [
+      for (final e in agg.entries)
+        SiteUsage(e.value.browser, e.key.substring(e.key.indexOf('\u0000') + 1), e.value.ms, e.value.title),
+    ]..sort((x, y) => y.ms.compareTo(x.ms));
+    return out;
   }
 
   List<PresenceMark> presenceIn(int i) {
@@ -955,7 +996,12 @@ class _ActivityChartState extends State<ActivityChart> {
     );
   }
 
-  Widget pinnable(_Tip t, Widget child) => t.interactive ? SelectionArea(contextMenuBuilder: copyOnlyMenu, child: child) : child;
+  Widget pinnable(_Tip t, Widget child) => t.interactive
+      ? DefaultSelectionStyle(
+          mouseCursor: SystemMouseCursors.basic,
+          child: SelectionArea(contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu, child: child),
+        )
+      : child;
 
   BoxDecoration get _tipDecoration => BoxDecoration(
         color: cBg,
@@ -965,6 +1011,14 @@ class _ActivityChartState extends State<ActivityChart> {
       );
 
   Widget _mainTip(Bucket b, _Tip t, List<MapEntry<String, List<int>>> rows, double maxH) {
+    final activeSites = sitesIn(t.bucket);
+    String? browserAppFor(String bId) {
+      for (final e in rows) {
+        if (Usage.browserIdForApp(e.key) == bId) return e.key;
+      }
+      return widget.only;
+    }
+
     return Material(
       type: MaterialType.transparency,
       child: ConstrainedBox(
@@ -993,7 +1047,7 @@ class _ActivityChartState extends State<ActivityChart> {
             Flexible(
               flex: 3,
               child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 240),
+              constraints: const BoxConstraints(maxHeight: 220),
               child: ListView(
                 shrinkWrap: true,
                 padding: EdgeInsets.zero,
@@ -1025,6 +1079,33 @@ class _ActivityChartState extends State<ActivityChart> {
               ),
             ),
             ),
+          if (activeSites.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            const Divider(height: 1, color: cBorder),
+            const SizedBox(height: 6),
+            Text(tr('chartSites'), style: const TextStyle(color: cMuted, fontSize: 11, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 3),
+            for (final s in activeSites.take(4))
+              HoverBox(
+                onTap: t.interactive && widget.onOpenSite != null ? () => widget.onOpenSite!(s, browserAppFor(s.browser)) : null,
+                builder: (h) => Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(color: h && t.interactive ? cSoft.withValues(alpha: 0.4) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
+                  child: Row(children: [
+                    const Icon(Icons.language, size: 13, color: cMuted),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Tooltip(
+                        message: s.title.isNotEmpty ? '${s.title}\n${s.domain}' : s.domain,
+                        child: Text(s.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: cPrimary, fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(formatMs(s.ms), style: const TextStyle(fontSize: 11, color: cMuted)),
+                  ]),
+                ),
+              ),
+          ],
           if (!t.interactive && rows.isNotEmpty)
             Padding(padding: const EdgeInsets.only(top: 4), child: Text(tr('clickToPin'), style: const TextStyle(color: cMuted, fontSize: 11))),
         ]),
@@ -1094,41 +1175,82 @@ class _ActivityChartState extends State<ActivityChart> {
     final we = (tb + 1) * bucket;
     final sessions = sessionsOf(widget.contribs, app, widget.metric).where((s) => s.end > ws && s.start < we).toList();
     final total = sessions.fold<int>(0, (a, s) => a + s.ms);
-    return Material(
-      type: MaterialType.transparency,
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: _tipDecoration,
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            widget.icon(app, 22),
-            const SizedBox(width: 8),
-            Expanded(child: EllipsisText(widget.title(app), style: const TextStyle(fontWeight: FontWeight.w800))),
-          ]),
-          const SizedBox(height: 4),
-          Text('${metricLabel(widget.metric)}: ${formatMs(total)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800, fontSize: 13)),
-          Text('${tr('launches')}: ${sessions.length}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          Text(tr('sessions'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 220),
-            child: ListView(
-              shrinkWrap: true,
-              padding: EdgeInsets.zero,
-              children: [
-                for (final s in sessions)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(children: [
-                      Expanded(child: Text('${labelAt(widget.first, widget.total, s.start, seconds: true)} - ${labelAt(widget.first, widget.total, s.end, seconds: true, timeOnly: true)}', style: const TextStyle(fontSize: 13))),
-                      Text(formatMs(s.ms), style: const TextStyle(fontSize: 12, color: cMuted)),
-                    ]),
+    final appSites = sitesIn(tb, app);
+    return DefaultSelectionStyle(
+      mouseCursor: SystemMouseCursors.basic,
+      child: SelectionArea(
+        contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
+        child: Material(
+          type: MaterialType.transparency,
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: _tipDecoration,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                widget.icon(app, 22),
+                const SizedBox(width: 8),
+                Expanded(child: EllipsisText(widget.title(app), style: const TextStyle(fontWeight: FontWeight.w800))),
+              ]),
+              const SizedBox(height: 4),
+              Text('${metricLabel(widget.metric)}: ${formatMs(total)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800, fontSize: 13)),
+              Text('${tr('launches')}: ${sessions.length}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+              if (appSites.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(tr('chartSites'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 3),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 140),
+                  child: ListView(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    children: [
+                      for (final s in appSites)
+                        HoverBox(
+                          onTap: widget.onOpenSite != null ? () => widget.onOpenSite!(s, app) : null,
+                          builder: (h) => Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                            decoration: BoxDecoration(color: h ? cSoft.withValues(alpha: 0.4) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
+                            child: Row(children: [
+                              const Icon(Icons.language, size: 13, color: cMuted),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Tooltip(
+                                  message: s.title.isNotEmpty ? '${s.title}\n${s.domain}' : s.domain,
+                                  child: Text(s.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: cPrimary, fontWeight: FontWeight.w600)),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(formatMs(s.ms), style: const TextStyle(fontSize: 11, color: cMuted)),
+                            ]),
+                          ),
+                        ),
+                    ],
                   ),
+                ),
               ],
-            ),
+              const SizedBox(height: 6),
+              Text(tr('sessions'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 4),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 180),
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  children: [
+                    for (final s in sessions)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(children: [
+                          Expanded(child: Text('${labelAt(widget.first, widget.total, s.start, seconds: true)} - ${labelAt(widget.first, widget.total, s.end, seconds: true, timeOnly: true)}', style: const TextStyle(fontSize: 13))),
+                          Text(formatMs(s.ms), style: const TextStyle(fontSize: 12, color: cMuted)),
+                        ]),
+                      ),
+                  ],
+                ),
+              ),
+            ]),
           ),
-        ]),
+        ),
       ),
     );
   }

@@ -45,6 +45,14 @@ ThemeData buildTheme() {
         minimumSize: const Size(0, 40),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(rMd)),
         textStyle: const TextStyle(fontWeight: FontWeight.w800),
+        enabledMouseCursor: SystemMouseCursors.click,
+        disabledMouseCursor: SystemMouseCursors.basic,
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        enabledMouseCursor: SystemMouseCursors.click,
+        disabledMouseCursor: SystemMouseCursors.basic,
       ),
     ),
     textButtonTheme: TextButtonThemeData(
@@ -52,15 +60,22 @@ ThemeData buildTheme() {
         foregroundColor: cMuted,
         minimumSize: const Size(0, 40),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(rMd)),
+        enabledMouseCursor: SystemMouseCursors.click,
+        disabledMouseCursor: SystemMouseCursors.basic,
       ),
     ),
     switchTheme: SwitchThemeData(
       thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? cBg : cMuted),
       trackColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? cPrimary : cBorder),
       trackOutlineColor: WidgetStateProperty.all(cBorder),
+      mouseCursor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.disabled) ? SystemMouseCursors.basic : SystemMouseCursors.click),
     ),
   );
 }
+
+Widget noSelect(Widget child) => SelectionContainer.disabled(
+      child: DefaultSelectionStyle(mouseCursor: MouseCursor.defer, child: child),
+    );
 
 class Panel extends StatelessWidget {
   const Panel({super.key, required this.child, this.padding = const EdgeInsets.all(16)});
@@ -103,7 +118,7 @@ class _HoverBoxState extends State<HoverBox> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
+    final w = MouseRegion(
       cursor: widget.onTap == null ? MouseCursor.defer : SystemMouseCursors.click,
       onEnter: (_) => setState(() => hovered = true),
       onExit: (_) => setState(() => hovered = false),
@@ -118,6 +133,8 @@ class _HoverBoxState extends State<HoverBox> {
         child: widget.builder(hovered),
       ),
     );
+    if (widget.onTap == null) return w;
+    return DefaultSelectionStyle(mouseCursor: SystemMouseCursors.click, child: w);
   }
 }
 
@@ -160,26 +177,32 @@ class SelectBox<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: cPanel,
-        borderRadius: BorderRadius.circular(rMd),
-        border: Border.fromBorderSide(line),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<T>(
-          value: value,
-          items: items,
-          onChanged: (v) {
-            buzz(0);
-            onChanged(v);
-          },
-          dropdownColor: cBg,
-          borderRadius: BorderRadius.circular(rMd),
-          iconEnabledColor: cMuted,
-          style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600),
+    return DefaultSelectionStyle(
+      mouseCursor: SystemMouseCursors.click,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Container(
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: cPanel,
+            borderRadius: BorderRadius.circular(rMd),
+            border: Border.fromBorderSide(line),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<T>(
+              value: value,
+              items: items,
+              onChanged: (v) {
+                buzz(0);
+                onChanged(v);
+              },
+              dropdownColor: cBg,
+              borderRadius: BorderRadius.circular(rMd),
+              iconEnabledColor: cMuted,
+              style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600),
+            ),
+          ),
         ),
       ),
     );

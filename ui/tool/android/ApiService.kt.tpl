@@ -219,26 +219,45 @@ class ApiService : Service() {
     val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     val now = System.currentTimeMillis()
     if (method == "POST") {
-      if (path != "/v1/browser") return http(404, "{\"error\":\"not found\"}")
+      if (path != "/v1/browser") return http(404, "{\"error\":\"not found\"}");
       return try {
         val obj = org.json.JSONObject(reqBody)
         val browser = obj.optString("browser", "").trim().lowercase(Locale.ROOT).take(64)
         val domain = obj.optString("domain", "").trim().lowercase(Locale.ROOT).take(192)
+        val title = obj.optString("title", "").replace(Regex("[\\u0000-\\u001F]"), " ").replace(Regex("\\s+"), " ").trim().take(180)
+        val rawUrl = obj.optString("url", "").trim().take(512)
+        val urlOk = (rawUrl.startsWith("http://", ignoreCase = true) || rawUrl.startsWith("https://", ignoreCase = true)) && rawUrl.none { it.code < 0x20 || it == ' ' || it == '<' || it == '>' }
+        val url = if (urlOk) rawUrl else ""
         val ms = obj.optLong("ms", 0L)
         if (browser.isEmpty() || domain.isEmpty() || ms <= 0 || ms > 3600000L) {
           http(400, "{\"error\":\"bad payload\"}")
         } else {
           val day = fmt.format(Date(now))
+          val cal = java.util.Calendar.getInstance().apply { timeInMillis = now }
+          val slot = ((cal.get(java.util.Calendar.HOUR_OF_DAY) * 3600 + cal.get(java.util.Calendar.MINUTE) * 60 + cal.get(java.util.Calendar.SECOND)) / 300).coerceIn(0, 287)
           val file = File(Sync.dir(applicationContext), "usage.db")
           file.parentFile?.mkdirs()
           val db = SQLiteDatabase.openOrCreateDatabase(file, null)
           try {
             db.enableWriteAheadLogging()
-            db.execSQL("CREATE TABLE IF NOT EXISTS browser_usage(day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, browser, domain)) WITHOUT ROWID")
-            db.execSQL(
-              "INSERT INTO browser_usage(day, browser, domain, ms) VALUES(?, ?, ?, ?) ON CONFLICT(day, browser, domain) DO UPDATE SET ms = ms + excluded.ms",
-              arrayOf<Any>(day, browser, domain, ms)
-            )
+            db.execSQL("CREATE TABLE IF NOT EXISTS browser_usage(day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', PRIMARY KEY(day, browser, domain)) WITHOUT ROWID")
+            db.execSQL("CREATE TABLE IF NOT EXISTS browser_timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', ms INTEGER NOT NULL, PRIMARY KEY(day, slot, browser, domain)) WITHOUT ROWID")
+            try { db.execSQL("ALTER TABLE browser_usage ADD COLUMN title TEXT NOT NULL DEFAULT ''") } catch (_: Exception) {}
+            try { db.execSQL("ALTER TABLE browser_usage ADD COLUMN url TEXT NOT NULL DEFAULT ''") } catch (_: Exception) {}
+            db.beginTransaction()
+            try {
+              db.execSQL(
+                "INSERT INTO browser_usage(day, browser, domain, ms, title, url) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(day, browser, domain) DO UPDATE SET ms = ms + excluded.ms, title = CASE WHEN excluded.title != '' THEN excluded.title ELSE browser_usage.title END, url = CASE WHEN excluded.url != '' THEN excluded.url ELSE browser_usage.url END",
+                arrayOf<Any>(day, browser, domain, ms, title, url)
+              )
+              db.execSQL(
+                "INSERT INTO browser_timeline(day, slot, browser, domain, title, ms) VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(day, slot, browser, domain) DO UPDATE SET ms = ms + excluded.ms, title = CASE WHEN excluded.title != '' THEN excluded.title ELSE browser_timeline.title END",
+                arrayOf<Any>(day, slot, browser, domain, title, ms)
+              )
+              db.setTransactionSuccessful()
+            } finally {
+              db.endTransaction()
+            }
           } finally {
             db.close()
           }
@@ -267,17 +286,32 @@ class ApiService : Service() {
       withDb { db ->
         try {
           db.rawQuery(
-            "SELECT browser, domain, SUM(ms) AS total FROM browser_usage WHERE day >= ? AND day <= ? GROUP BY browser, domain ORDER BY total DESC LIMIT ?",
+            "SELECT browser, domain, SUM(ms) AS total, MAX(title) AS title, MAX(url) AS url FROM browser_usage WHERE day >= ? AND day <= ? GROUP BY browser, domain ORDER BY total DESC LIMIT ?",
             arrayOf(from, to, limit.toString())
           ).use { c ->
             while (c.moveToNext()) {
               if (!first) o.append(',')
               first = false
               o.append("{\"browser\":\"").append(esc(c.getString(0))).append("\",\"domain\":\"").append(esc(c.getString(1)))
+                .append("\",\"title\":\"").append(esc(c.getString(3) ?: "")).append("\",\"url\":\"").append(esc(c.getString(4) ?: ""))
                 .append("\",\"ms\":").append(c.getLong(2)).append('}')
             }
           }
         } catch (ex: Exception) {
+          try {
+            db.rawQuery(
+              "SELECT browser, domain, SUM(ms) AS total FROM browser_usage WHERE day >= ? AND day <= ? GROUP BY browser, domain ORDER BY total DESC LIMIT ?",
+              arrayOf(from, to, limit.toString())
+            ).use { c ->
+              while (c.moveToNext()) {
+                if (!first) o.append(',')
+                first = false
+                o.append("{\"browser\":\"").append(esc(c.getString(0))).append("\",\"domain\":\"").append(esc(c.getString(1)))
+                  .append("\",\"title\":\"\",\"url\":\"\",\"ms\":").append(c.getLong(2)).append('}')
+              }
+            }
+          } catch (_: Exception) {
+          }
         }
       }
       o.append("]}")

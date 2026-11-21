@@ -33,7 +33,8 @@ async function loadTop() {
       row.className = "item";
       const name = document.createElement("span");
       name.className = "item-name";
-      name.textContent = item.domain;
+      name.textContent = item.title || item.domain;
+      if (item.domain) name.title = item.domain;
       const time = document.createElement("span");
       time.className = "item-time";
       time.textContent = fmtMs(Number(item.ms) || 0);
@@ -61,7 +62,7 @@ async function refresh() {
   } else {
     statusText.textContent = "Wolium Local API offline (127.0.0.1:9095)";
   }
-  domainEl.textContent = st.domain || "—";
+  domainEl.textContent = st.title || st.domain || "—";
   pauseBtn.textContent = st.paused ? "Resume" : "Pause";
   await loadTop();
 }

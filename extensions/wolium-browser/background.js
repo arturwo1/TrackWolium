@@ -3,6 +3,8 @@ const ENDPOINT = "http://127.0.0.1:9095/v1/browser";
 const PING_URL = "http://127.0.0.1:9095/v1/browser/top?days=1&limit=1";
 
 let activeDomain = "";
+let activeTitle = "";
+let activeUrl = "";
 let activeSince = 0;
 let windowFocused = true;
 let userIdle = false;
@@ -16,8 +18,9 @@ function detectBrowser() {
   if (ua.includes("edg/")) return "edge";
   if (ua.includes("vivaldi")) return "vivaldi";
   if (ua.includes("yabrowser")) return "yandex";
-  if (ua.includes("firefox")) return "firefox";
+  if (ua.includes("firefox") || ua.includes("librewolf") || ua.includes("floorp") || ua.includes("waterfox") || ua.includes("zen")) return "firefox";
   if (navigator.brave) return "brave";
+  if (ua.includes("chromium")) return "chromium";
   return "chrome";
 }
 
@@ -35,7 +38,23 @@ function extractDomain(rawUrl) {
   }
 }
 
-async function postUsage(domain, ms) {
+function cleanUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return "";
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    return u.href.slice(0, 512);
+  } catch {
+    return "";
+  }
+}
+
+function cleanTitle(rawTitle) {
+  if (!rawTitle || typeof rawTitle !== "string") return "";
+  return rawTitle.replace(/\s+/g, " ").trim().slice(0, 180);
+}
+
+async function postUsage(domain, title, url, ms) {
   if (!domain || ms < 500) return;
   const clamped = Math.min(Math.round(ms), 120000);
   try {
@@ -45,6 +64,8 @@ async function postUsage(domain, ms) {
       body: JSON.stringify({
         browser: detectBrowser(),
         domain,
+        title: title || "",
+        url: url || "",
         ms: clamped,
       }),
     });
@@ -65,7 +86,7 @@ async function flush() {
   const delta = now - activeSince;
   activeSince = now;
   if (delta >= 1000) {
-    await postUsage(activeDomain, delta);
+    await postUsage(activeDomain, activeTitle, activeUrl, delta);
   }
 }
 
@@ -80,9 +101,13 @@ async function refreshActiveTab() {
     const tab = tabs && tabs[0];
     const domain = tab ? extractDomain(tab.url) : "";
     activeDomain = domain;
+    activeTitle = domain && tab ? cleanTitle(tab.title) : "";
+    activeUrl = domain && tab ? cleanUrl(tab.url) : "";
     activeSince = domain ? Date.now() : 0;
   } catch {
     activeDomain = "";
+    activeTitle = "";
+    activeUrl = "";
     activeSince = 0;
   }
 }
@@ -109,8 +134,17 @@ api.tabs.onActivated.addListener(() => {
 });
 
 api.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
-  if (tab && tab.active && (changeInfo.url || changeInfo.status === "complete")) {
+  if (!tab || !tab.active) return;
+  if (changeInfo.url || changeInfo.status === "complete") {
     refreshActiveTab();
+  } else if (changeInfo.title) {
+    const dom = extractDomain(tab.url);
+    if (dom && dom === activeDomain) {
+      activeTitle = cleanTitle(changeInfo.title);
+      activeUrl = cleanUrl(tab.url);
+    } else {
+      refreshActiveTab();
+    }
   }
 });
 
@@ -142,6 +176,8 @@ api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({
         browser: detectBrowser(),
         domain: activeDomain,
+        title: activeTitle,
+        url: activeUrl,
         paused,
         connected,
         lastError,

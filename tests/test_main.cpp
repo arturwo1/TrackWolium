@@ -931,7 +931,7 @@ void test_browser_api() {
   long long now = 1700000000;
   auto bad = tw::route_api("POST", "/v1/browser", "{\"browser\":\"chrome\",\"domain\":\"\",\"ms\":5000}", "", store.get(), now);
   CHECK(bad.status == 400);
-  auto r1 = tw::route_api("POST", "/v1/browser", "{\"browser\":\"Chrome\",\"domain\":\"GitHub.com\",\"ms\":12000}", "", store.get(), now);
+  auto r1 = tw::route_api("POST", "/v1/browser", "{\"browser\":\"Chrome\",\"domain\":\"GitHub.com\",\"title\":\"GitHub: Build\",\"url\":\"https://github.com/explore\",\"ms\":12000}", "", store.get(), now);
   CHECK(r1.status == 200);
   auto r2 = tw::route_api("POST", "/v1/browser", "{\"browser\":\"chrome\",\"domain\":\"github.com\",\"ms\":8000}", "", store.get(), now);
   CHECK(r2.status == 200);
@@ -939,6 +939,8 @@ void test_browser_api() {
   CHECK(top.status == 200);
   CHECK(top.body.find("\"browser\":\"chrome\"") != std::string::npos);
   CHECK(top.body.find("\"domain\":\"github.com\"") != std::string::npos);
+  CHECK(top.body.find("\"title\":\"GitHub: Build\"") != std::string::npos);
+  CHECK(top.body.find("\"url\":\"https://github.com/explore\"") != std::string::npos);
   CHECK(top.body.find("\"ms\":20000") != std::string::npos);
 }
 
