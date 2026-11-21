@@ -24,6 +24,8 @@ perms = [
     '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>',
     '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>',
     '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>',
+    '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>',
+    '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>',
 ]
 STORE = os.environ.get("STORE_BUILD", "").lower() == "true"
 if STORE:

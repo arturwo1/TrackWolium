@@ -165,14 +165,14 @@ class _Default {
 
 const _defaults = <_Default>[
   _Default('def_games', 'catDefGames', 0xFFED4245, 'games', {
-    'steam', 'epicgameslauncher', 'battle.net', 'battlenet', 'riotclientservices', 'riotclientux', 'valorant', 'leagueclient', 'league of legends', 'minecraft', 'minecraftlauncher', 'robloxplayerbeta', 'robloxstudiobeta', 'rocketleague', 'csgo', 'cs2', 'dota2', 'gta5', 'eldenring', 'genshinimpact', 'yuanshen', 'overwatch', 'r5apex', 'pubg', 'tslgame', 'hearthstone', 'wow', 'galaxyclient', 'eadesktop', 'origin', 'upc', 'ubisoftconnect', 'osu!', 'factorio', 'terraria', 'stardew valley', 'hollow knight', 'fallguys_client', 'cyberpunk2077', 'witcher3', 'starfield', 'baldursgate3', 'bg3', 'helldivers2', 'palworld-win64-shipping', 'com.mojang.minecraftpe', 'com.roblox.client', 'com.supercell.clashofclans', 'com.supercell.brawlstars', 'com.tencent.ig', 'com.activision.callofduty.shooter', 'com.miHoYo.GenshinImpact', 'com.mobile.legends',
-  }, ['shipping', 'minecraft', 'roblox'], ['games', 'game', 'игры', 'игра']),
+    'steam', 'epicgameslauncher', 'battle.net', 'battlenet', 'riotclientservices', 'riotclientux', 'valorant', 'leagueclient', 'league of legends', 'minecraft', 'minecraftlauncher', 'robloxplayerbeta', 'robloxstudiobeta', 'rocketleague', 'csgo', 'cs2', 'dota2', 'gta5', 'eldenring', 'genshinimpact', 'yuanshen', 'overwatch', 'r5apex', 'pubg', 'tslgame', 'hearthstone', 'wow', 'galaxyclient', 'eadesktop', 'origin', 'upc', 'ubisoftconnect', 'osu!', 'factorio', 'terraria', 'stardew valley', 'hollow knight', 'fallguys_client', 'cyberpunk2077', 'witcher3', 'starfield', 'baldursgate3', 'bg3', 'helldivers2', 'palworld-win64-shipping', 'com.mojang.minecraftpe', 'com.roblox.client', 'com.supercell.clashofclans', 'com.supercell.brawlstars', 'com.supercell.clashroyale', 'com.tencent.ig', 'com.activision.callofduty.shooter', 'com.miHoYo.GenshinImpact', 'com.mobile.legends', 'com.miniclip.eightballpool', 'com.prineside.tdi2', 'org.lichess.mobileapp', 'com.asantee.magicrampage', 'com.geewa.smashingfour', 'jp.co.ponos.battlecatsen', 'jp.co.ponos.battlecats',
+  }, ['shipping', 'minecraft', 'roblox', 'eightballpool', 'brawlstars', 'clashroyale', 'clashofclans', 'amongus', 'subwaysurf', 'infinitode', 'lichess', 'magicrampage', 'smashingfour', 'battlecats'], ['games', 'game', 'игры', 'игра']),
   _Default('def_browsers', 'catDefBrowsers', 0xFF00A8FC, 'web', {
     'chrome', 'msedge', 'firefox', 'opera', 'opera_gx', 'brave', 'vivaldi', 'iexplore', 'arc', 'browser', 'yandex', 'safari', 'chromium', 'chromium-browser', 'librewolf', 'waterfox', 'tor', 'zen', 'duckduckgo', 'google-chrome', 'microsoft-edge', 'firefox-esr', 'com.android.chrome', 'org.mozilla.firefox', 'org.mozilla.fenix', 'com.brave.browser', 'com.opera.browser', 'com.opera.gx', 'com.microsoft.emmx', 'com.sec.android.app.sbrowser', 'com.vivaldi.browser', 'com.duckduckgo.mobile.android', 'com.yandex.browser', 'org.chromium.chrome', 'com.kiwibrowser.browser',
   }, ['chrome', 'opera', 'firefox', 'mozilla', 'sbrowser', 'vivaldi'], ['browsers', 'browser', 'браузеры', 'браузер']),
   _Default('def_dev', 'catDefDev', 0xFF3BA55D, 'code', {
     'code', 'code - insiders', 'devenv', 'idea64', 'idea', 'pycharm64', 'pycharm', 'webstorm64', 'webstorm', 'clion64', 'clion', 'rider64', 'rider', 'studio64', 'goland64', 'goland', 'rubymine64', 'phpstorm64', 'datagrip64', 'cursor', 'windsurf', 'sublime_text', 'notepad++', 'vim', 'nvim', 'emacs', 'gitkraken', 'githubdesktop', 'windowsterminal', 'wt', 'cmd', 'powershell', 'pwsh', 'putty', 'docker desktop', 'postman', 'zed', 'kate', 'gedit', 'konsole', 'gnome-terminal', 'alacritty', 'kitty', 'wezterm', 'xterm', 'flutter', 'dart', 'node', 'python', 'python3', 'git', 'sourcetree', 'insomnia', 'dbeaver', 'heidisql', 'termux', 'com.termux', 'com.termux.api', 'com.github.android', 'com.android.tools.build', 'com.microsoft.vscode', 'com.foxdebug.acode', 'com.foxdebug.acodefree', 'ru.iiec.pydroid3', 'com.termoneplus', 'org.connectbot', 'com.sonelli.juicessh', 'com.server.auditor.ssh.client', 'org.gnu.emacs', 'com.jetbrains.fleet',
-  }, ['termux', 'github', 'vscode', 'acode', 'pydroid', 'ssh'], ['development', 'dev', 'разработка']),
+  }, ['termux', 'githubdesktop', 'vscode', 'acode', 'pydroid', 'ssh'], ['development', 'dev', 'разработка']),
   _Default('def_chat', 'catDefChat', 0xFF5865F2, 'chat', {
     'discord', 'discordptb', 'discordcanary', 'telegram', 'whatsapp', 'slack', 'teams', 'ms-teams', 'skype', 'zoom', 'viber', 'signal', 'element', 'thunderbird', 'outlook', 'olk', 'vk', 'max', 'org.telegram.messenger', 'org.telegram.messenger.web', 'org.thunderdog.challegram', 'com.whatsapp', 'com.discord', 'com.viber.voip', 'org.thoughtcrime.securesms', 'com.vkontakte.android', 'com.facebook.orca', 'com.skype.raider', 'com.slack', 'us.zoom.videomeetings', 'com.microsoft.teams', 'com.google.android.gm', 'com.google.android.apps.messaging', 'com.samsung.android.messaging',
   }, ['telegram', 'discord', 'aliucord', 'whatsapp', 'viber', 'skype'], ['communication', 'chat', 'chats', 'общение', 'чаты', 'мессенджеры']),
@@ -186,7 +186,7 @@ class Categories {
   static final Set<String> seeded = {};
   static final Set<String> decided = {};
   static final Map<String, String> links = {};
-  static const rulesVersion = 4;
+  static const rulesVersion = 5;
 
   static File get _file => File(_path('categories.json'));
 
@@ -223,6 +223,11 @@ class Categories {
         if (purge) {
           for (final c in out) {
             c.apps.removeWhere((a) => !decided.contains(a));
+          }
+        }
+        for (final c in out) {
+          if (c.id == 'def_dev' && !decided.contains('io.github.arturwo1.wolium')) {
+            c.apps.remove('io.github.arturwo1.wolium');
           }
         }
         list.value = out;
@@ -280,15 +285,26 @@ class Categories {
 
   static bool isNoise(String app, [String title = '']) => _tokens('$app $title').any(_noise.contains);
 
-  static String? _defaultFor(String app, String path, int sys) {
+  static const _gamePrefixes = [
+    'com.miniclip.', 'com.supercell.', 'com.rovio.', 'com.kiloo.', 'com.halfbrick.',
+    'com.king.', 'com.mojang.', 'com.innersloth.', 'com.ea.game.', 'com.gameloft.',
+    'com.playrix.', 'com.zynga.', 'com.nianticlabs.', 'jp.co.ponos.', 'com.prineside.',
+  ];
+
+  static String? _defaultFor(String app, String path, int sys, [String title = '']) {
     var n = app.toLowerCase();
     if (n.endsWith('.exe')) n = n.substring(0, n.length - 4);
+    if (n == 'io.github.arturwo1.wolium' || n == 'wolium' || n == 'trackwolium') return null;
     final p = path.toLowerCase().replaceAll('\\', '/');
     if (p.isNotEmpty && !p.contains('/icons/') && _gamePaths.any(p.contains)) return 'def_games';
+    if (_gamePrefixes.any(n.startsWith)) return 'def_games';
     for (final d in _defaults) {
       if (d.names.any((x) => x.toLowerCase() == n)) return d.id;
     }
-    final tokens = _tokens(n);
+    final t = title.trim().toLowerCase();
+    if (n == 'com.github.android' || t == 'github' || t == 'github desktop') return 'def_dev';
+    final pkgText = n.startsWith('io.github.') ? n.substring('io.github.'.length) : n;
+    final tokens = _tokens('$pkgText $t');
     for (final d in _defaults) {
       if (d.parts.any(tokens.contains)) return d.id;
     }
@@ -308,10 +324,12 @@ class Categories {
     var changed = false;
     for (final e in paths.entries) {
       final app = e.key;
+      if (app.toLowerCase() == 'io.github.arturwo1.wolium') continue;
       if (decided.contains(app) || of(app) != null) continue;
       if (windowed != null && !windowed.contains(app)) continue;
-      if (isNoise(app, titles[app] ?? '')) continue;
-      final id = _defaultFor(app, e.value, sys[app] ?? -1);
+      final title = titles[app] ?? '';
+      if (isNoise(app, title)) continue;
+      final id = _defaultFor(app, e.value, sys[app] ?? -1, title);
       final cat = byId(id == null ? null : (links[id] ?? id));
       if (cat == null) continue;
       cat.apps.add(app);

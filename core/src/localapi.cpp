@@ -43,15 +43,18 @@ std::string current_json(const Report& report) {
   return o.str();
 }
 
-bool parse_api_request(const std::string& request, int port, std::string& path) {
-  std::size_t eol = request.find("\r\n");
-  if (eol == std::string::npos) return false;
-  std::istringstream line(request.substr(0, eol));
+ApiRequest parse_api_request_ex(const std::string& request, int port) {
+  ApiRequest out;
+  std::size_t hdr_end = request.find("\r\n\r\n");
+  std::string head = hdr_end == std::string::npos ? request : request.substr(0, hdr_end);
+  std::size_t eol = head.find("\r\n");
+  if (eol == std::string::npos) return out;
+  std::istringstream line(head.substr(0, eol));
   std::string method, target, version;
   line >> method >> target >> version;
-  if (method != "GET" || target.empty() || target[0] != '/' || version.rfind("HTTP/1.", 0) != 0) return false;
+  if ((method != "GET" && method != "POST") || target.empty() || target[0] != '/' || version.rfind("HTTP/1.", 0) != 0) return out;
   std::string host;
-  std::istringstream rest(request.substr(eol + 2));
+  std::istringstream rest(head.substr(eol + 2));
   std::string h;
   while (std::getline(rest, h)) {
     if (!h.empty() && h.back() == '\r') h.pop_back();
@@ -64,8 +67,18 @@ bool parse_api_request(const std::string& request, int port, std::string& path) 
     }
   }
   const std::string p = ":" + std::to_string(port);
-  if (host != "127.0.0.1" + p && host != "localhost" + p) return false;
-  path = target;
+  if (host != "127.0.0.1" + p && host != "localhost" + p) return out;
+  out.method = method;
+  out.path = target;
+  if (hdr_end != std::string::npos) out.body = request.substr(hdr_end + 4);
+  out.ok = true;
+  return out;
+}
+
+bool parse_api_request(const std::string& request, int port, std::string& path) {
+  ApiRequest req = parse_api_request_ex(request, port);
+  if (!req.ok || req.method != "GET") return false;
+  path = req.path;
   return true;
 }
 
@@ -160,15 +173,109 @@ std::string metric_of(const std::string& q) {
   return (m == "open" || m == "minimized" || m == "background" || m == "all") ? m : "focused";
 }
 
+bool json_string(const std::string& json, const std::string& key, std::string& out) {
+  std::string pat = "\"" + key + "\"";
+  std::size_t p = json.find(pat);
+  if (p == std::string::npos) return false;
+  p = json.find(':', p + pat.size());
+  if (p == std::string::npos) return false;
+  p = json.find_first_not_of(" \t\r\n", p + 1);
+  if (p == std::string::npos || json[p] != '"') return false;
+  ++p;
+  std::string val;
+  while (p < json.size() && json[p] != '"') {
+    if (json[p] == '\\' && p + 1 < json.size()) ++p;
+    val.push_back(json[p++]);
+  }
+  if (p >= json.size() || json[p] != '"') return false;
+  out = val;
+  return true;
+}
+
+bool json_int(const std::string& json, const std::string& key, long long& out) {
+  std::string pat = "\"" + key + "\"";
+  std::size_t p = json.find(pat);
+  if (p == std::string::npos) return false;
+  p = json.find(':', p + pat.size());
+  if (p == std::string::npos) return false;
+  p = json.find_first_not_of(" \t\r\n", p + 1);
+  if (p == std::string::npos) return false;
+  std::size_t end = p;
+  while (end < json.size() && std::isdigit(static_cast<unsigned char>(json[end]))) ++end;
+  if (end == p || end - p > 12) return false;
+  out = std::stoll(json.substr(p, end - p));
+  return true;
+}
+
+std::string clean_token(std::string s, std::size_t max_len) {
+  for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+  if (s.size() > max_len) s.resize(max_len);
+  for (char c : s) {
+    unsigned char u = static_cast<unsigned char>(c);
+    if (!(std::isalnum(u) || c == '.' || c == '-' || c == '_' || c == ':')) return {};
+  }
+  return s;
+}
+
 }
 
 ApiReply route_api(const std::string& target, const std::string& current, ApiData* data, long long now) {
+  return route_api("GET", target, "", current, data, now);
+}
+
+ApiReply route_api(const std::string& method, const std::string& target, const std::string& req_body, const std::string& current, ApiData* data, long long now) {
   std::size_t qm = target.find('?');
   std::string path = target.substr(0, qm);
   std::string query = qm == std::string::npos ? std::string() : target.substr(qm + 1);
   if (path.size() > 1 && path.back() == '/') path.pop_back();
+  if (method == "POST") {
+    if (path != "/v1/browser") return {404, kJson, "{\"error\":\"not found\"}"};
+    std::string browser, domain;
+    long long ms = 0;
+    if (!json_string(req_body, "browser", browser) || !json_string(req_body, "domain", domain) || !json_int(req_body, "ms", ms)) {
+      return {400, kJson, "{\"error\":\"bad payload\"}"};
+    }
+    browser = clean_token(browser, 64);
+    domain = clean_token(domain, 192);
+    if (browser.empty() || domain.empty() || ms <= 0 || ms > 3600000) {
+      return {400, kJson, "{\"error\":\"bad payload\"}"};
+    }
+    if (data) data->add_browser_usage(day_string(now), browser, domain, ms);
+    return {200, kJson, "{\"ok\":true}"};
+  }
   if (path == "/widget") return {200, "text/html; charset=utf-8", widget_html()};
   if (path == "/v1/current") return {200, kJson, current.empty() ? "{\"apps\":[]}" : current};
+  if (path == "/v1/browser/top") {
+    int days = static_cast<int>(query_int(query, "days", 1, 1, 90));
+    int limit = static_cast<int>(query_int(query, "limit", 10, 1, 100));
+    std::string to = day_string(now);
+    std::string from = day_string(now - static_cast<long long>(days - 1) * 86400);
+    std::vector<BrowserRow> rows = data ? data->browser_usage(from, to) : std::vector<BrowserRow>();
+    std::map<std::pair<std::string, std::string>, long long> agg;
+    for (const auto& r : rows) {
+      if (r.ms > 0) agg[{r.browser, r.domain}] += r.ms;
+    }
+    std::vector<BrowserRow> sorted;
+    sorted.reserve(agg.size());
+    for (const auto& kv : agg) sorted.push_back({kv.first.first, kv.first.second, kv.second});
+    std::sort(sorted.begin(), sorted.end(), [](const BrowserRow& a, const BrowserRow& b) {
+      if (a.ms != b.ms) return a.ms > b.ms;
+      if (a.domain != b.domain) return a.domain < b.domain;
+      return a.browser < b.browser;
+    });
+    std::ostringstream o;
+    o << "{\"from\":\"" << from << "\",\"to\":\"" << to << "\",\"days\":" << days << ",\"domains\":[";
+    int n = 0;
+    for (const auto& r : sorted) {
+      if (n >= limit) break;
+      if (n++) o << ',';
+      o << "{\"browser\":\"" << esc(r.browser) << "\",\"domain\":\"" << esc(r.domain) << "\",\"ms\":" << r.ms << '}';
+    }
+    o << "]}";
+    return {200, kJson, o.str()};
+  }
   bool summary = path == "/v1/summary" || path == "/v1/stats";
   bool top = path == "/v1/apps/top";
   if (summary || top) {

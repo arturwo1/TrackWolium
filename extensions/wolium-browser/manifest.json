@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Wolium Browser Companion",
+  "version": "0.18.0",
+  "description": "Tracks active site domains locally and sends them to Wolium on this device.",
+  "permissions": [
+    "tabs",
+    "idle",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:9095/*",
+    "http://localhost:9095/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Wolium Browser Companion",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

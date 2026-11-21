@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(TW_VERSION "0.9.0" CACHE STRING "Release version")
+set(TW_VERSION "0.18.0" CACHE STRING "Release version")
 project(trackwolium LANGUAGES C CXX)
 
 option(TW_STORE_BUILD "Build for Microsoft Store and Google Play, without the built-in updater" OFF)

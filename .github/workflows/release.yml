@@ -21,7 +21,7 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}".TrimStart('v')
-          if ($v -notmatch '^\d') { $v = '0.9.0' }
+          if ($v -notmatch '^\d') { $v = '0.18.0' }
           $v = "$v.${{ github.run_number }}"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DTW_VERSION=$v"
           cmake --build build --config Release --target trackwolium_guard trackwolium_core wolium_setup wolium_uninstall tw_tests
@@ -41,6 +41,8 @@ jobs:
           Copy-Item build\bin\Release\trackwolium.exe stage\
           Copy-Item build\bin\Release\trackwolium-core.exe stage\
           Copy-Item build\bin\Release\uninstall.exe stage\
+          New-Item -ItemType Directory -Force stage\extensions | Out-Null
+          Copy-Item -Recurse extensions\wolium-browser stage\extensions\
           python tools\pack_installer.py build\bin\Release\WoliumSetup.exe stage WoliumSetup.exe
           Set-Content -NoNewline -Path version.txt -Value (Select-String -Path build\CMakeCache.txt -Pattern '^TW_VERSION:[A-Z]+=(.*)$').Matches[0].Groups[1].Value
       - uses: actions/upload-artifact@v4
@@ -67,19 +69,21 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           case "$v" in
             [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
-            *) VER="0.9.0.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.18.0.${GITHUB_RUN_NUMBER}" ;;
           esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
       - name: build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
-          (cd ui && flutter create --platforms=linux --project-name wolium . && rm -f test/widget_test.dart && flutter pub get && flutter build linux --release --dart-define=WOLIUM_VERSION=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.9.0.${GITHUB_RUN_NUMBER}";; esac))
+          (cd ui && flutter create --platforms=linux --project-name wolium . && rm -f test/widget_test.dart && flutter pub get && flutter build linux --release --dart-define=WOLIUM_VERSION=$(v="${GITHUB_REF_NAME#v}"; case "$v" in [0-9]*) echo "$v.${GITHUB_RUN_NUMBER}";; *) echo "0.18.0.${GITHUB_RUN_NUMBER}";; esac))
       - name: package
         run: |
           mkdir -p pkg/wolium-linux/app
           cp -r ui/build/linux/x64/release/bundle/. pkg/wolium-linux/app/
           cp build/bin/trackwolium-core pkg/wolium-linux/app/
+          mkdir -p pkg/wolium-linux/app/extensions
+          cp -r extensions/wolium-browser pkg/wolium-linux/app/extensions/
           cp tools/linux/install.sh tools/linux/uninstall.sh pkg/wolium-linux/
           cp -r tools/linux/bridge pkg/wolium-linux/bridge
           cp tools/posix/update-check.sh pkg/wolium-linux/app/
@@ -117,7 +121,7 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           case "$v" in
             [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
-            *) VER="0.9.0.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.18.0.${GITHUB_RUN_NUMBER}" ;;
           esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
           echo "WOLIUM_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
@@ -157,7 +161,7 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           case "$v" in
             [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
-            *) VER="0.9.0.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.18.0.${GITHUB_RUN_NUMBER}" ;;
           esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
       - run: |
@@ -180,6 +184,8 @@ jobs:
           APP="ui/build/macos/Build/Products/Release/Wolium.app"
           MACOS="$APP/Contents/MacOS"
           cp build/bin/trackwolium-core "$MACOS/"
+          mkdir -p "$MACOS/extensions"
+          cp -R extensions/wolium-browser "$MACOS/extensions/"
           cp tools/posix/update-check.sh "$MACOS/"
           python3 tools/posix/make_strings.py "$MACOS/strings.tsv"
           printf '%s' "$WOLIUM_VERSION" > "$MACOS/version.txt"
@@ -217,7 +223,7 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}".TrimStart('v')
-          if ($v -notmatch '^\d') { $v = '0.9.0' }
+          if ($v -notmatch '^\d') { $v = '0.18.0' }
           $v = "$v.${{ github.run_number }}"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTW_STORE_BUILD=ON "-DTW_VERSION=$v"
           cmake --build build --config Release --target trackwolium_guard trackwolium_core
@@ -239,8 +245,10 @@ jobs:
           Copy-Item -Recurse ui\build\windows\x64\runner\Release\* stage\
           Copy-Item build\bin\Release\trackwolium.exe stage\
           Copy-Item build\bin\Release\trackwolium-core.exe stage\
+          New-Item -ItemType Directory -Force stage\extensions | Out-Null
+          Copy-Item -Recurse extensions\wolium-browser stage\extensions\
           $v = "${{ github.ref_name }}".TrimStart('v')
-          if ($v -notmatch '^\d') { $v = '0.9.0' }
+          if ($v -notmatch '^\d') { $v = '0.18.0' }
           $parts = $v.Split('.')
           while ($parts.Count -lt 2) { $parts += '0' }
           $msixVersion = "$($parts[0]).$($parts[1]).${{ github.run_number }}.0"
@@ -277,7 +285,7 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           case "$v" in
             [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
-            *) VER="0.9.0.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.18.0.${GITHUB_RUN_NUMBER}" ;;
           esac
           echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
           echo "WOLIUM_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
@@ -328,7 +336,7 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           case "$v" in
             [0-9]*) ;;
-            *) v=0.9.0 ;;
+            *) v=0.18.0 ;;
           esac
           printf '%s' "$v.${{ github.run_number }}" > version.txt
           cat version.txt

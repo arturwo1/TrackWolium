@@ -3,7 +3,7 @@
 Read-only HTTP API for widgets and scripts. Off by default, enable it in Settings.
 
 - Listens only on `127.0.0.1`, fixed port `9095`.
-- Accepts only `GET`. The `Host` header must be exactly `127.0.0.1:9095` or `localhost:9095`, otherwise the request is rejected with `400`.
+- Accepts `GET` (and `POST /v1/browser` for the companion browser extension). The `Host` header must be exactly `127.0.0.1:9095` or `localhost:9095`, otherwise the request is rejected with `400`.
 - Responses are sent with `Cache-Control: no-store` and no CORS headers, so web pages from other origins cannot read them.
 - While it is on, any program on the same device can read your activity. On Android a persistent notification keeps the service alive.
 
@@ -44,6 +44,14 @@ Totals for the period: `from`, `to`, `days`, `apps_count`, `focused_ms`, `open_m
 
 `{"hours": ..., "sessions": [...]}`. Each session: `app`, `name`, `state`, `start`, `stop` (Unix seconds).
 `hours` is 1-2160, default 24. `limit` is 1-500, default 100.
+
+### `POST /v1/browser`
+
+Accepts JSON `{"browser": "chrome", "domain": "github.com", "ms": 10000}` and accumulates active domain time for the current day.
+
+### `GET /v1/browser/top?days=1&limit=10`
+
+`{"from", "to", "days", "domains": [{"browser", "domain", "ms"}]}`. Top domains recorded by the companion browser extension.
 
 ## Rules
 

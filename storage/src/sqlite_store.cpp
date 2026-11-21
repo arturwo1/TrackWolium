@@ -56,7 +56,8 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
       "CREATE TABLE IF NOT EXISTS res(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, cpu INTEGER NOT NULL DEFAULT 0, ram INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 0, peak INTEGER NOT NULL DEFAULT 0, ior INTEGER NOT NULL DEFAULT 0, iow INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS afk(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID;"
-      "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;";
+      "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS browser_usage(day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, browser, domain)) WITHOUT ROWID;";
   if (!exec(db, schema, error)) {
     sqlite3_close(db);
     return nullptr;
@@ -412,6 +413,40 @@ std::vector<SessionRow> SqliteStore::sessions(long long from, long long to, int 
   sqlite3_bind_int64(st, 2, to);
   sqlite3_bind_int(st, 3, limit);
   while (sqlite3_step(st) == SQLITE_ROW) out.push_back({column_text(st, 0), column_text(st, 1), sqlite3_column_int(st, 2), sqlite3_column_int64(st, 3), sqlite3_column_int64(st, 4)});
+  sqlite3_finalize(st);
+  return out;
+}
+
+bool SqliteStore::add_browser_usage(const std::string& day, const std::string& browser, const std::string& domain, long long ms) {
+  if (ms <= 0 || browser.empty() || domain.empty()) return false;
+  std::lock_guard<std::mutex> lock(mtx_);
+  const char* sql =
+      "INSERT INTO browser_usage(day, browser, domain, ms) VALUES(?1, ?2, ?3, ?4) "
+      "ON CONFLICT(day, browser, domain) DO UPDATE SET ms = ms + excluded.ms";
+  sqlite3_stmt* st = nullptr;
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+    last_error_ = sqlite3_errmsg(db_);
+    return false;
+  }
+  sqlite3_bind_text(st, 1, day.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 2, browser.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 3, domain.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(st, 4, static_cast<sqlite3_int64>(ms));
+  bool ok = sqlite3_step(st) == SQLITE_DONE;
+  if (!ok) last_error_ = sqlite3_errmsg(db_);
+  sqlite3_finalize(st);
+  return ok;
+}
+
+std::vector<BrowserRow> SqliteStore::browser_usage(const std::string& from_day, const std::string& to_day) {
+  std::vector<BrowserRow> out;
+  std::lock_guard<std::mutex> lock(mtx_);
+  sqlite3_stmt* st = nullptr;
+  const char* sql = "SELECT browser, domain, SUM(ms) FROM browser_usage WHERE day >= ?1 AND day <= ?2 GROUP BY browser, domain";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) return out;
+  sqlite3_bind_text(st, 1, from_day.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 2, to_day.c_str(), -1, SQLITE_TRANSIENT);
+  while (sqlite3_step(st) == SQLITE_ROW) out.push_back({column_text(st, 0), column_text(st, 1), sqlite3_column_int64(st, 2)});
   sqlite3_finalize(st);
   return out;
 }

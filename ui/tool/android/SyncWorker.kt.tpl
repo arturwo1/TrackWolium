@@ -86,7 +86,20 @@ object Sync {
     }
   }
 
+  private val gamePrefixes = listOf(
+    "com.miniclip.", "com.supercell.", "com.rovio.", "com.kiloo.", "com.halfbrick.",
+    "com.king.", "com.mojang.", "com.innersloth.", "com.ea.game.", "com.gameloft.",
+    "com.playrix.", "com.zynga.", "com.nianticlabs.", "jp.co.ponos.", "com.prineside.",
+    "org.lichess.", "com.blackmoondev.", "com.asobimo.", "com.mihoyo.", "com.nexon."
+  )
+  private val gameTokens = listOf(
+    "eightballpool", "minecraft", "brawlstars", "clashroyale", "clashofclans",
+    "amongus", "subwaysurf", "infinitode", "magicrampage", "smashingfour", "battlecats", "lichess"
+  )
+
   fun systemCategory(ctx: Context, pkg: String): Int {
+    val lp = pkg.lowercase(java.util.Locale.ROOT)
+    if (gamePrefixes.any { lp.startsWith(it) } || gameTokens.any { lp.contains(it) }) return 0
     return try {
       val info = ctx.packageManager.getApplicationInfo(pkg, 0)
       if ((info.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME) != 0) 0 else if (Build.VERSION.SDK_INT >= 26) info.category else -1
@@ -97,17 +110,28 @@ object Sync {
 
   fun icon(ctx: Context, pkg: String): ByteArray? {
     return try {
-      val d = ctx.packageManager.getApplicationIcon(pkg)
+      val d = (ctx.packageManager.getApplicationIcon(pkg).constantState?.newDrawable() ?: ctx.packageManager.getApplicationIcon(pkg)).mutate()
       val size = 96
       val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+      val canvas = android.graphics.Canvas(bmp)
       d.setBounds(0, 0, size, size)
-      d.draw(android.graphics.Canvas(bmp))
+      d.draw(canvas)
       val out = java.io.ByteArrayOutputStream()
       bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
       out.toByteArray()
     } catch (ex: Exception) {
       null
     }
+  }
+
+  fun ensureIcon(ctx: Context, dir: File, pkg: String): String {
+    val icons = File(dir, "icons")
+    val target = File(icons, "$pkg.png")
+    if (target.exists() && target.length() > 0) return target.absolutePath
+    val png = icon(ctx, pkg) ?: return ""
+    icons.mkdirs()
+    target.writeBytes(png)
+    return target.absolutePath
   }
 
   fun build(events: List<Ev>, nowMs: Long): List<Span> {
@@ -239,15 +263,7 @@ object Sync {
       c.close()
       for (app in spans.map { it.app }.toSet()) {
         if (known.contains(app)) continue
-        var iconPath = ""
-        val png = icon(ctx, app)
-        if (png != null) {
-          val icons = File(dir, "icons")
-          icons.mkdirs()
-          val f = File(icons, "$app.png")
-          f.writeBytes(png)
-          iconPath = f.absolutePath
-        }
+        val iconPath = ensureIcon(ctx, dir, app)
         db.execSQL("INSERT OR REPLACE INTO apps(app, name, path) VALUES(?, ?, ?)", arrayOf<Any>(app, label(ctx, app), iconPath))
       }
       db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).close()
@@ -326,7 +342,8 @@ object Sync {
   }
 
   fun categorize(ctx: Context) {
-    val file = File(dir(ctx), "usage.db")
+    val d = dir(ctx)
+    val file = File(d, "usage.db")
     if (!file.exists()) return
     val db = SQLiteDatabase.openOrCreateDatabase(file, null)
     try {
@@ -334,20 +351,41 @@ object Sync {
       db.execSQL(SCHEMA_APPS)
       db.execSQL(SCHEMA_APPCAT)
       val known = HashSet<String>()
-      val kc = db.rawQuery("SELECT app FROM apps", null)
-      while (kc.moveToNext()) known.add(kc.getString(0))
+      val haveIcon = HashSet<String>()
+      val kc = db.rawQuery("SELECT app, path FROM apps", null)
+      while (kc.moveToNext()) {
+        val pkg = kc.getString(0)
+        val p = kc.getString(1)
+        known.add(pkg)
+        if (p.isNotEmpty() && File(p).exists()) haveIcon.add(pkg)
+      }
       kc.close()
       val launcher = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER)
       for (ri in ctx.packageManager.queryIntentActivities(launcher, 0)) {
         val pkg = ri.activityInfo.packageName
-        if (pkg == ctx.packageName || known.contains(pkg)) continue
-        db.execSQL("INSERT OR IGNORE INTO apps(app, name, path) VALUES(?, ?, '')", arrayOf<Any>(pkg, ri.loadLabel(ctx.packageManager).toString()))
-        known.add(pkg)
+        if (pkg == ctx.packageName) continue
+        val iconPath = if (haveIcon.contains(pkg)) "" else ensureIcon(ctx, d, pkg)
+        if (!known.contains(pkg)) {
+          db.execSQL("INSERT OR IGNORE INTO apps(app, name, path) VALUES(?, ?, ?)", arrayOf<Any>(pkg, ri.loadLabel(ctx.packageManager).toString(), iconPath))
+          known.add(pkg)
+          if (iconPath.isNotEmpty()) haveIcon.add(pkg)
+        } else if (iconPath.isNotEmpty()) {
+          db.execSQL("UPDATE apps SET path = ? WHERE app = ? AND path = ''", arrayOf<Any>(iconPath, pkg))
+          haveIcon.add(pkg)
+        }
+      }
+      for (pkg in known) {
+        if (pkg == ctx.packageName || haveIcon.contains(pkg)) continue
+        val iconPath = ensureIcon(ctx, d, pkg)
+        if (iconPath.isNotEmpty()) {
+          db.execSQL("UPDATE apps SET path = ? WHERE app = ?", arrayOf<Any>(iconPath, pkg))
+          haveIcon.add(pkg)
+        }
       }
       val vc = db.rawQuery("SELECT cat FROM appcat WHERE app = '__v'", null)
       val version = if (vc.moveToFirst()) vc.getInt(0) else 0
       vc.close()
-      if (version != 3) db.execSQL("DELETE FROM appcat")
+      if (version != 4) db.execSQL("DELETE FROM appcat")
       val have = HashSet<String>()
       val hc = db.rawQuery("SELECT app FROM appcat", null)
       while (hc.moveToNext()) have.add(hc.getString(0))
@@ -357,7 +395,7 @@ object Sync {
         for (app in known) {
           if (!have.contains(app)) db.execSQL("INSERT OR REPLACE INTO appcat(app, cat) VALUES(?, ?)", arrayOf<Any>(app, systemCategory(ctx, app)))
         }
-        db.execSQL("INSERT OR REPLACE INTO appcat(app, cat) VALUES('__v', 3)")
+        db.execSQL("INSERT OR REPLACE INTO appcat(app, cat) VALUES('__v', 4)")
         db.setTransactionSuccessful()
       } finally {
         db.endTransaction()

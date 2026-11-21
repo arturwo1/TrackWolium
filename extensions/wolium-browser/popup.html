@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wolium Browser Companion</title>
+    <style>
+      :root {
+        --bg: #23272a;
+        --panel: #1e2225;
+        --line: #34393e;
+        --hover: #2b3137;
+        --text: #f3f6f8;
+        --muted: #b0b6bb;
+        --accent: #80e0f5;
+        --ok: #7ce08a;
+        --warn: #e5986b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        width: 310px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 13px;
+        padding: 12px;
+      }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .brand { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); display: inline-block; }
+      .dot.ok { background: var(--ok); }
+      .card {
+        margin-top: 10px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+      .muted { color: var(--muted); font-size: 11px; }
+      .domain { color: var(--accent); font-weight: 600; font-size: 13px; margin-top: 2px; word-break: break-all; }
+      button {
+        background: var(--hover);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover { border-color: var(--accent); }
+      .list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+      .item { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+      .item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .item-time { color: var(--muted); flex-shrink: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <div class="brand">
+        <span id="dot" class="dot"></span>
+        <span>Wolium</span>
+      </div>
+      <button id="pauseBtn" type="button">Pause</button>
+    </div>
+
+    <div class="card">
+      <div id="statusText" class="muted">Checking Wolium...</div>
+      <div id="activeDomain" class="domain">—</div>
+    </div>
+
+    <div class="card">
+      <div class="muted" style="margin-bottom: 6px;">Top sites today</div>
+      <div id="topList" class="list"><span class="muted">No sites recorded yet</span></div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

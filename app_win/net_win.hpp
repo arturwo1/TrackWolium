@@ -8,6 +8,8 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <atomic>
+#include <cctype>
+#include <cstdlib>
 #include <memory>
 #include <ctime>
 #include <mutex>
@@ -70,17 +72,39 @@ private:
       setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
       std::string req;
       char buf[2048];
-      while (req.size() < 8192 && req.find("\r\n\r\n") == std::string::npos) {
+      std::size_t hdr_end = std::string::npos;
+      while (req.size() < 8192) {
         int n = recv(s, buf, sizeof(buf), 0);
         if (n <= 0) break;
         req.append(buf, static_cast<std::size_t>(n));
+        hdr_end = req.find("\r\n\r\n");
+        if (hdr_end != std::string::npos) break;
       }
-      std::string path;
+      if (hdr_end != std::string::npos) {
+        std::size_t content_len = 0;
+        std::string hdr = req.substr(0, hdr_end);
+        for (auto& ch : hdr) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        std::size_t cl = hdr.find("content-length:");
+        if (cl != std::string::npos) {
+          std::size_t p = hdr.find_first_not_of(" \t", cl + 15);
+          std::size_t e = hdr.find("\r\n", p);
+          if (p != std::string::npos) {
+            long long v = std::strtoll(hdr.substr(p, e - p).c_str(), nullptr, 10);
+            if (v > 0) content_len = static_cast<std::size_t>(v > 16384 ? 16384 : v);
+          }
+        }
+        while (req.size() < hdr_end + 4 + content_len) {
+          int n = recv(s, buf, sizeof(buf), 0);
+          if (n <= 0) break;
+          req.append(buf, static_cast<std::size_t>(n));
+        }
+      }
+      tw::ApiRequest parsed = tw::parse_api_request_ex(req, tw::kLocalApiPort);
       std::string out;
-      if (!tw::parse_api_request(req, tw::kLocalApiPort, path)) out = tw::http_response(400, "{\"error\":\"bad request\"}");
+      if (!parsed.ok) out = tw::http_response(400, "{\"error\":\"bad request\"}");
       else {
         std::lock_guard<std::mutex> lock(mtx_);
-        tw::ApiReply reply = tw::route_api(path, body_, data_, static_cast<long long>(std::time(nullptr)));
+        tw::ApiReply reply = tw::route_api(parsed.method, parsed.path, parsed.body, body_, data_, static_cast<long long>(std::time(nullptr)));
         out = tw::http_response(reply.status, reply.body, reply.type);
       }
       send(s, out.data(), static_cast<int>(out.size()), 0);

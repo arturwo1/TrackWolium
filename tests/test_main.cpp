@@ -917,6 +917,31 @@ void test_presence_store() {
   CHECK(got.size() == 1 && got[0].name == "Game" && got[0].started == 5 && got[0].raw == "{\"a\":1}");
 }
 
+void test_browser_api() {
+  auto req = tw::parse_api_request_ex(
+      "POST /v1/browser HTTP/1.1\r\nHost: 127.0.0.1:9095\r\nContent-Length: 49\r\n\r\n{\"browser\":\"chrome\",\"domain\":\"github.com\",\"ms\":5}",
+      9095);
+  CHECK(req.ok && req.method == "POST" && req.path == "/v1/browser" && req.body.find("github.com") != std::string::npos);
+  CHECK(!tw::parse_api_request_ex("POST /v1/browser HTTP/1.1\r\nHost: evil.com:9095\r\n\r\n{}", 9095).ok);
+
+  std::string err;
+  auto store = tw::SqliteStore::open(":memory:", &err);
+  CHECK(store != nullptr);
+  if (!store) return;
+  long long now = 1700000000;
+  auto bad = tw::route_api("POST", "/v1/browser", "{\"browser\":\"chrome\",\"domain\":\"\",\"ms\":5000}", "", store.get(), now);
+  CHECK(bad.status == 400);
+  auto r1 = tw::route_api("POST", "/v1/browser", "{\"browser\":\"Chrome\",\"domain\":\"GitHub.com\",\"ms\":12000}", "", store.get(), now);
+  CHECK(r1.status == 200);
+  auto r2 = tw::route_api("POST", "/v1/browser", "{\"browser\":\"chrome\",\"domain\":\"github.com\",\"ms\":8000}", "", store.get(), now);
+  CHECK(r2.status == 200);
+  auto top = tw::route_api("GET", "/v1/browser/top?days=1&limit=5", "", "", store.get(), now);
+  CHECK(top.status == 200);
+  CHECK(top.body.find("\"browser\":\"chrome\"") != std::string::npos);
+  CHECK(top.body.find("\"domain\":\"github.com\"") != std::string::npos);
+  CHECK(top.body.find("\"ms\":20000") != std::string::npos);
+}
+
 int main() {
   test_accumulates_per_state();
   test_gap_is_ignored();
@@ -960,6 +985,7 @@ int main() {
   test_proc_tracker_ignores_old_unseen_processes();
   test_sqlite_resources();
   test_native_metrics_smoke();
+  test_browser_api();
 #ifdef _WIN32
   test_ipc_roundtrip();
 #endif

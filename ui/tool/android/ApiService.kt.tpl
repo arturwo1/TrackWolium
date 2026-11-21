@@ -98,26 +98,50 @@ class ApiService : Service() {
     try {
       c.soTimeout = 1500
       val input = c.getInputStream()
-      val buf = ByteArray(8192)
-      var len = 0
-      while (len < buf.size) {
-        val n = input.read(buf, len, buf.size - len)
+      val buf = ByteArray(4096)
+      val raw = java.io.ByteArrayOutputStream()
+      var hdrEnd = -1
+      while (raw.size() < 24576) {
+        val n = input.read(buf)
         if (n <= 0) break
-        len += n
-        if (String(buf, 0, len, Charsets.ISO_8859_1).contains("\r\n\r\n")) break
+        raw.write(buf, 0, n)
+        val s = String(raw.toByteArray(), Charsets.ISO_8859_1)
+        hdrEnd = s.indexOf("\r\n\r\n")
+        if (hdrEnd >= 0) break
       }
-      val request = String(buf, 0, len, Charsets.ISO_8859_1)
-      val lines = request.split("\r\n")
+      if (hdrEnd < 0) {
+        c.getOutputStream().write(http(400, "{\"error\":\"bad request\"}").toByteArray(Charsets.UTF_8))
+        return
+      }
+      var allBytes = raw.toByteArray()
+      val headerText = String(allBytes, 0, hdrEnd, Charsets.ISO_8859_1)
+      val lines = headerText.split("\r\n")
       val parts = lines.firstOrNull()?.split(" ") ?: emptyList()
       var host = ""
+      var contentLen = 0
       for (l in lines.drop(1)) {
         val i = l.indexOf(':')
-        if (i > 0 && l.substring(0, i).trim().equals("host", true)) host = l.substring(i + 1).trim().lowercase(Locale.ROOT)
+        if (i <= 0) continue
+        val k = l.substring(0, i).trim().lowercase(Locale.ROOT)
+        val v = l.substring(i + 1).trim()
+        if (k == "host") host = v.lowercase(Locale.ROOT)
+        else if (k == "content-length") contentLen = (v.toIntOrNull() ?: 0).coerceIn(0, 16384)
       }
+      val bodyStart = hdrEnd + 4
+      while (allBytes.size < bodyStart + contentLen) {
+        val n = input.read(buf)
+        if (n <= 0) break
+        raw.write(buf, 0, n)
+        allBytes = raw.toByteArray()
+      }
+      val reqBody = if (allBytes.size > bodyStart && contentLen > 0) {
+        String(allBytes, bodyStart, minOf(contentLen, allBytes.size - bodyStart), Charsets.UTF_8)
+      } else ""
+      val method = parts.firstOrNull() ?: ""
       val response = when {
-        parts.size < 3 || parts[0] != "GET" || !parts[2].startsWith("HTTP/1.") || (host != "127.0.0.1:$PORT" && host != "localhost:$PORT") ->
+        parts.size < 3 || (method != "GET" && method != "POST") || !parts[2].startsWith("HTTP/1.") || (host != "127.0.0.1:$PORT" && host != "localhost:$PORT") ->
           http(400, "{\"error\":\"bad request\"}")
-        else -> route(parts[1])
+        else -> route(method, parts[1], reqBody)
       }
       c.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
       c.getOutputStream().flush()
@@ -187,11 +211,43 @@ class ApiService : Service() {
     return o.append(']').toString()
   }
 
-  private fun route(target: String): String {
+  private fun route(method: String, target: String, reqBody: String): String {
     val qm = target.indexOf('?')
     var path = if (qm < 0) target else target.substring(0, qm)
     val query = if (qm < 0) "" else target.substring(qm + 1)
     if (path.length > 1 && path.endsWith("/")) path = path.dropLast(1)
+    val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val now = System.currentTimeMillis()
+    if (method == "POST") {
+      if (path != "/v1/browser") return http(404, "{\"error\":\"not found\"}")
+      return try {
+        val obj = org.json.JSONObject(reqBody)
+        val browser = obj.optString("browser", "").trim().lowercase(Locale.ROOT).take(64)
+        val domain = obj.optString("domain", "").trim().lowercase(Locale.ROOT).take(192)
+        val ms = obj.optLong("ms", 0L)
+        if (browser.isEmpty() || domain.isEmpty() || ms <= 0 || ms > 3600000L) {
+          http(400, "{\"error\":\"bad payload\"}")
+        } else {
+          val day = fmt.format(Date(now))
+          val file = File(Sync.dir(applicationContext), "usage.db")
+          file.parentFile?.mkdirs()
+          val db = SQLiteDatabase.openOrCreateDatabase(file, null)
+          try {
+            db.enableWriteAheadLogging()
+            db.execSQL("CREATE TABLE IF NOT EXISTS browser_usage(day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, browser, domain)) WITHOUT ROWID")
+            db.execSQL(
+              "INSERT INTO browser_usage(day, browser, domain, ms) VALUES(?, ?, ?, ?) ON CONFLICT(day, browser, domain) DO UPDATE SET ms = ms + excluded.ms",
+              arrayOf<Any>(day, browser, domain, ms)
+            )
+          } finally {
+            db.close()
+          }
+          http(200, "{\"ok\":true}")
+        }
+      } catch (ex: Exception) {
+        http(400, "{\"error\":\"bad json\"}")
+      }
+    }
     if (path == "/widget") {
       val html = try {
         assets.open("widget.html").use { String(it.readBytes(), Charsets.UTF_8) }
@@ -201,8 +257,32 @@ class ApiService : Service() {
       return http(200, html, "text/html; charset=utf-8")
     }
     if (path == "/v1/current") return http(200, current())
-    val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-    val now = System.currentTimeMillis()
+    if (path == "/v1/browser/top") {
+      val days = queryInt(query, "days", 1, 1, 90)
+      val limit = queryInt(query, "limit", 10, 1, 100)
+      val to = fmt.format(Date(now))
+      val from = fmt.format(Date(now - (days - 1) * 86400000L))
+      val o = StringBuilder("{\"from\":\"$from\",\"to\":\"$to\",\"days\":$days,\"domains\":[")
+      var first = true
+      withDb { db ->
+        try {
+          db.rawQuery(
+            "SELECT browser, domain, SUM(ms) AS total FROM browser_usage WHERE day >= ? AND day <= ? GROUP BY browser, domain ORDER BY total DESC LIMIT ?",
+            arrayOf(from, to, limit.toString())
+          ).use { c ->
+            while (c.moveToNext()) {
+              if (!first) o.append(',')
+              first = false
+              o.append("{\"browser\":\"").append(esc(c.getString(0))).append("\",\"domain\":\"").append(esc(c.getString(1)))
+                .append("\",\"ms\":").append(c.getLong(2)).append('}')
+            }
+          }
+        } catch (ex: Exception) {
+        }
+      }
+      o.append("]}")
+      return http(200, o.toString())
+    }
     if (path == "/v1/summary" || path == "/v1/stats" || path == "/v1/apps/top") {
       val top = path == "/v1/apps/top"
       val days = queryInt(query, "days", if (top) 1 else 7, 1, 90)

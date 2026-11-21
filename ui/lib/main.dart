@@ -27,6 +27,7 @@ import 'package:path_provider/path_provider.dart';
 import 'posix.dart';
 import 'haptics.dart';
 import 'discord_posix.dart';
+import 'p2p_sync.dart';
 import 'win.dart';
 
 const appName = 'Wolium';
@@ -52,6 +53,7 @@ Future<void> main() async {
   loadLanguage();
   await loadDefaultDeviceName();
   deviceId();
+  await P2pSync.instance.startIfEnabled();
   WidgetsFlutterBinding.ensureInitialized();
   if (!Platform.isWindows && !Platform.isAndroid) posixTouchAlive();
   WindowState.instance.restore();
@@ -251,6 +253,11 @@ class _ShellState extends State<Shell> {
   Map<String, int> afkMs = {};
   Set<String> rowApps = {};
   bool dirty = false;
+  final ScrollController tableHScroll = ScrollController();
+  String deviceFilter = 'local';
+  List<DeviceInfo> peerDevices = [];
+  Map<String, List<SiteUsage>> sitesByBrowser = {};
+  final Set<String> expandedBrowsers = {};
 
   bool get realFocusOn => ViewPrefs.realFocus && !Platform.isAndroid && !MetricPrefs.has('notime');
 
@@ -305,12 +312,12 @@ class _ShellState extends State<Shell> {
     if (!force && inside && bin == loadBin && useSess == loadSess) return;
     final w0 = math.max(0, viewFrom - sp).floor();
     final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
-    contribs = usage.contribs(from, w0, w1, bin, useSess, realFocus: realFocusOn).where((c) => appAllowed(c.app)).toList();
-    previous = ViewPrefs.compare ? usage.contribs(prevFrom(), w0, w1, bin, false, realFocus: realFocusOn).where((c) => appAllowed(c.app)).toList() : [];
-    presenceRows = usage.presence(from, w0, w1);
+    contribs = usage.contribs(from, w0, w1, bin, useSess, realFocus: realFocusOn, deviceFilter: deviceFilter).where((c) => appAllowed(c.app)).toList();
+    previous = ViewPrefs.compare ? usage.contribs(prevFrom(), w0, w1, bin, false, realFocus: realFocusOn, deviceFilter: deviceFilter).where((c) => appAllowed(c.app)).toList() : [];
+    presenceRows = deviceFilter == 'local' ? usage.presence(from, w0, w1) : [];
     final en = MetricPrefs.enabled.value;
-    resPts = en.any(procMetricIds.contains) ? usage.resPoints(from, w0, w1, bin) : [];
-    sysPts = en.any(sysMetricIds.contains) ? usage.sysPoints(from, w0, w1) : [];
+    resPts = deviceFilter == 'local' && en.any(procMetricIds.contains) ? usage.resPoints(from, w0, w1, bin) : [];
+    sysPts = deviceFilter == 'local' && en.any(sysMetricIds.contains) ? usage.sysPoints(from, w0, w1) : [];
     for (final r in presenceRows) {
       if (r.name.isEmpty && r.clientId.isNotEmpty) resolveRpcName(r.clientId);
     }
@@ -719,6 +726,7 @@ class _ShellState extends State<Shell> {
     ColumnPrefs.hidden.addListener(onColumnsChanged);
     ViewPrefs.rev.addListener(onViewChanged);
     Categories.list.addListener(onViewChanged);
+    P2pSync.instance.version.addListener(onViewChanged);
     refresh();
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (++ticks % 20 == 0) requestFlush();
@@ -736,6 +744,8 @@ class _ShellState extends State<Shell> {
     ColumnPrefs.hidden.removeListener(onColumnsChanged);
     ViewPrefs.rev.removeListener(onViewChanged);
     Categories.list.removeListener(onViewChanged);
+    P2pSync.instance.version.removeListener(onViewChanged);
+    tableHScroll.dispose();
     timer?.cancel();
     usage.close();
     super.dispose();
@@ -857,14 +867,14 @@ class _ShellState extends State<Shell> {
     final tk = keyOf(to);
     final b = usage.sinceHeartbeat();
     final up = b != null && b <= const Duration(seconds: staleSeconds);
-    final l = up && from == to && to == today ? usage.live() : null;
-    final rk = '$fk|$tk';
-    final src = l ?? usage.range(fk, tk);
+    final l = deviceFilter == 'local' && up && from == to && to == today ? usage.live() : null;
+    final rk = '$fk|$tk|$deviceFilter';
+    final src = l ?? usage.range(fk, tk, deviceFilter: deviceFilter);
     final paths = {for (final r in src) if (r.visible > 0 || Platform.isAndroid) r.app: r.path};
     final titles = {for (final r in src) r.app: r.title};
     if (rangeKey != rk || ticks % 30 == 0) {
-      final all = usage.names();
-      final real = Platform.isAndroid ? all.keys.toSet() : usage.windowed();
+      final all = usage.names(deviceFilter: deviceFilter);
+      final real = Platform.isAndroid || deviceFilter != 'local' ? all.keys.toSet() : usage.windowed();
       for (final e in all.entries) {
         if (real.contains(e.key)) paths.putIfAbsent(e.key, () => e.value.path);
         titles.putIfAbsent(e.key, () => e.value.name);
@@ -876,6 +886,10 @@ class _ShellState extends State<Shell> {
     setState(() {
       hasDb = usage.available;
       days = usage.days();
+      peerDevices = usage.devices();
+      if (deviceFilter != 'local' && deviceFilter != 'all' && !peerDevices.any((d) => d.id == deviceFilter)) {
+        deviceFilter = 'local';
+      }
       beat = b;
       isPaused = usage.paused;
       liveMode = l != null;
@@ -890,8 +904,9 @@ class _ShellState extends State<Shell> {
       if (changed || dirty || ticks % every == 0) {
         dirty = false;
         loadChart(force: true);
-        names = usage.names();
-        resMap = MetricPrefs.enabled.value.any(procMetricIds.contains) ? usage.resources(fk, tk) : {};
+        names = usage.names(deviceFilter: deviceFilter);
+        sitesByBrowser = usage.browserSites(fk, tk, deviceFilter: deviceFilter);
+        resMap = deviceFilter == 'local' && MetricPrefs.enabled.value.any(procMetricIds.contains) ? usage.resources(fk, tk) : {};
         rangeKey = rk;
       }
     });
@@ -1574,6 +1589,23 @@ class _ShellState extends State<Shell> {
               },
             ),
           ],
+          if (peerDevices.isNotEmpty) ...[
+            toolDivider(),
+            SelectBox<String>(
+              value: deviceFilter,
+              items: [
+                DropdownMenuItem(value: 'local', child: Text(tr('devLocal'))),
+                DropdownMenuItem(value: 'all', child: Text(tr('devAll'))),
+                for (final d in peerDevices) DropdownMenuItem(value: d.id, child: Text(d.name)),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                deviceFilter = v;
+                only = null;
+                onViewChanged();
+              },
+            ),
+          ],
           if (!Platform.isAndroid) ...[
             toolDivider(),
             Builder(builder: (ctx) => toolButton(tr('linesBtn'), Icons.show_chart, () => linesPopover(ctx), badge: '${(showTime ? 1 : 0) + resSel.where(MetricPrefs.enabled.value.contains).length}')),
@@ -1630,45 +1662,96 @@ class _ShellState extends State<Shell> {
           for (final id in ids) sortHead(columnLabel(id), id, head, resize: true),
           const SizedBox.shrink(),
         ]),
-        for (final r in sortedRows())
-          TableRow(
-            decoration: only == r.app
-                ? BoxDecoration(color: cSoft.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(8), border: Border.all(color: cPrimary))
-                : BoxDecoration(color: menuApp == r.app ? cSoft.withValues(alpha: 0.7) : (hoverApp == r.app ? cSoft.withValues(alpha: 0.35) : null), border: const Border(top: BorderSide(color: cBorder))),
-            children: [
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => toggleOnly(r.app),
-                onSecondaryTapUp: (d) => rowMenu(r, d.globalPosition),
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  onEnter: (_) => setState(() => hoverApp = r.app),
-                  onExit: (_) => setState(() => hoverApp = hoverApp == r.app ? null : hoverApp),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-                    child: Row(children: [
-                      AppIcon(title: r.title, path: r.path, size: 22),
-                      const SizedBox(width: 8),
-                      Expanded(child: EllipsisText(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null))),
-                    ]),
+        for (final r in sortedRows()) ...[
+          () {
+            final bId = Usage.browserIdForApp(r.app);
+            final sites = bId == null ? const <SiteUsage>[] : (sitesByBrowser[bId] ?? const <SiteUsage>[]);
+            final expanded = sites.isNotEmpty && expandedBrowsers.contains(r.app);
+            return TableRow(
+              decoration: only == r.app
+                  ? BoxDecoration(color: cSoft.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(8), border: Border.all(color: cPrimary))
+                  : BoxDecoration(color: menuApp == r.app ? cSoft.withValues(alpha: 0.7) : (hoverApp == r.app ? cSoft.withValues(alpha: 0.35) : null), border: const Border(top: BorderSide(color: cBorder))),
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => toggleOnly(r.app),
+                  onSecondaryTapUp: (d) => rowMenu(r, d.globalPosition),
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    onEnter: (_) => setState(() => hoverApp = r.app),
+                    onExit: (_) => setState(() => hoverApp = hoverApp == r.app ? null : hoverApp),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                      child: Row(children: [
+                        AppIcon(title: r.title, path: r.path, size: 22),
+                        const SizedBox(width: 8),
+                        Expanded(child: EllipsisText(r.title, style: TextStyle(fontWeight: FontWeight.w700, color: only == r.app ? cPrimary : null))),
+                        if (sites.isNotEmpty)
+                          InkWell(
+                            borderRadius: BorderRadius.circular(6),
+                            onTap: () => setState(() => expanded ? expandedBrowsers.remove(r.app) : expandedBrowsers.add(r.app)),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                              child: Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 18, color: cPrimary),
+                            ),
+                          ),
+                      ]),
+                    ),
                   ),
                 ),
+                for (final id in ids)
+                  if (id == 'now') hov(r.app, nowCell(r), row: r) else cell(cellText(id, r), r, style: id == 'total' ? const TextStyle(fontWeight: FontWeight.w800) : null),
+                hov(r.app, Align(alignment: Alignment.center, child: hideButton(r)), row: r),
+              ],
+            );
+          }(),
+          if (Usage.browserIdForApp(r.app) != null && expandedBrowsers.contains(r.app))
+            for (final s in (sitesByBrowser[Usage.browserIdForApp(r.app)!] ?? const <SiteUsage>[]).take(8))
+              TableRow(
+                decoration: BoxDecoration(color: cSoft.withValues(alpha: 0.18)),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(36, 4, 6, 4),
+                    child: Row(children: [
+                      const Icon(Icons.public, size: 14, color: cMuted),
+                      const SizedBox(width: 6),
+                      Expanded(child: EllipsisText(s.domain, style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w600))),
+                    ]),
+                  ),
+                  for (final id in ids)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      child: EllipsisText(
+                        id == 'focused' || id == 'total' ? formatMs(s.ms) : '',
+                        style: const TextStyle(color: cMuted, fontSize: 12),
+                      ),
+                    ),
+                  const SizedBox.shrink(),
+                ],
               ),
-              for (final id in ids)
-                if (id == 'now') hov(r.app, nowCell(r), row: r) else cell(cellText(id, r), r, style: id == 'total' ? const TextStyle(fontWeight: FontWeight.w800) : null),
-              hov(r.app, Align(alignment: Alignment.center, child: hideButton(r)), row: r),
-            ],
-          ),
+        ],
       ],
     );
     if (total <= maxWidth + 0.5) return table;
-    return SingleChildScrollView(scrollDirection: Axis.horizontal, child: SizedBox(width: total, child: table));
+    return Scrollbar(
+      controller: tableHScroll,
+      thumbVisibility: true,
+      trackVisibility: true,
+      interactive: true,
+      child: SingleChildScrollView(
+        controller: tableHScroll,
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.only(bottom: 12),
+        child: SizedBox(width: total, child: table),
+      ),
+    );
   }
 
   double colMin(String k, TextStyle head) {
     final text = k == 'app' ? tr('app') : columnLabel(k);
     final tp = TextPainter(text: TextSpan(text: text, style: head.copyWith(fontWeight: FontWeight.w800)), textDirection: TextDirection.ltr, maxLines: 1)..layout();
-    return math.max(k == 'app' ? 140.0 : 76.0, tp.width + 44);
+    if (k == 'app') return 120.0;
+    return (tp.width * 0.62 + 18).clamp(58.0, 96.0).toDouble();
   }
 
   Widget compactList(TextStyle head) {
@@ -1685,37 +1768,62 @@ class _ShellState extends State<Shell> {
         sortHead(tr('app'), 'app', head),
         for (final id in ids) sortHead(columnLabel(id), id, head),
       ]),
-      for (final r in sortedRows())
-        GestureDetector(
-          onTap: () => toggleOnly(r.app),
-          onLongPress: Platform.isAndroid ? () => androidMenu(r) : null,
-          child: Container(
-          width: double.infinity,
-          margin: const EdgeInsets.only(top: 8),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(rMd),
-            border: Border.all(color: only == r.app ? cPrimary : cBorder),
-          ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              if (liveMode && ids.contains('now')) ...[
-                Container(width: 8, height: 8, decoration: BoxDecoration(color: r.now == null ? cMuted : stateColor(r.now), shape: BoxShape.circle)),
-                const SizedBox(width: 8),
-              ],
-              AppIcon(title: r.title, path: r.path, size: 22),
-              const SizedBox(width: 8),
-              Expanded(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
-              if (ids.contains('total')) Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
-              hideButton(r),
-            ]),
-            Wrap(children: [
-              for (final id in ids)
-                if (id != 'total' && id != 'now') stat(columnLabel(id), cellText(id, r)),
-            ]),
-          ]),
-        ),
-        ),
+      for (final r in sortedRows()) ...[
+        () {
+          final bId = Usage.browserIdForApp(r.app);
+          final sites = bId == null ? const <SiteUsage>[] : (sitesByBrowser[bId] ?? const <SiteUsage>[]);
+          final expanded = sites.isNotEmpty && expandedBrowsers.contains(r.app);
+          return GestureDetector(
+            onTap: () => toggleOnly(r.app),
+            onLongPress: Platform.isAndroid ? () => androidMenu(r) : null,
+            child: Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(rMd),
+                border: Border.all(color: only == r.app ? cPrimary : cBorder),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  if (liveMode && ids.contains('now')) ...[
+                    Container(width: 8, height: 8, decoration: BoxDecoration(color: r.now == null ? cMuted : stateColor(r.now), shape: BoxShape.circle)),
+                    const SizedBox(width: 8),
+                  ],
+                  AppIcon(title: r.title, path: r.path, size: 22),
+                  const SizedBox(width: 8),
+                  Expanded(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
+                  if (sites.isNotEmpty)
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 20, color: cPrimary),
+                      onPressed: () => setState(() => expanded ? expandedBrowsers.remove(r.app) : expandedBrowsers.add(r.app)),
+                    ),
+                  if (ids.contains('total')) Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
+                  hideButton(r),
+                ]),
+                Wrap(children: [
+                  for (final id in ids)
+                    if (id != 'total' && id != 'now') stat(columnLabel(id), cellText(id, r)),
+                ]),
+                if (expanded) ...[
+                  const Divider(height: 14),
+                  for (final s in sites.take(6))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Row(children: [
+                        const Icon(Icons.public, size: 14, color: cMuted),
+                        const SizedBox(width: 6),
+                        Expanded(child: EllipsisText(s.domain, style: const TextStyle(color: cMuted, fontSize: 12))),
+                        Text(formatMs(s.ms), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+                      ]),
+                    ),
+                ],
+              ]),
+            ),
+          );
+        }(),
+      ],
     ]);
   }
 
@@ -1935,6 +2043,11 @@ class _SettingsPageState extends State<SettingsPage> {
   String? afkError;
   bool rpcRestarting = false;
   Timer? rpcTimer;
+  String? extStatusText;
+  bool extConnected = false;
+  bool p2pEnabled = P2pSync.instance.enabled;
+  List<String> localIps = [];
+  String? p2pStatusText;
 
   List<AppEntry> appEntries() {
     final m = metricsUsage.names();
@@ -2252,6 +2365,230 @@ class _SettingsPageState extends State<SettingsPage> {
     autostartEnabled().then((v) {
       if (mounted && v != auto) setState(() => auto = v);
     });
+    P2pSync.instance.localIpAddresses().then((ips) {
+      if (mounted) setState(() => localIps = ips);
+    });
+  }
+
+  Future<void> wizardStep1() async {
+    prefs.setFlag('localapi', true);
+    if (Platform.isAndroid) collector?.bridge.setApiService(true);
+    setState(() => localApi = true);
+    await Clipboard.setData(const ClipboardData(text: 'chrome://extensions'));
+    if (!Platform.isAndroid) {
+      final extDir = '${installDir()}${Platform.pathSeparator}extensions${Platform.pathSeparator}wolium-browser';
+      if (Directory(extDir).existsSync()) {
+        await openPath(extDir);
+      } else {
+        await openPath(installDir());
+      }
+    }
+    if (mounted) setState(() => extStatusText = tr('extStep1Done'));
+  }
+
+  Future<void> wizardStep2() async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final req = await client.getUrl(Uri.parse('http://127.0.0.1:9095/v1/browser/top?days=1&limit=3'));
+      final res = await req.close();
+      final body = await utf8.decoder.bind(res).join();
+      final map = jsonDecode(body) as Map<String, dynamic>;
+      final count = (map['domains'] as List<dynamic>? ?? const []).length;
+      if (mounted) {
+        setState(() {
+          extConnected = res.statusCode == 200;
+          extStatusText = res.statusCode == 200 ? tr('extConnected').replaceAll('{n}', '$count') : tr('extOffline');
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          extConnected = false;
+          extStatusText = tr('extOffline');
+        });
+      }
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> openConnectDialog() async {
+    final ipCtl = TextEditingController();
+    final pinCtl = TextEditingController();
+    String? err;
+    var busy = false;
+    await showDialog<void>(
+      context: context,
+      builder: (c) => StatefulBuilder(
+        builder: (c, setDlg) => AlertDialog(
+          backgroundColor: cPanel,
+          title: Text(tr('p2pConnect')),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: ipCtl,
+              decoration: InputDecoration(labelText: tr('p2pIpHint'), hintText: '192.168.1.42'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: pinCtl,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              decoration: InputDecoration(labelText: tr('p2pPinHint'), hintText: '123456'),
+            ),
+            if (err != null) Padding(padding: const EdgeInsets.only(top: 6), child: Text(err!, style: const TextStyle(color: cDanger, fontSize: 12))),
+          ]),
+          actions: [
+            TextButton(onPressed: busy ? null : () => Navigator.pop(c), child: Text(tr('cancel'))),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setDlg(() {
+                        busy = true;
+                        err = null;
+                      });
+                      final e = await P2pSync.instance.pairWithPeer(ipCtl.text, pinCtl.text);
+                      if (!c.mounted) return;
+                      if (e == null) {
+                        Navigator.pop(c);
+                        if (mounted) setState(() => p2pStatusText = tr('p2pPaired'));
+                      } else {
+                        setDlg(() {
+                          busy = false;
+                          err = e;
+                        });
+                      }
+                    },
+              child: Text(tr('p2pPairBtn')),
+            ),
+          ],
+        ),
+      ),
+    );
+    ipCtl.dispose();
+    pinCtl.dispose();
+  }
+
+  Widget browserExtSection() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(tr('extTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 2),
+      Text(tr('extHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+      const SizedBox(height: 8),
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        OutlinedButton.icon(
+          icon: const Icon(Icons.extension_outlined, size: 18),
+          label: Text(tr('extStep1')),
+          onPressed: wizardStep1,
+        ),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.check_circle_outline, size: 18),
+          label: Text(tr('extStep2')),
+          onPressed: wizardStep2,
+        ),
+      ]),
+      if (extStatusText != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text(extStatusText!, style: TextStyle(color: extConnected ? cOk : cMuted, fontWeight: FontWeight.w700, fontSize: 12)),
+        ),
+    ]);
+  }
+
+  Widget p2pSyncSection() {
+    return ValueListenableBuilder<List<PeerDevice>>(
+      valueListenable: P2pSync.instance.peers,
+      builder: (context, peers, _) => ValueListenableBuilder<String?>(
+        valueListenable: P2pSync.instance.activePin,
+        builder: (context, pin, _) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(tr('p2pTitle'), style: const TextStyle(fontWeight: FontWeight.w700))),
+            Switch(
+              value: p2pEnabled,
+              onChanged: (v) async {
+                await P2pSync.instance.setEnabled(v);
+                if (mounted) setState(() => p2pEnabled = v);
+              },
+            ),
+          ]),
+          Text(
+            '${tr('p2pHint')} (${localIps.isEmpty ? 'LAN' : localIps.join(', ')}:$kP2pPort)',
+            style: const TextStyle(color: cMuted, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.pin_outlined, size: 18),
+              label: Text(pin == null ? tr('p2pShowPin') : tr('p2pHidePin')),
+              onPressed: () async {
+                if (!p2pEnabled) {
+                  await P2pSync.instance.setEnabled(true);
+                  if (mounted) setState(() => p2pEnabled = true);
+                }
+                if (pin == null) {
+                  P2pSync.instance.startPinSession();
+                } else {
+                  P2pSync.instance.cancelPinSession();
+                }
+              },
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.devices, size: 18),
+              label: Text(tr('p2pConnect')),
+              onPressed: openConnectDialog,
+            ),
+            if (peers.isNotEmpty)
+              OutlinedButton.icon(
+                icon: const Icon(Icons.sync, size: 18),
+                label: Text(tr('p2pSyncNow')),
+                onPressed: () async {
+                  final n = await P2pSync.instance.syncAll();
+                  if (mounted) setState(() => p2pStatusText = tr('p2pSynced').replaceAll('{n}', '$n'));
+                },
+              ),
+          ]),
+          if (pin != null)
+            Container(
+              margin: const EdgeInsets.only(top: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(color: cPrimary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cPrimary)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('${tr('p2pPinLabel')}: ', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
+                SelectableText(pin, style: const TextStyle(color: cPrimary, fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 4)),
+              ]),
+            ),
+          if (p2pStatusText != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(p2pStatusText!, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
+            ),
+          for (final d in peers)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(children: [
+                const Icon(Icons.devices_other, size: 18, color: cMuted),
+                const SizedBox(width: 8),
+                Expanded(child: Text('${d.name} (${d.host})', overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600))),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: tr('p2pSyncNow'),
+                  icon: const Icon(Icons.sync, size: 18),
+                  onPressed: () async {
+                    final ok = await P2pSync.instance.syncPeer(d);
+                    if (mounted) setState(() => p2pStatusText = ok ? tr('p2pSynced').replaceAll('{n}', '1') : tr('p2pSyncErr'));
+                  },
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: tr('p2pRemove'),
+                  icon: const Icon(Icons.delete_outline, size: 18, color: cDanger),
+                  onPressed: () => P2pSync.instance.unpair(d.id),
+                ),
+              ]),
+            ),
+        ]),
+      ),
+    );
   }
 
   @override
@@ -2370,6 +2707,12 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ]),
         if (Platform.isAndroid) Text(tr('localApiAndroid'), style: const TextStyle(color: cMuted, fontSize: 12)),
+        if (!Platform.isAndroid) ...[
+          const Divider(height: 28),
+          browserExtSection(),
+        ],
+        const Divider(height: 28),
+        p2pSyncSection(),
         const Divider(height: 28),
         if (!Platform.isAndroid) ...[
           Row(children: [

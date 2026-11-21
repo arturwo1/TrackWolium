@@ -30,6 +30,8 @@ public:
   std::vector<Presence> load_presence(std::int64_t from_ts, std::int64_t to_ts);
   std::vector<UsageRow> usage(const std::string& from_day, const std::string& to_day) override;
   std::vector<SessionRow> sessions(long long from, long long to, int limit) override;
+  bool add_browser_usage(const std::string& day, const std::string& browser, const std::string& domain, long long ms) override;
+  std::vector<BrowserRow> browser_usage(const std::string& from_day, const std::string& to_day) override;
   std::string last_error() const;
 
 private:

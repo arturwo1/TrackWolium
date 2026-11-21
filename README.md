@@ -45,11 +45,9 @@
 
 | File | What it is |
 |---|---|
-| [`Wolium.msix`](https://github.com/arturwo1/TrackWolium/releases/latest/download/Wolium.msix) | Microsoft Store package, no built-in updater, optional start with Windows |
-| [`Wolium.aab`](https://github.com/arturwo1/TrackWolium/releases/latest/download/Wolium.aab) | Google Play bundle, no self-updater, no install permission |
-| [`SHA256SUMS.txt`](https://github.com/arturwo1/TrackWolium/releases/latest/download/SHA256SUMS.txt) | Checksums of every release file |
-
-Store builds update through the store. Details in [Building](docs/building.md).
+| [`Wolium.msix`](https://github.com/arturwo1/TrackWolium/releases/latest/download/Wolium.msix) | Microsoft Store package |
+| [`Wolium.aab`](https://github.com/arturwo1/TrackWolium/releases/latest/download/Wolium.aab) | Google Play bundle |
+| [`SHA256SUMS.txt`](https://github.com/arturwo1/TrackWolium/releases/latest/download/SHA256SUMS.txt) | Release checksums |
 
 <!--
 <a href="https://apps.microsoft.com/detail/REPLACE_WITH_STORE_ID"><img src="https://img.shields.io/badge/Microsoft_Store-Get_it-0078D4?style=for-the-badge&logo=microsoft&logoColor=white" alt="Get it from Microsoft Store"></a>
