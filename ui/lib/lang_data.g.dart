@@ -245,6 +245,9 @@ const strings = {
     'limitsHint': 'A soft notification when an app or category reaches its focus time for the day. Nothing is blocked.',
     'limitPerDay': 'Limit per day',
     'limitChannel': 'Daily limits',
+    'limitTooShort': 'The limit must be at least 1 minute',
+    'limitTooLong': 'The limit can be at most 24 hours',
+    'afkRange': 'From 30 seconds to 1 hour, or 0 to turn off',
   },
   'ru': {
     'brandSub': 'Трекер активности',
@@ -487,5 +490,8 @@ const strings = {
     'limitsHint': 'Мягкое уведомление, когда приложение или категория набирает лимит времени в фокусе за день. Ничего не блокируется.',
     'limitPerDay': 'Лимит в день',
     'limitChannel': 'Дневные лимиты',
+    'limitTooShort': 'Лимит не меньше 1 минуты',
+    'limitTooLong': 'Лимит не больше 24 часов',
+    'afkRange': 'От 30 секунд до 1 часа, или 0 чтобы выключить',
   },
 };

@@ -171,8 +171,8 @@ const _defaults = <_Default>[
     'chrome', 'msedge', 'firefox', 'opera', 'opera_gx', 'brave', 'vivaldi', 'iexplore', 'arc', 'browser', 'yandex', 'safari', 'chromium', 'chromium-browser', 'librewolf', 'waterfox', 'tor', 'zen', 'duckduckgo', 'google-chrome', 'microsoft-edge', 'firefox-esr', 'com.android.chrome', 'org.mozilla.firefox', 'org.mozilla.fenix', 'com.brave.browser', 'com.opera.browser', 'com.opera.gx', 'com.microsoft.emmx', 'com.sec.android.app.sbrowser', 'com.vivaldi.browser', 'com.duckduckgo.mobile.android', 'com.yandex.browser', 'org.chromium.chrome', 'com.kiwibrowser.browser',
   }, ['chrome', 'opera', 'firefox', 'mozilla', 'sbrowser', 'vivaldi'], ['browsers', 'browser', 'браузеры', 'браузер']),
   _Default('def_dev', 'catDefDev', 0xFF3BA55D, 'code', {
-    'code', 'code - insiders', 'devenv', 'idea64', 'idea', 'pycharm64', 'pycharm', 'webstorm64', 'webstorm', 'clion64', 'clion', 'rider64', 'rider', 'studio64', 'goland64', 'goland', 'rubymine64', 'phpstorm64', 'datagrip64', 'cursor', 'windsurf', 'sublime_text', 'notepad++', 'vim', 'nvim', 'emacs', 'gitkraken', 'githubdesktop', 'windowsterminal', 'wt', 'cmd', 'powershell', 'pwsh', 'putty', 'docker desktop', 'postman', 'zed', 'kate', 'gedit', 'konsole', 'gnome-terminal', 'alacritty', 'kitty', 'wezterm', 'xterm', 'flutter', 'dart', 'node', 'python', 'python3', 'git', 'sourcetree', 'insomnia', 'dbeaver', 'heidisql', 'termux', 'com.termux', 'com.github.android', 'com.android.tools.build',
-  }, [], ['development', 'dev', 'разработка']),
+    'code', 'code - insiders', 'devenv', 'idea64', 'idea', 'pycharm64', 'pycharm', 'webstorm64', 'webstorm', 'clion64', 'clion', 'rider64', 'rider', 'studio64', 'goland64', 'goland', 'rubymine64', 'phpstorm64', 'datagrip64', 'cursor', 'windsurf', 'sublime_text', 'notepad++', 'vim', 'nvim', 'emacs', 'gitkraken', 'githubdesktop', 'windowsterminal', 'wt', 'cmd', 'powershell', 'pwsh', 'putty', 'docker desktop', 'postman', 'zed', 'kate', 'gedit', 'konsole', 'gnome-terminal', 'alacritty', 'kitty', 'wezterm', 'xterm', 'flutter', 'dart', 'node', 'python', 'python3', 'git', 'sourcetree', 'insomnia', 'dbeaver', 'heidisql', 'termux', 'com.termux', 'com.termux.api', 'com.github.android', 'com.android.tools.build', 'com.microsoft.vscode', 'com.foxdebug.acode', 'com.foxdebug.acodefree', 'ru.iiec.pydroid3', 'com.termoneplus', 'org.connectbot', 'com.sonelli.juicessh', 'com.server.auditor.ssh.client', 'org.gnu.emacs', 'com.jetbrains.fleet',
+  }, ['termux', 'github', 'vscode', 'acode', 'pydroid', 'ssh'], ['development', 'dev', 'разработка']),
   _Default('def_chat', 'catDefChat', 0xFF5865F2, 'chat', {
     'discord', 'discordptb', 'discordcanary', 'telegram', 'whatsapp', 'slack', 'teams', 'ms-teams', 'skype', 'zoom', 'viber', 'signal', 'element', 'thunderbird', 'outlook', 'olk', 'vk', 'max', 'org.telegram.messenger', 'org.telegram.messenger.web', 'org.thunderdog.challegram', 'com.whatsapp', 'com.discord', 'com.viber.voip', 'org.thoughtcrime.securesms', 'com.vkontakte.android', 'com.facebook.orca', 'com.skype.raider', 'com.slack', 'us.zoom.videomeetings', 'com.microsoft.teams', 'com.google.android.gm', 'com.google.android.apps.messaging', 'com.samsung.android.messaging',
   }, ['telegram', 'discord', 'aliucord', 'whatsapp', 'viber', 'skype'], ['communication', 'chat', 'chats', 'общение', 'чаты', 'мессенджеры']),
@@ -186,7 +186,7 @@ class Categories {
   static final Set<String> seeded = {};
   static final Set<String> decided = {};
   static final Map<String, String> links = {};
-  static const rulesVersion = 3;
+  static const rulesVersion = 4;
 
   static File get _file => File(_path('categories.json'));
 
@@ -300,8 +300,6 @@ class Categories {
         return 'def_media';
       case 4:
         return 'def_chat';
-      case 7:
-        return 'def_dev';
     }
     return null;
   }

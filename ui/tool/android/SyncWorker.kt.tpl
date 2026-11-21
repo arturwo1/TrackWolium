@@ -89,7 +89,7 @@ object Sync {
   fun systemCategory(ctx: Context, pkg: String): Int {
     return try {
       val info = ctx.packageManager.getApplicationInfo(pkg, 0)
-      if (Build.VERSION.SDK_INT >= 26) info.category else if (info.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME != 0) 0 else -1
+      if ((info.flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME) != 0) 0 else if (Build.VERSION.SDK_INT >= 26) info.category else -1
     } catch (ex: Exception) {
       -1
     }
@@ -344,6 +344,10 @@ object Sync {
         db.execSQL("INSERT OR IGNORE INTO apps(app, name, path) VALUES(?, ?, '')", arrayOf<Any>(pkg, ri.loadLabel(ctx.packageManager).toString()))
         known.add(pkg)
       }
+      val vc = db.rawQuery("SELECT cat FROM appcat WHERE app = '__v'", null)
+      val version = if (vc.moveToFirst()) vc.getInt(0) else 0
+      vc.close()
+      if (version != 3) db.execSQL("DELETE FROM appcat")
       val have = HashSet<String>()
       val hc = db.rawQuery("SELECT app FROM appcat", null)
       while (hc.moveToNext()) have.add(hc.getString(0))
@@ -353,6 +357,7 @@ object Sync {
         for (app in known) {
           if (!have.contains(app)) db.execSQL("INSERT OR REPLACE INTO appcat(app, cat) VALUES(?, ?)", arrayOf<Any>(app, systemCategory(ctx, app)))
         }
+        db.execSQL("INSERT OR REPLACE INTO appcat(app, cat) VALUES('__v', 3)")
         db.setTransactionSuccessful()
       } finally {
         db.endTransaction()

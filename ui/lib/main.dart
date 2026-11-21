@@ -453,11 +453,11 @@ class _ShellState extends State<Shell> {
                     behavior: HitTestBehavior.opaque,
                     onHorizontalDragStart: (d) {
                       resizeStartX = d.globalPosition.dx;
-                      resizeStartW = ColumnPrefs.widths[k] ?? c.maxWidth;
+                      resizeStartW = c.maxWidth;
                       resizing = true;
                     },
                     onHorizontalDragUpdate: (d) {
-                      final w = (resizeStartW + (d.globalPosition.dx - resizeStartX)).clamp(60.0, 420.0).toDouble();
+                      final w = (resizeStartW + (d.globalPosition.dx - resizeStartX)).clamp(colMin(k, head), 700.0).toDouble();
                       ColumnPrefs.setWidth(k, w, persist: false);
                     },
                     onHorizontalDragEnd: (_) {
@@ -1614,14 +1614,14 @@ class _ShellState extends State<Shell> {
 
   Widget wideTableBody(TextStyle head, List<String> ids, int cols, double maxWidth, Widget Function(String?, Widget, {AppUsage? row}) hov, Widget Function(String, AppUsage, {TextStyle? style}) cell) {
     final w = ColumnPrefs.widths;
-    final fixedSum = [for (final k in ['app', ...ids]) w[k] ?? 0.0].fold<double>(0, (a, b) => a + b) + 44;
-    final useWidths = resizing || fixedSum + 120 < maxWidth;
-    double? width(String k) => useWidths ? w[k] : null;
-    return Table(
+    final keys = ['app', ...ids];
+    final eff = <String, double>{for (final k in keys) k: math.max(colMin(k, head), w[k] ?? (k == 'app' ? 220.0 : 110.0))};
+    final base = eff.values.fold<double>(0, (a, b) => a + b) + 44;
+    if (w['app'] == null && base < maxWidth) eff['app'] = eff['app']! + (maxWidth - base);
+    final total = eff.values.fold<double>(0, (a, b) => a + b) + 44;
+    final table = Table(
       columnWidths: <int, TableColumnWidth>{
-        0: width('app') != null ? FixedColumnWidth(width('app')!) : const FlexColumnWidth(3),
-        for (var i = 0; i < ids.length; i++)
-          if (width(ids[i]) != null) i + 1: FixedColumnWidth(width(ids[i])!),
+        for (var i = 0; i < keys.length; i++) i: FixedColumnWidth(eff[keys[i]]!),
         cols: const FixedColumnWidth(44),
       },
       children: [
@@ -1661,6 +1661,14 @@ class _ShellState extends State<Shell> {
           ),
       ],
     );
+    if (total <= maxWidth + 0.5) return table;
+    return SingleChildScrollView(scrollDirection: Axis.horizontal, child: SizedBox(width: total, child: table));
+  }
+
+  double colMin(String k, TextStyle head) {
+    final text = k == 'app' ? tr('app') : columnLabel(k);
+    final tp = TextPainter(text: TextSpan(text: text, style: head.copyWith(fontWeight: FontWeight.w800)), textDirection: TextDirection.ltr, maxLines: 1)..layout();
+    return math.max(k == 'app' ? 140.0 : 76.0, tp.width + 44);
   }
 
   Widget compactList(TextStyle head) {
@@ -1924,7 +1932,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String rpcStatus = '';
   late int afkSeconds = readAfkSeconds();
   late final TextEditingController afkCtl = TextEditingController(text: afkSeconds == 0 ? '0' : durationText(afkSeconds));
-  bool afkBad = false;
+  String? afkError;
   bool rpcRestarting = false;
   Timer? rpcTimer;
 
@@ -2330,12 +2338,12 @@ class _SettingsPageState extends State<SettingsPage> {
               width: 150,
               child: TextField(
                 controller: afkCtl,
-                decoration: InputDecoration(isDense: true, hintText: tr('durationHint'), errorText: afkBad ? tr('durationBad') : null),
+                decoration: InputDecoration(isDense: true, hintText: tr('durationHint'), errorText: afkError),
                 onChanged: (v) {
                   final n = v.trim() == '0' ? 0 : parseDuration(v);
-                  setState(() => afkBad = n == null);
-                  if (n == null) return;
-                  afkSeconds = n == 0 ? 0 : n.clamp(30, 3600).toInt();
+                  setState(() => afkError = n == null ? tr('durationBad') : (n != 0 && (n < 30 || n > 3600) ? tr('afkRange') : null));
+                  if (n == null || afkError != null) return;
+                  afkSeconds = n;
                   writeAfkSeconds(afkSeconds);
                 },
               ),

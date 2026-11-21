@@ -236,7 +236,8 @@ Future<void> limitDialog(BuildContext context, {String? app, String? title, List
     builder: (c) => StatefulBuilder(
       builder: (c, set) {
         final secs = parseDuration(ctl.text);
-        final ok = target.isNotEmpty && secs != null && secs >= 60;
+        final String? err = ctl.text.trim().isEmpty ? null : (secs == null ? tr('durationBad') : (secs < 60 ? tr('limitTooShort') : (secs > 86400 ? tr('limitTooLong') : null)));
+        final ok = target.isNotEmpty && secs != null && err == null && ctl.text.trim().isNotEmpty;
         String nameOf(String t) {
           if (t.startsWith('cat:')) return Categories.byId(t.substring(4))?.name ?? '';
           final id = t.substring(4);
@@ -269,7 +270,7 @@ Future<void> limitDialog(BuildContext context, {String? app, String? title, List
                 controller: ctl,
                 autofocus: true,
                 onChanged: (_) => set(() {}),
-                decoration: InputDecoration(labelText: tr('limitPerDay'), hintText: tr('durationHint'), errorText: ctl.text.trim().isNotEmpty && !ok ? tr('durationBad') : null),
+                decoration: InputDecoration(labelText: tr('limitPerDay'), hintText: tr('durationHint'), errorText: err),
               ),
             ]),
           ),

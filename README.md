@@ -45,11 +45,16 @@
 
 | File | What it is |
 |---|---|
-| `Wolium.msix` | Microsoft Store package, no built-in updater, optional start with Windows |
-| `Wolium.aab` | Google Play bundle, no self-updater, no install permission |
-| `SHA256SUMS.txt` | Checksums of every release file |
+| [`Wolium.msix`](https://github.com/arturwo1/TrackWolium/releases/latest/download/Wolium.msix) | Microsoft Store package, no built-in updater, optional start with Windows |
+| [`Wolium.aab`](https://github.com/arturwo1/TrackWolium/releases/latest/download/Wolium.aab) | Google Play bundle, no self-updater, no install permission |
+| [`SHA256SUMS.txt`](https://github.com/arturwo1/TrackWolium/releases/latest/download/SHA256SUMS.txt) | Checksums of every release file |
 
 Store builds update through the store. Details in [Building](docs/building.md).
+
+<!--
+<a href="https://apps.microsoft.com/detail/REPLACE_WITH_STORE_ID"><img src="https://img.shields.io/badge/Microsoft_Store-Get_it-0078D4?style=for-the-badge&logo=microsoft&logoColor=white" alt="Get it from Microsoft Store"></a>
+<a href="https://play.google.com/store/apps/details?id=io.github.arturwo1.wolium"><img src="https://img.shields.io/badge/Google_Play-Get_it-34A853?style=for-the-badge&logo=googleplay&logoColor=white" alt="Get it on Google Play"></a>
+-->
 
 </details>
 
