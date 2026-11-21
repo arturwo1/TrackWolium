@@ -101,7 +101,10 @@ class _RootState extends State<Root> {
     if (accepted) {
       startService();
       collector?.bridge.requestNotifications();
-      if (Platform.isAndroid && settings.flag('localapi')) collector?.bridge.setApiService(true);
+      if (Platform.isAndroid) {
+        if (settings.flag('localapi')) collector?.bridge.setApiService(true);
+        collector?.bridge.setCrashLogs(!settings.flag('nocrashlogs'));
+      }
     }
   }
 
@@ -1293,14 +1296,17 @@ class _ShellState extends State<Shell> {
       builder: (context) => AlertDialog(
         backgroundColor: cPanel,
         title: Text(tr('helpTitle')),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(tr('helpWhat')),
-            const SizedBox(height: 12),
-            Text(tr('helpMouse'), style: const TextStyle(color: cMuted)),
-            const SizedBox(height: 8),
-            Text(tr('helpTouch'), style: const TextStyle(color: cMuted)),
-          ]),
+        content: SelectionArea(
+          contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(tr('helpWhat')),
+              const SizedBox(height: 12),
+              Text(tr('helpMouse'), style: const TextStyle(color: cMuted)),
+              const SizedBox(height: 8),
+              Text(tr('helpTouch'), style: const TextStyle(color: cMuted)),
+            ]),
+          ),
         ),
         actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(tr('ok')))],
       ),
@@ -2048,6 +2054,20 @@ class _SettingsPageState extends State<SettingsPage> {
   bool p2pEnabled = P2pSync.instance.enabled;
   List<String> localIps = [];
   String? p2pStatusText;
+  late bool crashLogs = !prefs.flag('nocrashlogs');
+
+  void copyText(String value) {
+    Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text('${tr('copied')}: $value'), duration: const Duration(seconds: 2)));
+  }
+
+  Widget wrapSelectable(Widget child) => SelectionArea(
+        contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
+        child: child,
+      );
 
   List<AppEntry> appEntries() {
     final m = metricsUsage.names();
@@ -2205,8 +2225,9 @@ class _SettingsPageState extends State<SettingsPage> {
     showDialog<void>(
       context: context,
       builder: (c) => AlertDialog(
+        backgroundColor: cPanel,
         title: Text(tr('discordRpc')),
-        content: Text(tr('rpcRestartHelp')),
+        content: wrapSelectable(Text(tr('rpcRestartHelp'))),
         actions: [TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok')))],
       ),
     );
@@ -2218,8 +2239,9 @@ class _SettingsPageState extends State<SettingsPage> {
     showDialog<void>(
       context: context,
       builder: (c) => AlertDialog(
+        backgroundColor: cPanel,
         title: Text(tr('localApi')),
-        content: Text(tr('localApiHint')),
+        content: wrapSelectable(Text(tr('localApiHint'))),
         actions: [
           TextButton(onPressed: () => open('https://github.com/arturwo1/TrackWolium/blob/main/docs/local-api.md'), child: Text(tr('localApiDocs'))),
           TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok'))),
@@ -2339,8 +2361,9 @@ class _SettingsPageState extends State<SettingsPage> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
+          backgroundColor: cPanel,
           title: Text(tr('localApi')),
-          content: Text(tr('localApiWarn')),
+          content: wrapSelectable(Text(tr('localApiWarn'))),
           actions: [
             TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('cancel'))),
             TextButton(onPressed: () => Navigator.pop(c, true), child: Text(tr('enable'))),
@@ -2370,20 +2393,104 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
+  String _extFolderPath() {
+    final extDir = '${installDir()}${Platform.pathSeparator}extensions${Platform.pathSeparator}wolium-browser';
+    return Directory(extDir).existsSync() ? extDir : installDir();
+  }
+
+  Future<void> openExtensionGuide() async {
+    final extDir = _extFolderPath();
+    String? copiedHint;
+    await showDialog<void>(
+      context: context,
+      builder: (c) => StatefulBuilder(
+        builder: (c, setDlg) {
+          Widget urlChip(String label, String url) => ActionChip(
+                avatar: const Icon(Icons.copy, size: 15, color: cPrimary),
+                label: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: url));
+                  setDlg(() => copiedHint = '${tr('copied')}: $url');
+                },
+              );
+          return AlertDialog(
+            backgroundColor: cPanel,
+            title: Text(tr('extGuideTitle')),
+            content: SizedBox(
+              width: 520,
+              child: wrapSelectable(
+                SingleChildScrollView(
+                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(tr('extGuideIntro'), style: const TextStyle(color: cMuted, fontSize: 13)),
+                    const SizedBox(height: 12),
+                    Text(tr('extGuideStep1'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    const SizedBox(height: 6),
+                    Wrap(spacing: 6, runSpacing: 6, children: [
+                      urlChip('Chrome / Edge / Yandex / Brave', 'chrome://extensions'),
+                      urlChip('Opera', 'opera://extensions'),
+                      urlChip('Firefox', 'about:debugging#/runtime/this-firefox'),
+                    ]),
+                    if (copiedHint != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(copiedHint!, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
+                      ),
+                    const SizedBox(height: 12),
+                    Text(tr('extGuideStep2'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    const SizedBox(height: 10),
+                    Text(tr('extGuideStep3'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    const SizedBox(height: 6),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(color: cSoft, borderRadius: BorderRadius.circular(rSm), border: Border.fromBorderSide(line)),
+                      child: Row(children: [
+                        Expanded(child: SelectableText(extDir, style: const TextStyle(fontSize: 12))),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          tooltip: tr('extCopyPath'),
+                          icon: const Icon(Icons.copy, size: 17),
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: extDir));
+                            setDlg(() => copiedHint = '${tr('copied')}: $extDir');
+                          },
+                        ),
+                      ]),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(spacing: 8, runSpacing: 6, children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.folder_open, size: 17),
+                        label: Text(tr('openFolder')),
+                        onPressed: () => openPath(extDir),
+                      ),
+                    ]),
+                    const SizedBox(height: 8),
+                    Text(tr('extGuideFirefox'), style: const TextStyle(color: cMuted, fontSize: 12)),
+                    const SizedBox(height: 10),
+                    Text(tr('extGuideStep4'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  ]),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok'))),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> wizardStep1() async {
     prefs.setFlag('localapi', true);
     if (Platform.isAndroid) collector?.bridge.setApiService(true);
-    setState(() => localApi = true);
-    await Clipboard.setData(const ClipboardData(text: 'chrome://extensions'));
-    if (!Platform.isAndroid) {
-      final extDir = '${installDir()}${Platform.pathSeparator}extensions${Platform.pathSeparator}wolium-browser';
-      if (Directory(extDir).existsSync()) {
-        await openPath(extDir);
-      } else {
-        await openPath(installDir());
-      }
-    }
-    if (mounted) setState(() => extStatusText = tr('extStep1Done'));
+    setState(() {
+      localApi = true;
+      extStatusText = tr('extStep1Done');
+    });
+    if (!Platform.isAndroid) await openPath(_extFolderPath());
+    if (mounted) await openExtensionGuide();
   }
 
   Future<void> wizardStep2() async {
@@ -2423,20 +2530,34 @@ class _SettingsPageState extends State<SettingsPage> {
         builder: (c, setDlg) => AlertDialog(
           backgroundColor: cPanel,
           title: Text(tr('p2pConnect')),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
-              controller: ipCtl,
-              decoration: InputDecoration(labelText: tr('p2pIpHint'), hintText: '192.168.1.42'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: pinCtl,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              decoration: InputDecoration(labelText: tr('p2pPinHint'), hintText: '123456'),
-            ),
-            if (err != null) Padding(padding: const EdgeInsets.only(top: 6), child: Text(err!, style: const TextStyle(color: cDanger, fontSize: 12))),
-          ]),
+          content: wrapSelectable(
+            Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              TextField(
+                controller: ipCtl,
+                decoration: InputDecoration(labelText: tr('p2pIpHint'), hintText: '192.168.1.42:9096'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: pinCtl,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                decoration: InputDecoration(labelText: tr('p2pPinHint'), hintText: '123456'),
+              ),
+              if (err != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Expanded(child: SelectableText(err!, style: const TextStyle(color: cDanger, fontSize: 12))),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: tr('copy'),
+                      icon: const Icon(Icons.copy, size: 16, color: cMuted),
+                      onPressed: () => copyText(err!),
+                    ),
+                  ]),
+                ),
+            ]),
+          ),
           actions: [
             TextButton(onPressed: busy ? null : () => Navigator.pop(c), child: Text(tr('cancel'))),
             FilledButton(
@@ -2490,7 +2611,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (extStatusText != null)
         Padding(
           padding: const EdgeInsets.only(top: 8),
-          child: Text(extStatusText!, style: TextStyle(color: extConnected ? cOk : cMuted, fontWeight: FontWeight.w700, fontSize: 12)),
+          child: SelectableText(extStatusText!, style: TextStyle(color: extConnected ? cOk : cMuted, fontWeight: FontWeight.w700, fontSize: 12)),
         ),
     ]);
   }
@@ -2511,10 +2632,20 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
           ]),
-          Text(
-            '${tr('p2pHint')} (${localIps.isEmpty ? 'LAN' : localIps.join(', ')}:$kP2pPort)',
-            style: const TextStyle(color: cMuted, fontSize: 12),
-          ),
+          Text(tr('p2pHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+          if (localIps.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(tr('p2pYourIps'), style: const TextStyle(color: cMuted, fontSize: 11)),
+            const SizedBox(height: 4),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              for (final ip in localIps)
+                ActionChip(
+                  avatar: const Icon(Icons.copy, size: 14, color: cPrimary),
+                  label: Text('$ip:$kP2pPort', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                  onPressed: () => copyText('$ip:$kP2pPort'),
+                ),
+            ]),
+          ],
           const SizedBox(height: 8),
           Wrap(spacing: 8, runSpacing: 8, children: [
             OutlinedButton.icon(
@@ -2550,17 +2681,24 @@ class _SettingsPageState extends State<SettingsPage> {
           if (pin != null)
             Container(
               margin: const EdgeInsets.only(top: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(color: cPrimary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(rSm), border: Border.all(color: cPrimary)),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Text('${tr('p2pPinLabel')}: ', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
                 SelectableText(pin, style: const TextStyle(color: cPrimary, fontSize: 20, fontWeight: FontWeight.w900, letterSpacing: 4)),
+                const SizedBox(width: 6),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: tr('copy'),
+                  icon: const Icon(Icons.copy, size: 18, color: cPrimary),
+                  onPressed: () => copyText(pin),
+                ),
               ]),
             ),
           if (p2pStatusText != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(p2pStatusText!, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
+              child: SelectableText(p2pStatusText!, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
             ),
           for (final d in peers)
             Padding(
@@ -2568,7 +2706,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Row(children: [
                 const Icon(Icons.devices_other, size: 18, color: cMuted),
                 const SizedBox(width: 8),
-                Expanded(child: Text('${d.name} (${d.host})', overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600))),
+                Expanded(child: SelectableText('${d.name} (${d.host}:${d.port})', style: const TextStyle(fontWeight: FontWeight.w600))),
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   tooltip: tr('p2pSyncNow'),
@@ -2593,7 +2731,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Panel(
+    final panel = Panel(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Expanded(child: Text(tr('version'), style: const TextStyle(fontWeight: FontWeight.w700))),
@@ -2771,6 +2909,23 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ]),
           const Divider(height: 28),
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(tr('crashLogsTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(tr('crashLogsHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+              ]),
+            ),
+            Switch(
+              value: crashLogs,
+              onChanged: (v) async {
+                prefs.setFlag('nocrashlogs', !v);
+                await collector?.bridge.setCrashLogs(v);
+                if (mounted) setState(() => crashLogs = v);
+              },
+            ),
+          ]),
+          const Divider(height: 28),
         ],
         if (!Platform.isAndroid) ...[
           metricsSection(),
@@ -2885,6 +3040,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ]),
       ]),
     );
+    return Platform.isAndroid ? SelectionArea(child: panel) : panel;
   }
 }
 

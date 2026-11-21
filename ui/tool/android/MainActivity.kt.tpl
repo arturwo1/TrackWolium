@@ -40,7 +40,6 @@ class MainActivity : FlutterActivity() {
       val constraints = builder.build()
       val check = PeriodicWorkRequestBuilder<UpdateWorker>(24, TimeUnit.HOURS)
         .setConstraints(constraints)
-        .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.MINUTES)
         .build()
       WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-update", ExistingPeriodicWorkPolicy.UPDATE, check)
     } catch (ex: Throwable) {
@@ -208,6 +207,16 @@ class MainActivity : FlutterActivity() {
           }
           result.success(outcome)
         }
+        "setCrashLogs" -> {
+          val on = call.argument<Boolean>("on") ?: true
+          try {
+            applicationContext.getSharedPreferences("wolium", Context.MODE_PRIVATE).edit().putBoolean("crash_logs", on).apply()
+            if (!on) CrashLog.clear(applicationContext)
+          } catch (_: Exception) {
+          }
+          result.success(null)
+        }
+        "getCrashLogs" -> result.success(CrashLog.isEnabled(applicationContext))
         "vibrate" -> {
           try {
             val ms = (call.argument<Int>("ms") ?: 10).toLong()

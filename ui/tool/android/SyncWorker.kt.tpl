@@ -563,11 +563,45 @@ class CrashLog(private val ctx: Context, private val next: Thread.UncaughtExcept
   }
 
   companion object {
+    fun isEnabled(ctx: Context): Boolean {
+      return try {
+        ctx.getSharedPreferences("wolium", Context.MODE_PRIVATE).getBoolean("crash_logs", true)
+      } catch (_: Throwable) {
+        true
+      }
+    }
+
+    fun clear(ctx: Context) {
+      try {
+        File(ctx.filesDir, "crash.txt").delete()
+      } catch (_: Throwable) {
+      }
+      try {
+        if (Build.VERSION.SDK_INT >= 29) {
+          ctx.contentResolver.delete(
+            android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            "${android.provider.MediaStore.Downloads.DISPLAY_NAME} LIKE ?",
+            arrayOf("wolium_crash%")
+          )
+        }
+      } catch (_: Throwable) {
+      }
+    }
+
     fun write(ctx: Context, e: Throwable) {
       try {
+        if (!isEnabled(ctx)) return
         val text = android.util.Log.getStackTraceString(e)
         File(ctx.filesDir, "crash.txt").writeText(text)
         if (Build.VERSION.SDK_INT >= 29) {
+          try {
+            ctx.contentResolver.delete(
+              android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+              "${android.provider.MediaStore.Downloads.DISPLAY_NAME} LIKE ?",
+              arrayOf("wolium_crash%")
+            )
+          } catch (_: Throwable) {
+          }
           val values = android.content.ContentValues()
           values.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, "wolium_crash.txt")
           values.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")

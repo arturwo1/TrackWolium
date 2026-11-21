@@ -190,6 +190,10 @@ class UsageBridge {
 
   Future<void> setApiService(bool on) async => _channel.invokeMethod('apiService', {'on': on});
 
+  Future<void> setCrashLogs(bool on) async => _channel.invokeMethod('setCrashLogs', {'on': on});
+
+  Future<bool> getCrashLogs() async => (await _channel.invokeMethod<bool>('getCrashLogs')) ?? true;
+
   Future<Uint8List?> icon(String pkg) async => _channel.invokeMethod<Uint8List>('icon', {'pkg': pkg});
 
   Future<String?> saveFile(String name, List<int> bytes, {String mime = 'text/csv'}) async =>

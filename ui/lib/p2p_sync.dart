@@ -140,11 +140,59 @@ class P2pSync {
       final ifaces = await NetworkInterface.list(type: InternetAddressType.IPv4, includeLinkLocal: false);
       for (final iface in ifaces) {
         for (final addr in iface.addresses) {
-          if (!addr.isLoopback) ips.add(addr.address);
+          if (!addr.isLoopback && !ips.contains(addr.address)) ips.add(addr.address);
         }
       }
     } catch (_) {}
+    int rank(String ip) {
+      if (ip.startsWith('192.168.')) return 0;
+      if (ip.startsWith('10.')) return 1;
+      if (ip.startsWith('172.')) return 2;
+      return 3;
+    }
+    ips.sort((a, b) => rank(a).compareTo(rank(b)));
     return ips;
+  }
+
+  static ({String host, int port})? parseEndpoint(String raw, {int defaultPort = kP2pPort}) {
+    var s = raw.trim();
+    if (s.isEmpty) return null;
+    if (s.startsWith('http://')) {
+      s = s.substring(7);
+    } else if (s.startsWith('https://')) {
+      s = s.substring(8);
+    }
+    final slash = s.indexOf('/');
+    if (slash >= 0) s = s.substring(0, slash);
+    s = s.trim();
+    if (s.isEmpty) return null;
+
+    var host = s;
+    var port = defaultPort;
+    if (s.startsWith('[')) {
+      final end = s.indexOf(']');
+      if (end <= 1) return null;
+      host = s.substring(1, end).trim();
+      final rest = s.substring(end + 1).trim();
+      if (rest.startsWith(':')) {
+        final p = int.tryParse(rest.substring(1).trim());
+        if (p == null || p < 1 || p > 65535) return null;
+        port = p;
+      }
+    } else {
+      final colon = s.lastIndexOf(':');
+      if (colon > 0 && s.indexOf(':') == colon) {
+        final h = s.substring(0, colon).trim();
+        final pStr = s.substring(colon + 1).trim();
+        if (h.isEmpty) return null;
+        final p = int.tryParse(pStr);
+        if (p == null || p < 1 || p > 65535) return null;
+        host = h;
+        port = p;
+      }
+    }
+    if (host.isEmpty) return null;
+    return (host: host, port: port);
   }
 
   Future<void> setEnabled(bool on) async {
@@ -306,14 +354,15 @@ class P2pSync {
 
   Future<String?> pairWithPeer(String host, String pin, {int port = kP2pPort}) async {
     await start();
-    final cleanHost = host.trim();
-    if (cleanHost.isEmpty || pin.trim().length != 6) return 'Invalid IP or PIN';
+    final ep = parseEndpoint(host, defaultPort: port);
+    final cleanPin = pin.trim();
+    if (ep == null || cleanPin.length != 6) return 'Invalid IP or PIN';
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
-      final req = await client.post(cleanHost, port, '/p2p/pair');
+      final req = await client.post(ep.host, ep.port, '/p2p/pair');
       req.headers.contentType = ContentType.json;
       req.write(jsonEncode({
-        'pin': pin.trim(),
+        'pin': cleanPin,
         'id': deviceId,
         'name': deviceName,
         'platform': platformName,
@@ -327,10 +376,10 @@ class P2pSync {
       }
       final peer = PeerDevice(
         id: data['id'] as String,
-        name: data['name'] as String? ?? cleanHost,
+        name: data['name'] as String? ?? ep.host,
         platform: data['platform'] as String? ?? 'unknown',
-        host: cleanHost,
-        port: port,
+        host: ep.host,
+        port: ep.port,
         token: data['token'] as String,
       );
       final next = peers.value.where((p) => p.id != peer.id).toList()..add(peer);
@@ -346,9 +395,11 @@ class P2pSync {
   }
 
   Future<bool> syncPeer(PeerDevice peer) async {
+    final ep = parseEndpoint(peer.host, defaultPort: peer.port);
+    if (ep == null) return false;
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
     try {
-      final req = await client.post(peer.host, peer.port, '/p2p/sync');
+      final req = await client.post(ep.host, ep.port, '/p2p/sync');
       req.headers.contentType = ContentType.json;
       req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${peer.token}');
       req.write(jsonEncode(_exportSnapshot()));
@@ -356,7 +407,7 @@ class P2pSync {
       if (res.statusCode != 200) return false;
       final text = await utf8.decoder.bind(res).join();
       final data = jsonDecode(text) as Map<String, dynamic>;
-      _importSnapshot(peer.id, data, peer.host, peer.port);
+      _importSnapshot(peer.id, data, ep.host, ep.port);
       return true;
     } catch (_) {
       return false;
