@@ -794,6 +794,23 @@ void test_engine_afk_counts_idle_focus() {
   CHECK(store2->afk.empty());
 }
 
+void test_limits_parse_and_fire_once() {
+  auto l = tw::parse_limits("3600\tGames\ta\x1f" "b\n30\tbad\ta\nxx\tbad\ta\n60\tOne\tc\n");
+  CHECK(l.size() == 2);
+  CHECK(l[0].label == "Games" && l[0].apps.size() == 2 && l[0].seconds == 3600);
+  auto probe = std::make_shared<MetricsProbe>();
+  tw::Engine e(probe, Duration(120000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_limits(tw::parse_limits("60\tOne\ta\n"));
+  std::vector<std::string> fired;
+  e.set_limit_notifier([&](const tw::Limit& lim, long long) { fired.push_back(lim.label); });
+  probe->push({{"a", State::Focused}});
+  for (int i = 0; i <= 70; ++i) e.step(at(i * 1000));
+  CHECK(fired.size() == 1 && fired[0] == "One");
+  for (int i = 71; i < 90; ++i) e.step(at(i * 1000));
+  CHECK(fired.size() == 1);
+}
+
 void test_afk_threshold_parse() {
   CHECK(tw::parse_afk_threshold("").count() == 300000);
   CHECK(tw::parse_afk_threshold("120\n").count() == 120000);
@@ -939,6 +956,7 @@ int main() {
   test_engine_time_can_be_disabled();
   test_engine_afk_counts_idle_focus();
   test_afk_threshold_parse();
+  test_limits_parse_and_fire_once();
   test_proc_tracker_ignores_old_unseen_processes();
   test_sqlite_resources();
   test_native_metrics_smoke();

@@ -41,6 +41,19 @@
 > Wolium is not code-signed yet, so Windows and macOS warn on first start. On a fresh Windows 11 the download may even be blocked before you can open it. See the [Windows download guide](docs/windows-download.md) for the safe way through and how to verify the file.
 
 <details>
+<summary><b>Other formats and store builds</b></summary>
+
+| File | What it is |
+|---|---|
+| `Wolium.msix` | Microsoft Store package, no built-in updater, optional start with Windows |
+| `Wolium.aab` | Google Play bundle, no self-updater, no install permission |
+| `SHA256SUMS.txt` | Checksums of every release file |
+
+Store builds update through the store. Details in [Building](docs/building.md).
+
+</details>
+
+<details>
 <summary><b>Graph controls</b></summary>
 
 | Action | Mouse | Touch |

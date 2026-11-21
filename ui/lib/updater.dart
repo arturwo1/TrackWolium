@@ -31,7 +31,9 @@ String? readyInstaller(String version) {
   }
 }
 
-final bool updaterSupported = Platform.isWindows || Platform.isAndroid || Platform.isLinux || Platform.isMacOS;
+const bool storeBuild = bool.fromEnvironment('STORE_BUILD');
+
+final bool updaterSupported = !storeBuild && (Platform.isWindows || Platform.isAndroid || Platform.isLinux || Platform.isMacOS);
 
 String updateAsset() {
   if (Platform.isAndroid) return 'Wolium.apk';

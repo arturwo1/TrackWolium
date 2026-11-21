@@ -268,6 +268,7 @@ class Categories {
       Directory(dataDir()).createSync(recursive: true);
       _file.writeAsStringSync(jsonEncode({'v': 2, 'rules': rulesVersion, 'seeded': seeded.toList()..sort(), 'decided': decided.toList()..sort(), 'links': links, 'categories': [for (final c in list.value) c.toJson()]}));
     } catch (_) {}
+    LimitPrefs.writeCore();
     if (notify) list.value = List<Category>.of(list.value);
   }
 
@@ -372,6 +373,96 @@ class Categories {
       imageCache.clearLiveImages();
       c.icon = 'img';
       save();
+    } catch (_) {}
+  }
+}
+
+class DayLimit {
+  DayLimit(this.kind, this.id, this.name, this.seconds);
+
+  final String kind;
+  final String id;
+  String name;
+  int seconds;
+
+  Map<String, dynamic> toJson() => {'kind': kind, 'id': id, 'name': name, 'seconds': seconds};
+}
+
+class LimitPrefs {
+  static final ValueNotifier<List<DayLimit>> list = ValueNotifier(<DayLimit>[]);
+
+  static File get _file => File(_path('limits.json'));
+
+  static void load() {
+    try {
+      if (!_file.existsSync()) return;
+      final raw = jsonDecode(_file.readAsStringSync());
+      if (raw is! List) return;
+      final out = <DayLimit>[];
+      for (final e in raw) {
+        if (e is! Map || e['kind'] is! String || e['id'] is! String || e['seconds'] is! int) continue;
+        out.add(DayLimit(e['kind'] as String, e['id'] as String, e['name'] is String ? e['name'] as String : e['id'] as String, e['seconds'] as int));
+      }
+      list.value = out;
+    } catch (_) {}
+    writeCore();
+  }
+
+  static void set(String kind, String id, String name, int seconds) {
+    final next = [for (final l in list.value) if (!(l.kind == kind && l.id == id)) l];
+    if (seconds >= 60) next.add(DayLimit(kind, id, name, seconds));
+    list.value = next;
+    save();
+  }
+
+  static DayLimit? forTarget(String kind, String id) {
+    for (final l in list.value) {
+      if (l.kind == kind && l.id == id) return l;
+    }
+    return null;
+  }
+
+  static void remove(DayLimit l) {
+    list.value = [for (final x in list.value) if (x != l) x];
+    save();
+  }
+
+  static void save() {
+    try {
+      Directory(dataDir()).createSync(recursive: true);
+      _file.writeAsStringSync(jsonEncode([for (final l in list.value) l.toJson()]));
+    } catch (_) {}
+    writeCore();
+  }
+
+  static void writeCore() {
+    try {
+      final lines = StringBuffer();
+      for (final l in list.value) {
+        String name = l.name;
+        Iterable<String> apps;
+        if (l.kind == 'cat') {
+          final c = Categories.byId(l.id);
+          if (c == null) continue;
+          name = c.name;
+          apps = c.apps;
+        } else {
+          apps = [l.id];
+        }
+        if (apps.isEmpty) continue;
+        final title = tr('limitTitle');
+        final body = tr('limitBody').replaceAll('{name}', name).replaceAll('{limit}', durationText(l.seconds));
+        String clean(String v) => v.replaceAll(RegExp(r'[\t\r\n\x1f]'), ' ');
+        lines.writeln([l.seconds, clean('${l.kind}:${l.id}'), apps.map(clean).join('\x1f'), clean(title), clean(body)].join('\t'));
+      }
+      Directory(dataDir()).createSync(recursive: true);
+      final f = File(_path('limits'));
+      final text = lines.toString();
+      if (text.isEmpty) {
+        if (f.existsSync()) f.deleteSync();
+      } else {
+        f.writeAsStringSync(text);
+      }
     } catch (_) {}
   }
 }

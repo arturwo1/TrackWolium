@@ -17,6 +17,7 @@ constexpr DWORD kLiveSize = 256 * 1024;
 constexpr wchar_t kGuardClass[] = L"WoliumGuardWindow";
 constexpr UINT kMsgEnsure = WM_APP + 2;
 constexpr UINT kMsgOpenUi = WM_APP + 3;
+constexpr UINT kMsgLimit = WM_APP + 6;
 
 inline std::wstring exe_dir() {
   wchar_t buf[MAX_PATH * 2];

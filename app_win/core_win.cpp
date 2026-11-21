@@ -179,6 +179,28 @@ void write_text(const std::wstring& path, const std::string& text) {
   out << text;
 }
 
+bool limit_already_fired(const std::wstring& file, const std::string& day, const std::string& key) {
+  std::ifstream in{std::filesystem::path(file)};
+  std::string line;
+  if (!std::getline(in, line) || line != day) return false;
+  while (std::getline(in, line)) {
+    if (line == key) return true;
+  }
+  return false;
+}
+
+void limit_mark_fired(const std::wstring& file, const std::string& day, const std::string& key) {
+  std::string existing;
+  {
+    std::ifstream in{std::filesystem::path(file)};
+    std::string line;
+    if (std::getline(in, line) && line == day) {
+      while (std::getline(in, line)) existing += line + "\n";
+    }
+  }
+  write_text(file, day + "\n" + existing + key + "\n");
+}
+
 }
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
@@ -203,6 +225,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   tw::ProbeOptions po;
   std::shared_ptr<tw::IProbe> probe = tw::make_native_probe(po);
   tw::Engine engine(probe, tw::Duration(std::max(5000, opt.interval_ms * 3)));
+  engine.set_limit_notifier([](const tw::Limit& lim, long long) {
+    std::string day = tw::local_day_now();
+    std::string key = std::to_string(lim.seconds) + "|" + lim.label;
+    std::wstring file = app::userdata(L"limitfired");
+    if (limit_already_fired(file, day, key)) return;
+    limit_mark_fired(file, day, key);
+    write_text(app::userdata(L"limitnotice"), lim.title + "\n" + lim.body);
+    HWND w = FindWindowW(app::kGuardClass, nullptr);
+    if (w) PostMessageW(w, app::kMsgLimit, 0, 0);
+  });
   if (!opt.no_db) {
     std::string path = opt.db.empty() ? tw::to_utf8(app::userdata(L"usage.db")) : opt.db;
     std::string err;
@@ -243,6 +275,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         std::ifstream af{std::filesystem::path(app::userdata(L"afk")), std::ios::binary};
         std::string at((std::istreambuf_iterator<char>(af)), std::istreambuf_iterator<char>());
         engine.set_afk_threshold(tw::parse_afk_threshold(at));
+      }
+      {
+        std::ifstream lf{std::filesystem::path(app::userdata(L"limits")), std::ios::binary};
+        std::string lt((std::istreambuf_iterator<char>(lf)), std::istreambuf_iterator<char>());
+        engine.set_limits(tw::parse_limits(lt));
       }
       if (app::flag(L"localapi")) api.start();
       else api.stop();

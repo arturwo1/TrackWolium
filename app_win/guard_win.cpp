@@ -228,6 +228,28 @@ void notify_update(const std::string& version) {
   g->update_pending = true;
 }
 
+std::wstring widen(const std::string& u) {
+  if (u.empty()) return L"";
+  int n = MultiByteToWideChar(CP_UTF8, 0, u.data(), static_cast<int>(u.size()), nullptr, 0);
+  std::wstring w(static_cast<size_t>(n), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, u.data(), static_cast<int>(u.size()), &w[0], n);
+  return w;
+}
+
+void notify_limit() {
+  std::ifstream in{std::filesystem::path(app::userdata(L"limitnotice")), std::ios::binary};
+  std::string title, body;
+  std::getline(in, title);
+  std::getline(in, body);
+  if (title.empty()) return;
+  NOTIFYICONDATAW nid = base_nid();
+  nid.uFlags = NIF_INFO;
+  nid.dwInfoFlags = NIIF_INFO;
+  wcsncpy_s(nid.szInfoTitle, widen(title).c_str(), _TRUNCATE);
+  wcsncpy_s(nid.szInfo, widen(body).c_str(), _TRUNCATE);
+  Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
 void write_update_status(const std::string& current, const std::string& latest, const char* note) {
   SYSTEMTIME t;
   GetLocalTime(&t);
@@ -701,6 +723,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (g->state == State::Error) restart_from_error();
       return 0;
     }
+    if (msg == app::kMsgLimit) {
+      notify_limit();
+      return 0;
+    }
     if (msg == kMsgUpdate) {
       std::string* v = reinterpret_cast<std::string*>(lp);
       if (v) {
@@ -842,7 +868,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
   register_triggers(guard.hwnd);
   RegisterHotKey(guard.hwnd, kHotkeyOpen, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'W');
   RegisterHotKey(guard.hwnd, kHotkeyPause, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'P');
+#ifndef TW_STORE_BUILD
   std::thread(update_loop, guard.hwnd).detach();
+#endif
   std::thread(network_watch).detach();
 
   MSG m;

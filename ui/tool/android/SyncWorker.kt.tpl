@@ -259,6 +259,70 @@ object Sync {
       categorize(ctx)
     } catch (ex: Exception) {
     }
+    try {
+      checkLimits(ctx)
+    } catch (ex: Exception) {
+    }
+  }
+
+  fun checkLimits(ctx: Context) {
+    val dir = dir(ctx)
+    val limits = File(dir, "limits")
+    val file = File(dir, "usage.db")
+    if (!limits.exists() || !file.exists() || File(dir, "paused").exists()) return
+    val now = Calendar.getInstance()
+    val day = String.format("%04d-%02d-%02d", now.get(Calendar.YEAR), now.get(Calendar.MONTH) + 1, now.get(Calendar.DAY_OF_MONTH))
+    val firedFile = File(dir, "limitfired")
+    val fired = HashSet<String>()
+    if (firedFile.exists()) {
+      val lines = firedFile.readLines()
+      if (lines.isNotEmpty() && lines[0] == day) fired.addAll(lines.drop(1))
+    }
+    val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+    val hits = ArrayList<List<String>>()
+    try {
+      for (line in limits.readLines()) {
+        val p = line.split('\t')
+        if (p.size < 3) continue
+        val secs = p[0].toLongOrNull() ?: continue
+        if (secs < 60) continue
+        val key = "$secs|${p[1]}"
+        if (fired.contains(key)) continue
+        val apps = p[2].split('\u001f').filter { it.isNotEmpty() }
+        if (apps.isEmpty()) continue
+        val marks = apps.joinToString(",") { "?" }
+        val args = arrayOf(day) + apps.toTypedArray()
+        val c = db.rawQuery("SELECT COALESCE(SUM(ms), 0) FROM usage WHERE day = ? AND state = 0 AND app IN ($marks)", args)
+        var spent = 0L
+        if (c.moveToFirst()) spent = c.getLong(0)
+        c.close()
+        if (spent >= secs * 1000) {
+          fired.add(key)
+          hits.add(listOf(if (p.size > 3 && p[3].isNotEmpty()) p[3] else p[1], if (p.size > 4 && p[4].isNotEmpty()) p[4] else p[1]))
+        }
+      }
+    } finally {
+      db.close()
+    }
+    if (hits.isEmpty()) return
+    firedFile.writeText(day + "\n" + fired.joinToString("\n") + "\n")
+    val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (Build.VERSION.SDK_INT >= 26) {
+      nm.createNotificationChannel(NotificationChannel("limits", text(ctx, "limitChannel"), NotificationManager.IMPORTANCE_DEFAULT))
+    }
+    if (!nm.areNotificationsEnabled()) return
+    var id = 100
+    for (h in hits) {
+      val open = PendingIntent.getActivity(ctx, id, Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+      val n = NotificationCompat.Builder(ctx, "limits")
+        .setSmallIcon(ctx.applicationInfo.icon)
+        .setContentTitle(h[0])
+        .setContentText(h[1])
+        .setContentIntent(open)
+        .setAutoCancel(true)
+        .build()
+      nm.notify(id++, n)
+    }
   }
 
   fun categorize(ctx: Context) {
@@ -393,7 +457,14 @@ object Sync {
     }
   }
 
+  fun isStore(ctx: Context): Boolean = try {
+    ctx.assets.list("")?.contains("store") == true
+  } catch (ex: Exception) {
+    false
+  }
+
   fun checkUpdate(ctx: Context) {
+    if (isStore(ctx)) return
     val dir = dir(ctx)
     if (!File(dir, "consent").exists() || File(dir, "noupdates").exists()) return
     val current = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: return

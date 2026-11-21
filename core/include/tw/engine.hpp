@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "tw/limits.hpp"
 #include "tw/probe.hpp"
 #include "tw/sink.hpp"
 #include "tw/store.hpp"
@@ -29,6 +30,8 @@ public:
   void set_metrics(const MetricsConfig& cfg);
   void set_metrics_intervals(Duration proc, Duration sys);
   void set_afk_threshold(Duration threshold);
+  void set_limits(std::vector<Limit> limits);
+  void set_limit_notifier(std::function<void(const Limit&, long long)> notify);
   void set_store(std::shared_ptr<IStore> store, Duration flush_every = Duration(180000));
   void step(TimePoint now);
   void run(Duration interval, const std::function<bool()>& stop);
@@ -39,6 +42,7 @@ public:
 private:
   void flush_pending();
   void note_session(const Interval& iv);
+  void check_limits(TimePoint now);
   void sample_metrics(TimePoint now, const std::vector<AppSample>& samples);
 
   std::shared_ptr<IProbe> probe_;
@@ -55,6 +59,12 @@ private:
   std::map<std::tuple<int, std::string, int>, long long> pending_slots_;
   std::map<std::pair<int, std::string>, long long> pending_afk_;
   Duration afk_threshold_{0};
+  std::vector<Limit> limits_;
+  std::function<void(const Limit&, long long)> limit_notify_;
+  std::set<std::string> limits_fired_;
+  std::string limits_day_;
+  TimePoint last_limit_check_{};
+  bool limit_checked_ = false;
   std::function<long long()> wall_fn_;
   struct OpenSession {
     int state = 0;

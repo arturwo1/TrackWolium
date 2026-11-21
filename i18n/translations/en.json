@@ -296,6 +296,13 @@
     "exportWhat": "What to export",
     "exportVisible": "Visible columns",
     "exportAll": "All metrics",
-    "catShowBackground": "Show background processes"
+    "catShowBackground": "Show background processes",
+    "limitTitle": "Daily limit reached",
+    "limitBody": "{name}: the daily limit of {limit} is reached.",
+    "limitNew": "Daily limit...",
+    "limitsTitle": "Daily limits",
+    "limitsHint": "A soft notification when an app or category reaches its focus time for the day. Nothing is blocked.",
+    "limitPerDay": "Limit per day",
+    "limitChannel": "Daily limits"
   }
 }

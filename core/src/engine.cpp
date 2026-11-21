@@ -74,6 +74,39 @@ void Engine::set_afk_threshold(Duration threshold) {
   afk_threshold_ = threshold;
 }
 
+void Engine::set_limits(std::vector<Limit> limits) {
+  limits_ = std::move(limits);
+}
+
+void Engine::set_limit_notifier(std::function<void(const Limit&, long long)> notify) {
+  limit_notify_ = std::move(notify);
+}
+
+void Engine::check_limits(TimePoint now) {
+  if (limits_.empty() || !limit_notify_) return;
+  if (limit_checked_ && now - last_limit_check_ < Duration(5000)) return;
+  limit_checked_ = true;
+  last_limit_check_ = now;
+  std::string day = day_fn_();
+  if (day != limits_day_) {
+    limits_day_ = day;
+    limits_fired_.clear();
+  }
+  Report r = tracker_.report();
+  for (const auto& lim : limits_) {
+    std::string key = std::to_string(lim.seconds) + "|" + lim.label;
+    if (limits_fired_.count(key)) continue;
+    long long spent = 0;
+    for (const auto& row : r.rows) {
+      if (lim.apps.count(row.app)) spent += row.spent[0].count();
+    }
+    if (spent >= lim.seconds * 1000) {
+      limits_fired_.insert(key);
+      limit_notify_(lim, spent);
+    }
+  }
+}
+
 void Engine::set_metrics_intervals(Duration proc, Duration sys) {
   proc_every_ = proc;
   sys_every_ = sys;
@@ -256,6 +289,8 @@ void Engine::step(TimePoint now) {
       last_flush_ = now;
     }
   }
+
+  check_limits(now);
 
   if (sinks_.empty()) return;
   Report r = tracker_.report();

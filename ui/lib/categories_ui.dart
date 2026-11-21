@@ -224,3 +224,70 @@ Future<void> categoryApps(BuildContext context, Category cat, List<AppEntry> ent
     ),
   );
 }
+
+Future<void> limitDialog(BuildContext context, {String? app, String? title, List<AppEntry> entries = const []}) async {
+  final cats = Categories.list.value;
+  final apps = List<AppEntry>.of(entries)..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+  String target = app != null ? 'app:$app' : (cats.isNotEmpty ? 'cat:${cats.first.id}' : (apps.isNotEmpty ? 'app:${apps.first.app}' : ''));
+  final existing = target.isEmpty ? null : LimitPrefs.forTarget(target.substring(0, 3), target.substring(4));
+  final ctl = TextEditingController(text: existing == null ? '' : durationText(existing.seconds));
+  await showDialog<void>(
+    context: context,
+    builder: (c) => StatefulBuilder(
+      builder: (c, set) {
+        final secs = parseDuration(ctl.text);
+        final ok = target.isNotEmpty && secs != null && secs >= 60;
+        String nameOf(String t) {
+          if (t.startsWith('cat:')) return Categories.byId(t.substring(4))?.name ?? '';
+          final id = t.substring(4);
+          if (id == app) return title ?? id;
+          for (final e in apps) {
+            if (e.app == id) return e.title;
+          }
+          return id;
+        }
+        return AlertDialog(
+          backgroundColor: cPanel,
+          title: Text(tr('limitNew')),
+          content: SizedBox(
+            width: 360,
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (app != null)
+                Text(title ?? app, style: const TextStyle(fontWeight: FontWeight.w700))
+              else
+                DropdownButton<String>(
+                  isExpanded: true,
+                  value: target.isEmpty ? null : target,
+                  items: [
+                    for (final cat in cats) DropdownMenuItem(value: 'cat:${cat.id}', child: Text('${tr('category')}: ${cat.name}', overflow: TextOverflow.ellipsis)),
+                    for (final e in apps) DropdownMenuItem(value: 'app:${e.app}', child: Text(e.title, overflow: TextOverflow.ellipsis)),
+                  ],
+                  onChanged: (v) => set(() => target = v ?? target),
+                ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: ctl,
+                autofocus: true,
+                onChanged: (_) => set(() {}),
+                decoration: InputDecoration(labelText: tr('limitPerDay'), hintText: tr('durationHint'), errorText: ctl.text.trim().isNotEmpty && !ok ? tr('durationBad') : null),
+              ),
+            ]),
+          ),
+          actions: [
+            if (existing != null) TextButton(onPressed: () { LimitPrefs.remove(existing); Navigator.pop(c); }, child: Text(tr('catDelete'))),
+            TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('cancel'))),
+            TextButton(
+              onPressed: ok
+                  ? () {
+                      LimitPrefs.set(target.substring(0, 3), target.substring(4), nameOf(target), secs);
+                      Navigator.pop(c);
+                    }
+                  : null,
+              child: Text(tr('save')),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}

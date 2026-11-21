@@ -205,9 +205,112 @@ jobs:
             Wolium-macos.zip
             Wolium-macos.dmg
 
+  windows-store:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python tools/lang.py sync
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: native
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          if ($v -notmatch '^\d') { $v = '0.9.0' }
+          $v = "$v.${{ github.run_number }}"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTW_STORE_BUILD=ON "-DTW_VERSION=$v"
+          cmake --build build --config Release --target trackwolium_guard trackwolium_core
+      - name: ui
+        working-directory: ui
+        run: |
+          flutter create --platforms=windows --project-name wolium .
+          python tool\patch_windows.py . ..\assets\icon\wolium.ico
+          flutter pub get
+          flutter build windows --release --dart-define=STORE_BUILD=true
+      - name: package
+        shell: pwsh
+        env:
+          MSIX_IDENTITY: ${{ vars.MSIX_IDENTITY }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+        run: |
+          pip install pillow
+          New-Item -ItemType Directory -Force stage | Out-Null
+          Copy-Item -Recurse ui\build\windows\x64\runner\Release\* stage\
+          Copy-Item build\bin\Release\trackwolium.exe stage\
+          Copy-Item build\bin\Release\trackwolium-core.exe stage\
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          if ($v -notmatch '^\d') { $v = '0.9.0' }
+          $parts = $v.Split('.')
+          while ($parts.Count -lt 2) { $parts += '0' }
+          $msixVersion = "$($parts[0]).$($parts[1]).${{ github.run_number }}.0"
+          $identity = if ($env:MSIX_IDENTITY) { $env:MSIX_IDENTITY } else { 'DTSys.Wolium' }
+          $publisher = if ($env:MSIX_PUBLISHER) { $env:MSIX_PUBLISHER } else { 'CN=DTSys' }
+          python tools\msix\make_msix.py stage $msixVersion $identity $publisher Wolium.msix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolium-msix
+          path: Wolium.msix
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: Wolium.msix
+
+  android-store:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/lang.py sync
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: signing and version
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          case "$v" in
+            [0-9]*) VER="$v.${GITHUB_RUN_NUMBER}" ;;
+            *) VER="0.9.0.${GITHUB_RUN_NUMBER}" ;;
+          esac
+          echo "WOLIUM_VERSION=$VER" >> "$GITHUB_ENV"
+          echo "WOLIUM_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/wolium.jks"
+            echo "WOLIUM_KEYSTORE=$RUNNER_TEMP/wolium.jks" >> "$GITHUB_ENV"
+            echo "WOLIUM_KEYSTORE_PASSWORD=$KS_PASS" >> "$GITHUB_ENV"
+            echo "WOLIUM_KEY_ALIAS=$KS_ALIAS" >> "$GITHUB_ENV"
+          fi
+      - name: build
+        working-directory: ui
+        env:
+          STORE_BUILD: "true"
+        run: |
+          pip install pillow
+          flutter create --platforms=android --org io.github.arturwo1 --project-name wolium .
+          rm -f test/widget_test.dart
+          python3 tool/patch_android.py . assets/icon/wolium_256.png
+          flutter pub get
+          flutter build appbundle --release --dart-define=WOLIUM_VERSION=$WOLIUM_VERSION --dart-define=STORE_BUILD=true
+          cp build/app/outputs/bundle/release/app-release.aab ../Wolium.aab
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wolium-aab
+          path: Wolium.aab
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: Wolium.aab
+
   provenance:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [windows, linux, android, macos]
+    needs: [windows, linux, android, macos, windows-store, android-store]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -219,7 +322,7 @@ jobs:
       - name: download assets
         run: |
           mkdir dist
-          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir dist --pattern WoliumSetup.exe --pattern Wolium.apk --pattern Wolium-linux-x86_64.tar.gz --pattern Wolium-macos.dmg --pattern Wolium-macos.zip
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir dist --pattern WoliumSetup.exe --pattern Wolium.apk --pattern Wolium-linux-x86_64.tar.gz --pattern Wolium-macos.dmg --pattern Wolium-macos.zip --pattern Wolium.msix --pattern Wolium.aab
       - name: version
         run: |
           v="${GITHUB_REF_NAME#v}"
@@ -242,6 +345,8 @@ jobs:
             dist/Wolium-linux-x86_64.tar.gz
             dist/Wolium-macos.dmg
             dist/Wolium-macos.zip
+            dist/Wolium.msix
+            dist/Wolium.aab
       - name: publish checksums and version
         run: gh release upload "${{ github.ref_name }}" dist/SHA256SUMS.txt --repo "${{ github.repository }}" --clobber
       - name: publish version last

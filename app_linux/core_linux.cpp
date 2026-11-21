@@ -17,6 +17,7 @@
 #include <string>
 #include <sys/wait.h>
 #include <thread>
+#include <vector>
 #include <ctime>
 #include "net_posix.hpp"
 #include "tw/engine.hpp"
@@ -28,6 +29,62 @@
 #include "tw/sqlite_store.hpp"
 
 extern char** environ;
+
+namespace {
+
+std::string applescript_escape(const std::string& s) {
+  std::string out;
+  for (char c : s) {
+    if (c == '\\' || c == '"') out += '\\';
+    if (c == '\n' || c == '\r') c = ' ';
+    out += c;
+  }
+  return out;
+}
+
+void desktop_notify(const std::string& title, const std::string& body) {
+  std::thread([title, body] {
+    std::vector<std::string> args;
+#ifdef __APPLE__
+    args = {"osascript", "-e", "display notification \"" + applescript_escape(body) + "\" with title \"" + applescript_escape(title) + "\""};
+#else
+    args = {"notify-send", "-a", "Wolium", title, body};
+#endif
+    std::vector<char*> argv;
+    for (auto& a : args) argv.push_back(a.data());
+    argv.push_back(nullptr);
+    pid_t pid = 0;
+    if (posix_spawnp(&pid, argv[0], nullptr, nullptr, argv.data(), environ) == 0) {
+      int status = 0;
+      waitpid(pid, &status, 0);
+    }
+  }).detach();
+}
+
+bool limit_already_fired(const std::string& file, const std::string& day, const std::string& key) {
+  std::ifstream in(file);
+  std::string line;
+  if (!std::getline(in, line) || line != day) return false;
+  while (std::getline(in, line)) {
+    if (line == key) return true;
+  }
+  return false;
+}
+
+void limit_mark_fired(const std::string& file, const std::string& day, const std::string& key) {
+  std::string existing;
+  {
+    std::ifstream in(file);
+    std::string line;
+    if (std::getline(in, line) && line == day) {
+      while (std::getline(in, line)) existing += line + "\n";
+    }
+  }
+  std::ofstream out(file, std::ios::trunc);
+  out << day << "\n" << existing << key << "\n";
+}
+
+}
 
 namespace fs = std::filesystem;
 
@@ -185,6 +242,14 @@ int main(int argc, char** argv) {
   tw::ProbeOptions po;
   std::shared_ptr<tw::IProbe> probe = tw::make_native_probe(po);
   tw::Engine engine(probe, tw::Duration(std::max(5000, opt.interval_ms * 3)));
+  engine.set_limit_notifier([&data](const tw::Limit& lim, long long) {
+    std::string day = tw::local_day_now();
+    std::string key = std::to_string(lim.seconds) + "|" + lim.label;
+    std::string file = data + "/limitfired";
+    if (limit_already_fired(file, day, key)) return;
+    limit_mark_fired(file, day, key);
+    desktop_notify(lim.title, lim.body);
+  });
   if (!opt.no_db) {
     std::string path = opt.db.empty() ? data + "/usage.db" : opt.db;
     std::string err;
@@ -224,6 +289,11 @@ int main(int argc, char** argv) {
         std::ifstream af(data + "/afk", std::ios::binary);
         std::string at((std::istreambuf_iterator<char>(af)), std::istreambuf_iterator<char>());
         engine.set_afk_threshold(tw::parse_afk_threshold(at));
+      }
+      {
+        std::ifstream lf(data + "/limits", std::ios::binary);
+        std::string lt((std::istreambuf_iterator<char>(lf)), std::istreambuf_iterator<char>());
+        engine.set_limits(tw::parse_limits(lt));
       }
       if (exists(data + "/localapi")) api.start();
       else api.stop();

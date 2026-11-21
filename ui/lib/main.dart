@@ -564,6 +564,7 @@ class _ShellState extends State<Shell> {
       if (control) PopupMenuItem<String>(value: 'end', enabled: live.running, child: item(Icons.power_settings_new, tr('actEnd'), color: cDanger, on: live.running)),
       if (control) const PopupMenuDivider(),
       PopupMenuItem<String>(value: 'cat', child: item(Icons.label_outline, tr('catAssign'))),
+      PopupMenuItem<String>(value: 'limit', child: item(Icons.timer_outlined, tr('limitNew'))),
       PopupMenuItem<String>(value: 'hide', child: item(Icons.visibility_off_outlined, tr('actHide'))),
     ]);
     if (mounted) setState(() => menuApp = null);
@@ -581,6 +582,9 @@ class _ShellState extends State<Shell> {
         break;
       case 'cat':
         await assignCategory(r, at);
+        break;
+      case 'limit':
+        await limitDialog(context, app: r.app, title: r.title);
         break;
       case 'hide':
         Hidden.hide(r.app, r.title);
@@ -635,6 +639,7 @@ class _ShellState extends State<Shell> {
           ListTile(leading: const Icon(Icons.open_in_new), title: Text(tr('actOpenApp')), onTap: () => Navigator.pop(c, 'open')),
           ListTile(leading: const Icon(Icons.info_outline), title: Text(tr('actAppInfo')), onTap: () => Navigator.pop(c, 'info')),
           ListTile(leading: const Icon(Icons.label_outline), title: Text(tr('catAssign')), onTap: () => Navigator.pop(c, 'cat')),
+          ListTile(leading: const Icon(Icons.timer_outlined), title: Text(tr('limitNew')), onTap: () => Navigator.pop(c, 'limit')),
         ]),
       ),
     );
@@ -647,6 +652,9 @@ class _ShellState extends State<Shell> {
         break;
       case 'cat':
         await assignCategory(r, null);
+        break;
+      case 'limit':
+        await limitDialog(context, app: r.app, title: r.title);
         break;
     }
   }
@@ -704,6 +712,7 @@ class _ShellState extends State<Shell> {
     ColumnPrefs.load();
     ViewPrefs.load();
     Categories.load();
+    LimitPrefs.load();
     loadHaptics();
     Hidden.apps.addListener(onHiddenChanged);
     MetricPrefs.enabled.addListener(onMetricsChanged);
@@ -1919,6 +1928,36 @@ class _SettingsPageState extends State<SettingsPage> {
   bool rpcRestarting = false;
   Timer? rpcTimer;
 
+  List<AppEntry> appEntries() {
+    final m = metricsUsage.names();
+    final real = Platform.isAndroid ? m.keys.toSet() : metricsUsage.windowed();
+    return [for (final e in m.entries) if (real.contains(e.key) && !Categories.isNoise(e.key, e.value.name)) AppEntry(e.key, e.value.name.isNotEmpty ? e.value.name : prettyApp(e.key), e.value.path, 0, true)];
+  }
+
+  Widget limitsSection() {
+    return ValueListenableBuilder<List<DayLimit>>(
+      valueListenable: LimitPrefs.list,
+      builder: (context, items, _) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(tr('limitsTitle'), style: const TextStyle(fontWeight: FontWeight.w700))),
+          OutlinedButton.icon(icon: const Icon(Icons.add, size: 18), label: Text(tr('limitNew')), onPressed: () => limitDialog(context, entries: appEntries())),
+        ]),
+        Align(alignment: Alignment.centerLeft, child: Text(tr('limitsHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
+        for (final l in items)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(children: [
+              Icon(l.kind == 'cat' ? Icons.label_outline : Icons.apps, size: 20, color: cMuted),
+              const SizedBox(width: 10),
+              Expanded(child: Text('${l.kind == 'cat' ? (Categories.byId(l.id)?.name ?? l.name) : l.name} - ${durationText(l.seconds)}', overflow: TextOverflow.ellipsis)),
+              IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () => limitDialog(context, app: l.kind == 'app' ? l.id : null, title: l.name, entries: appEntries())),
+              IconButton(visualDensity: VisualDensity.compact, icon: const Icon(Icons.delete_outline, size: 20, color: cDanger), onPressed: () => LimitPrefs.remove(l)),
+            ]),
+          ),
+      ]),
+    );
+  }
+
   Future<void> confirmDelete(Category c) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -2306,6 +2345,8 @@ class _SettingsPageState extends State<SettingsPage> {
           const Divider(height: 28),
         ],
         categoriesSection(),
+        const Divider(height: 28),
+        limitsSection(),
         const Divider(height: 28),
         Row(children: [
           Expanded(child: Text(tr('localApi'), style: const TextStyle(fontWeight: FontWeight.w700))),

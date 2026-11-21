@@ -30,3 +30,9 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) to add a language.
 ## CI
 
 `.github/workflows/ci.yml` builds and tests on Windows, Linux and macOS, builds the Android library and the Flutter UI for Linux, Android and macOS. Releases are built from a `v*` tag by `release.yml`.
+
+## Store builds
+
+- `-DTW_STORE_BUILD=ON` (CMake) and `--dart-define=STORE_BUILD=true` (Flutter) remove the GitHub updater. On Android, `STORE_BUILD=true` for `tool/patch_android.py` also drops `REQUEST_INSTALL_PACKAGES` and marks the app so the background update worker does nothing.
+- `tools/msix/make_msix.py` writes `AppxManifest.xml` (`runFullTrust`, a `StartupTask`) and packs `Wolium.msix` with `makeappx`. Set the repository variables `MSIX_IDENTITY` and `MSIX_PUBLISHER` to the values from Partner Center. The package is unsigned, the Store signs it.
+- `Wolium.aab` is built by `flutter build appbundle` and signed with the same keystore as the APK.

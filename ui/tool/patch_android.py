@@ -1,3 +1,4 @@
+import os
 import json
 import re
 import sys
@@ -24,6 +25,10 @@ perms = [
     '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>',
     '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>',
 ]
+STORE = os.environ.get("STORE_BUILD", "").lower() == "true"
+if STORE:
+    perms = [p for p in perms if "REQUEST_INSTALL_PACKAGES" not in p]
+    text = re.sub(r'\s*<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"\s*/>', "", text)
 for p in perms:
     name = re.search(r'android:name="([^"]+)"', p).group(1)
     if name not in text:
@@ -70,6 +75,8 @@ for f in sorted((repo / "i18n" / "translations").glob("*.json")):
 assets = main_dir / "assets"
 assets.mkdir(parents=True, exist_ok=True)
 (assets / "strings.json").write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+if STORE:
+    (assets / "store").write_text("1", encoding="utf-8")
 (assets / "widget.html").write_text((repo / "core" / "src" / "widget.html").read_text(encoding="utf-8"), encoding="utf-8")
 
 app_gradle = root / "android" / "app" / "build.gradle.kts"
