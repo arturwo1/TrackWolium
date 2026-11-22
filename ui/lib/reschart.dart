@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'data.dart';
 import 'forecast.dart';
 import 'l10n.dart';
-import 'theme.dart';
 
 const seriesColors = [
   Color(0xFF4F8CFF),

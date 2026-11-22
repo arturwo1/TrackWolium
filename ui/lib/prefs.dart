@@ -223,7 +223,7 @@ class Categories {
         for (final e in items) {
           if (e is! Map || e['id'] is! String || e['name'] is! String) continue;
           out.add(Category(e['id'] as String, e['name'] as String, e['color'] is int ? e['color'] as int : categoryColors.first, e['icon'] is String ? e['icon'] as String : 'folder',
-              {for (final a in (e['apps'] is List ? e['apps'] as List : const []) as List) if (a is String) a}));
+              {for (final a in e['apps'] is List ? e['apps'] as List : const []) if (a is String) a}));
         }
         if (purge) {
           for (final c in out) {

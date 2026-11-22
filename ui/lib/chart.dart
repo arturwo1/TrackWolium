@@ -1344,7 +1344,7 @@ class _ChartPainter extends CustomPainter {
     final baseY = yOf(0);
     if (pts.length >= 2) {
       final path = Path()..moveTo(pts.first.dx, pts.first.dy);
-      final minY = _top;
+      const minY = _top;
       final maxY = math.max(baseY, _top + plotH);
       for (var i = 0; i < pts.length - 1; i++) {
         final p0 = i == 0 ? pts[i] : pts[i - 1];

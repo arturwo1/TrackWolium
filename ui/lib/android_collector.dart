@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -137,6 +136,11 @@ int sessionSlack(Database db, List<SessionSpan> fresh) {
 }
 
 void storeSessions(Database db, List<SessionSpan> sessions, DateTime firstDay, DateTime lastDay, [List<UsageEvent> events = const []]) {
+  db.execute('''
+CREATE TABLE IF NOT EXISTS day_stats(day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS app_stats(day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, app, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS slot_stats(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, slot, app, kind)) WITHOUT ROWID;
+''');
   db.execute('BEGIN');
   try {
     final from = firstDay.millisecondsSinceEpoch ~/ 1000;

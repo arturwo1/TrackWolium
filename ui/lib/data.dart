@@ -270,7 +270,9 @@ class Usage {
     final mid = DateTime.parse('${day}T00:00:00').millisecondsSinceEpoch ~/ 1000;
     final a = mid + slot * 300;
     final b = a + 300;
-    final ov = math.min(b, endEpoch) - math.max(a, startEpoch);
+    final hi = math.min<int>(b, endEpoch);
+    final lo = math.max<int>(a, startEpoch);
+    final ov = hi - lo;
     if (ov <= 0) return 0;
     return ov >= 300 ? ms : (ms * ov / 300.0).round();
   }
@@ -340,7 +342,9 @@ class Usage {
           try {
             final lowest = startEpoch - sessionLowerSlack(db);
             for (final r in db.select('SELECT app, state, start, stop FROM sessions WHERE start >= ?3 AND start < ?2 AND stop > ?1', [startEpoch, endEpoch, lowest])) {
-              final ov = math.min(r['stop'] as int, endEpoch) - math.max(r['start'] as int, startEpoch);
+              final hi = math.min<int>(r['stop'] as int, endEpoch);
+              final lo = math.max<int>(r['start'] as int, startEpoch);
+              final ov = hi - lo;
               if (ov > 0) addMs('local', r['app'] as String, r['state'] as int, ov * 1000);
             }
           } catch (_) {}
@@ -910,8 +914,8 @@ class Usage {
     }
     void pushClipped(int start, int end, String app, int state, int ms) {
       if (clipA != null && clipB != null) {
-        final ca = math.max(start, clipA);
-        final cb = math.min(end, clipB);
+        final ca = math.max<int>(start, clipA);
+        final cb = math.min<int>(end, clipB);
         if (cb <= ca) return;
         final dur = end - start;
         final scaled = dur > 0 && cb - ca < dur ? (ms * (cb - ca) / dur).round() : ms;

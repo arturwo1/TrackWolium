@@ -754,6 +754,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         await assignCategory(r, at);
         break;
       case 'limit':
+        if (!mounted) return;
         await limitDialog(context, app: r.app, title: r.title);
         break;
       case 'hide':
@@ -824,6 +825,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         await assignCategory(r, null);
         break;
       case 'limit':
+        if (!mounted) return;
         await limitDialog(context, app: r.app, title: r.title);
         break;
     }

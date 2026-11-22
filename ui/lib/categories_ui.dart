@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'android_collector.dart';
-import 'data.dart';
 import 'icons.dart';
 import 'l10n.dart';
 import 'prefs.dart';
