@@ -36,26 +36,35 @@ std::string safe_name(const std::string& name) {
 }
 
 bool write_icon(NSRunningApplication* app, const std::string& path) {
-  NSImage* image = app.icon;
-  if (!image) return false;
-  NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
-                                                                  pixelsWide:64
-                                                                  pixelsHigh:64
-                                                               bitsPerSample:8
-                                                             samplesPerPixel:4
-                                                                    hasAlpha:YES
-                                                                    isPlanar:NO
-                                                              colorSpaceName:NSCalibratedRGBColorSpace
-                                                                 bytesPerRow:0
-                                                                bitsPerPixel:0];
-  if (!rep) return false;
-  [NSGraphicsContext saveGraphicsState];
-  [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
-  [image drawInRect:NSMakeRect(0, 0, 64, 64) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
-  [NSGraphicsContext restoreGraphicsState];
-  NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-  if (!png) return false;
-  return [png writeToFile:[NSString stringWithUTF8String:path.c_str()] atomically:YES];
+  @try {
+    NSImage* image = app.icon;
+    if (!image) return false;
+    NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                                    pixelsWide:64
+                                                                    pixelsHigh:64
+                                                                 bitsPerSample:8
+                                                               samplesPerPixel:4
+                                                                      hasAlpha:YES
+                                                                      isPlanar:NO
+                                                                colorSpaceName:NSCalibratedRGBColorSpace
+                                                                   bytesPerRow:0
+                                                                  bitsPerPixel:0];
+    if (!rep) return false;
+    NSGraphicsContext* ctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    if (!ctx) return false;
+    NSGraphicsContext* prev = [NSGraphicsContext currentContext];
+    [NSGraphicsContext setCurrentContext:ctx];
+    @try {
+      [image drawInRect:NSMakeRect(0, 0, 64, 64) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
+    } @finally {
+      [NSGraphicsContext setCurrentContext:prev];
+    }
+    NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (!png) return false;
+    return [png writeToFile:[NSString stringWithUTF8String:path.c_str()] atomically:YES];
+  } @catch (...) {
+    return false;
+  }
 }
 
 struct WindowCount {
@@ -85,7 +94,9 @@ void count_windows(CGWindowListOption options, std::map<pid_t, WindowCount>& out
 
 class MacProbe : public IProbe {
 public:
-  explicit MacProbe(bool include_system) : include_system_(include_system) {}
+  explicit MacProbe(bool include_system) : include_system_(include_system) {
+    NSApplicationLoad();
+  }
 
   bool reports_windows() const override { return true; }
 
@@ -102,7 +113,8 @@ public:
   std::vector<AppSample> sample() override {
     std::map<std::string, State> best;
     @autoreleasepool {
-      [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+      @try {
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
       std::map<pid_t, WindowCount> visible;
       std::map<pid_t, WindowCount> all;
       pid_t front = -1;
@@ -139,6 +151,7 @@ public:
           if (fs::exists(file, ec) || write_icon(app, file)) paths_[name] = file;
         }
       }
+      } @catch (...) {}
     }
     std::vector<AppSample> out;
     out.reserve(best.size());
