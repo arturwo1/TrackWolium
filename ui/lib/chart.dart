@@ -70,6 +70,7 @@ double? seriesValueAt(ResSeries s, double sec) {
 double seriesScaleTop(ResSeries s, double a, double b) {
   final pad = (b - a) * 0.2;
   final m = s.maxIn(a - pad, b + pad);
+  if (s.isSum) return math.max(2.0, m * 1.18);
   return (m <= 0 ? 1.0 : m) * 1.18;
 }
 
@@ -189,6 +190,8 @@ class ActivityChart extends StatefulWidget {
     this.previous = const [],
     this.avgLine = false,
     this.compare = false,
+    this.initFrom,
+    this.initTo,
   });
 
   final DateTime first;
@@ -196,7 +199,7 @@ class ActivityChart extends StatefulWidget {
   final List<Contrib> contribs;
   final List<PresenceMark> presence;
   final List<SiteContrib> siteContribs;
-  final void Function(SiteUsage site, String? browserApp)? onOpenSite;
+  final void Function(SiteUsage site, String? browserApp, Offset? at)? onOpenSite;
   final String? Function(String client, String key)? assetUrl;
   final String? only;
   final Metric metric;
@@ -210,6 +213,8 @@ class ActivityChart extends StatefulWidget {
   final List<Contrib> previous;
   final bool avgLine;
   final bool compare;
+  final double? initFrom;
+  final double? initTo;
 
   @override
   State<ActivityChart> createState() => _ActivityChartState();
@@ -269,6 +274,8 @@ class _ActivityChartState extends State<ActivityChart> {
   }
 
   String? nearSeries(Offset p) {
+    if (widget.series.isEmpty) return null;
+    if (!widget.showTime && widget.series.length == 1) return widget.series.first.id;
     String? best;
     var d = widget.showTime ? 12.0 : 30.0;
     final sec = vx0 + (p.dx - _left) / plotW * span;
@@ -292,7 +299,8 @@ class _ActivityChartState extends State<ActivityChart> {
   @override
   void initState() {
     super.initState();
-    vx1 = widget.total.toDouble();
+    vx0 = (widget.initFrom ?? 0).clamp(0, widget.total.toDouble()).toDouble();
+    vx1 = (widget.initTo ?? widget.total.toDouble()).clamp(math.min(widget.total.toDouble(), vx0 + 60), widget.total.toDouble()).toDouble();
     GestureBinding.instance.pointerRouter.addGlobalRoute(globalPointer);
     tipsReset.addListener(hideNow);
     scheduleView();
@@ -379,9 +387,9 @@ class _ActivityChartState extends State<ActivityChart> {
   @override
   void didUpdateWidget(covariant ActivityChart old) {
     super.didUpdateWidget(old);
-    if (old.total != widget.total || old.first != widget.first) {
-      vx0 = 0;
-      vx1 = widget.total.toDouble();
+    if (old.total != widget.total || old.first != widget.first || old.initFrom != widget.initFrom || old.initTo != widget.initTo) {
+      vx0 = (widget.initFrom ?? 0).clamp(0, widget.total.toDouble()).toDouble();
+      vx1 = (widget.initTo ?? widget.total.toDouble()).clamp(math.min(widget.total.toDouble(), vx0 + 60), widget.total.toDouble()).toDouble();
       hideNow();
       scheduleView();
     }
@@ -529,7 +537,7 @@ class _ActivityChartState extends State<ActivityChart> {
   }
 
   void show(Offset local, {required bool touchMode, bool pin = false}) {
-    if (cache.isEmpty) return;
+    if (cache.isEmpty && widget.series.isEmpty) return;
     hideTimer?.cancel();
     removeTimer?.cancel();
     final box = key.currentContext?.findRenderObject() as RenderBox?;
@@ -548,7 +556,9 @@ class _ActivityChartState extends State<ActivityChart> {
       Overlay.of(context).insert(entry!);
     }
     final cur = tip.value;
-    final sid = (cur != null && cur.interactive && !touchMode) ? cur.seriesId : focusSeries?.id;
+    final nearTouch = touchMode ? nearSeries(local) : null;
+    final fallbackSid = !widget.showTime && widget.series.isNotEmpty ? (nearTouch ?? widget.series.first.id) : nearTouch;
+    final sid = (cur != null && cur.interactive && !touchMode) ? cur.seriesId : (focusSeries?.id ?? fallbackSid);
     final base = cur ?? _Tip(visible: true, bucket: i, anchor: anchor, interactive: touchMode, follow: !touchMode);
     tip.value = base.copyWith(
       clearSeries: sid == null,
@@ -1087,7 +1097,7 @@ class _ActivityChartState extends State<ActivityChart> {
             const SizedBox(height: 3),
             for (final s in activeSites.take(4))
               HoverBox(
-                onTap: t.interactive && widget.onOpenSite != null ? () => widget.onOpenSite!(s, browserAppFor(s.browser)) : null,
+                onTapAt: t.interactive && widget.onOpenSite != null ? (pos) => widget.onOpenSite!(s, browserAppFor(s.browser), pos) : null,
                 builder: (h) => Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                   decoration: BoxDecoration(color: h && t.interactive ? cSoft.withValues(alpha: 0.4) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
@@ -1176,80 +1186,76 @@ class _ActivityChartState extends State<ActivityChart> {
     final sessions = sessionsOf(widget.contribs, app, widget.metric).where((s) => s.end > ws && s.start < we).toList();
     final total = sessions.fold<int>(0, (a, s) => a + s.ms);
     final appSites = sitesIn(tb, app);
-    return DefaultSelectionStyle(
-      mouseCursor: SystemMouseCursors.basic,
-      child: SelectionArea(
-        contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
-        child: Material(
-          type: MaterialType.transparency,
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: _tipDecoration,
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [
-                widget.icon(app, 22),
-                const SizedBox(width: 8),
-                Expanded(child: EllipsisText(widget.title(app), style: const TextStyle(fontWeight: FontWeight.w800))),
-              ]),
-              const SizedBox(height: 4),
-              Text('${metricLabel(widget.metric)}: ${formatMs(total)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800, fontSize: 13)),
-              Text('${tr('launches')}: ${sessions.length}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
-              if (appSites.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(tr('chartSites'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 3),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 140),
-                  child: ListView(
-                    shrinkWrap: true,
-                    padding: EdgeInsets.zero,
-                    children: [
-                      for (final s in appSites)
-                        HoverBox(
-                          onTap: widget.onOpenSite != null ? () => widget.onOpenSite!(s, app) : null,
-                          builder: (h) => Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-                            decoration: BoxDecoration(color: h ? cSoft.withValues(alpha: 0.4) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
-                            child: Row(children: [
-                              const Icon(Icons.language, size: 13, color: cMuted),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Tooltip(
-                                  message: s.title.isNotEmpty ? '${s.title}\n${s.domain}' : s.domain,
-                                  child: Text(s.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: cPrimary, fontWeight: FontWeight.w600)),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(formatMs(s.ms), style: const TextStyle(fontSize: 11, color: cMuted)),
-                            ]),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
+    return selectableRegion(
+      Material(
+        type: MaterialType.transparency,
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: _tipDecoration,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              widget.icon(app, 22),
+              const SizedBox(width: 8),
+              Expanded(child: EllipsisText(widget.title(app), style: const TextStyle(fontWeight: FontWeight.w800))),
+            ]),
+            const SizedBox(height: 4),
+            Text('${metricLabel(widget.metric)}: ${formatMs(total)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800, fontSize: 13)),
+            Text('${tr('launches')}: ${sessions.length}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+            if (appSites.isNotEmpty) ...[
               const SizedBox(height: 6),
-              Text(tr('sessions'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
+              Text(tr('chartSites'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 3),
               ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 180),
+                constraints: const BoxConstraints(maxHeight: 140),
                 child: ListView(
                   shrinkWrap: true,
                   padding: EdgeInsets.zero,
                   children: [
-                    for (final s in sessions)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Row(children: [
-                          Expanded(child: Text('${labelAt(widget.first, widget.total, s.start, seconds: true)} - ${labelAt(widget.first, widget.total, s.end, seconds: true, timeOnly: true)}', style: const TextStyle(fontSize: 13))),
-                          Text(formatMs(s.ms), style: const TextStyle(fontSize: 12, color: cMuted)),
-                        ]),
+                    for (final s in appSites)
+                      HoverBox(
+                        onTapAt: widget.onOpenSite != null ? (pos) => widget.onOpenSite!(s, app, pos) : null,
+                        builder: (h) => Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                          decoration: BoxDecoration(color: h ? cSoft.withValues(alpha: 0.4) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
+                          child: Row(children: [
+                            const Icon(Icons.language, size: 13, color: cMuted),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Tooltip(
+                                message: s.title.isNotEmpty ? '${s.title}\n${s.domain}' : s.domain,
+                                child: Text(s.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: cPrimary, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(formatMs(s.ms), style: const TextStyle(fontSize: 11, color: cMuted)),
+                          ]),
+                        ),
                       ),
                   ],
                 ),
               ),
-            ]),
-          ),
+            ],
+            const SizedBox(height: 6),
+            Text(tr('sessions'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 180),
+              child: ListView(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final s in sessions)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Row(children: [
+                        Expanded(child: Text('${labelAt(widget.first, widget.total, s.start, seconds: true)} - ${labelAt(widget.first, widget.total, s.end, seconds: true, timeOnly: true)}', style: const TextStyle(fontSize: 13))),
+                        Text(formatMs(s.ms), style: const TextStyle(fontSize: 12, color: cMuted)),
+                      ]),
+                    ),
+                ],
+              ),
+            ),
+          ]),
         ),
       ),
     );

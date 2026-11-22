@@ -481,7 +481,10 @@ class ApiService : Service() {
 class BootReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     try {
-      if (File(Sync.dir(context), "localapi").exists() && File(Sync.dir(context), "consent").exists()) ApiService.apply(context, true)
+      val dir = Sync.dir(context)
+      if (!File(dir, "consent").exists()) return
+      if (File(dir, "localapi").exists()) ApiService.apply(context, true)
+      if (File(dir, "p2p").exists() || File(dir, "peers.json").exists()) P2pService.apply(context, true)
     } catch (ex: Exception) {
     }
   }

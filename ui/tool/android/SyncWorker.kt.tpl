@@ -67,8 +67,18 @@ object Sync {
     while (events.hasNextEvent()) {
       events.getNextEvent(e)
       val t = e.eventType
-      if (t != 1 && t != 2 && t != 16 && t != 17 && t != 26) continue
       val pkg = e.packageName ?: ""
+      if (t == 18) {
+        out.add(mapOf("pkg" to pkg, "type" to 18, "time" to e.timeStamp))
+        continue
+      }
+      if (t == 12) {
+        if (pkg.isNotEmpty() && pkg != launcher && pkg != "com.android.systemui") {
+          out.add(mapOf("pkg" to pkg, "type" to 12, "time" to e.timeStamp))
+        }
+        continue
+      }
+      if (t != 1 && t != 2 && t != 16 && t != 17 && t != 26) continue
       if (pkg == launcher || pkg == "com.android.systemui") {
         if (t == 1) out.add(mapOf("pkg" to pkg, "type" to 16, "time" to e.timeStamp))
         continue
@@ -76,6 +86,30 @@ object Sync {
       out.add(mapOf("pkg" to pkg, "type" to t, "time" to e.timeStamp))
     }
     return out
+  }
+
+  fun deviceName(ctx: Context): String {
+    fun setting(name: String): String {
+      var v: String? = null
+      try {
+        v = android.provider.Settings.Global.getString(ctx.contentResolver, name)
+      } catch (_: Exception) {}
+      if (v.isNullOrBlank()) {
+        try {
+          v = android.provider.Settings.Secure.getString(ctx.contentResolver, name)
+        } catch (_: Exception) {}
+      }
+      return (v ?: "").trim()
+    }
+    var name = setting("device_name")
+    if (name.isEmpty()) name = setting("bluetooth_name")
+    if (name.isEmpty()) {
+      val maker = Build.MANUFACTURER ?: ""
+      val model = Build.MODEL ?: ""
+      val brand = if (maker.isEmpty()) "" else maker.substring(0, 1).uppercase() + maker.substring(1)
+      name = if (model.lowercase().startsWith(maker.lowercase())) model else "$brand $model".trim()
+    }
+    return name
   }
 
   fun label(ctx: Context, pkg: String): String {
@@ -173,7 +207,7 @@ object Sync {
     return c
   }
 
-  private fun store(db: SQLiteDatabase, spans: List<Span>, firstDay: Calendar, lastDay: Calendar) {
+  private fun store(db: SQLiteDatabase, spans: List<Span>, events: List<Ev>, firstDay: Calendar, lastDay: Calendar) {
     db.beginTransaction()
     try {
       for (s in spans) {
@@ -188,13 +222,21 @@ object Sync {
         val b = next.timeInMillis
         db.execSQL("DELETE FROM usage WHERE day = ?", arrayOf<Any>(key))
         db.execSQL("DELETE FROM timeline WHERE day = ?", arrayOf<Any>(key))
+        db.execSQL("DELETE FROM app_stats WHERE day = ? AND kind = 'opens'", arrayOf<Any>(key))
         val usage = HashMap<String, Long>()
         val timeline = HashMap<String, Long>()
-        val cursor = db.rawQuery("SELECT app, start, stop FROM sessions WHERE stop > ${a / 1000} AND start < ${b / 1000}", null)
+        val opens = HashMap<String, Long>()
+        val aSec = a / 1000
+        val bSec = b / 1000
+        val cursor = db.rawQuery("SELECT app, start, stop FROM sessions WHERE stop > $aSec AND start < $bSec", null)
         while (cursor.moveToNext()) {
           val app = cursor.getString(0)
-          var from = cursor.getLong(1) * 1000
+          val rawStart = cursor.getLong(1)
+          var from = rawStart * 1000
           val to = minOf(cursor.getLong(2) * 1000, b)
+          if (rawStart in aSec until bSec) {
+            opens[app] = (opens[app] ?: 0L) + 1L
+          }
           if (from < a) from = a
           if (to <= from) continue
           usage[app] = (usage[app] ?: 0L) + (to - from)
@@ -216,6 +258,26 @@ object Sync {
           val i = k.indexOf('\u0000')
           db.execSQL("INSERT INTO timeline(day, slot, app, state, ms) VALUES(?, ?, ?, 0, ?)", arrayOf<Any>(key, k.substring(0, i).toLong(), k.substring(i + 1), ms))
         }
+        for ((app, n) in opens) {
+          db.execSQL("INSERT INTO app_stats(day, app, kind, n) VALUES(?, ?, 'opens', ?)", arrayOf<Any>(key, app, n))
+        }
+        var dayEvents = 0
+        var unlocks = 0L
+        val notifs = HashMap<String, Long>()
+        for (ev in events) {
+          if (ev.ms < a || ev.ms >= b) continue
+          dayEvents++
+          if (ev.type == 18) unlocks++
+          else if (ev.type == 12 && ev.pkg.isNotEmpty()) notifs[ev.pkg] = (notifs[ev.pkg] ?: 0L) + 1L
+        }
+        if (dayEvents > 0 || unlocks > 0 || notifs.isNotEmpty()) {
+          db.execSQL("DELETE FROM day_stats WHERE day = ? AND kind = 'unlocks'", arrayOf<Any>(key))
+          db.execSQL("DELETE FROM app_stats WHERE day = ? AND kind = 'notifs'", arrayOf<Any>(key))
+          if (unlocks > 0) db.execSQL("INSERT INTO day_stats(day, kind, n) VALUES(?, 'unlocks', ?)", arrayOf<Any>(key, unlocks))
+          for ((app, n) in notifs) {
+            db.execSQL("INSERT INTO app_stats(day, app, kind, n) VALUES(?, ?, 'notifs', ?)", arrayOf<Any>(key, app, n))
+          }
+        }
         day.add(Calendar.DAY_OF_MONTH, 1)
       }
       db.setTransactionSuccessful()
@@ -229,6 +291,8 @@ object Sync {
   private const val SCHEMA_SESSIONS = "CREATE TABLE IF NOT EXISTS sessions(app TEXT NOT NULL, start INTEGER NOT NULL, stop INTEGER NOT NULL, state INTEGER NOT NULL, PRIMARY KEY(app, start)) WITHOUT ROWID"
   private const val SCHEMA_APPCAT = "CREATE TABLE IF NOT EXISTS appcat(app TEXT PRIMARY KEY, cat INTEGER NOT NULL) WITHOUT ROWID"
   private const val SCHEMA_APPS = "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID"
+  private const val SCHEMA_DAY_STATS = "CREATE TABLE IF NOT EXISTS day_stats(day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind)) WITHOUT ROWID"
+  private const val SCHEMA_APP_STATS = "CREATE TABLE IF NOT EXISTS app_stats(day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, app, kind)) WITHOUT ROWID"
 
   @Synchronized
   fun run(ctx: Context) {
@@ -254,7 +318,9 @@ object Sync {
       db.execSQL(SCHEMA_SESSIONS)
       db.execSQL(SCHEMA_APPS)
       db.execSQL(SCHEMA_APPCAT)
-      store(db, spans, firstDay, lastDay)
+      db.execSQL(SCHEMA_DAY_STATS)
+      db.execSQL(SCHEMA_APP_STATS)
+      store(db, spans, events, firstDay, lastDay)
       val known = HashSet<String>()
       val c = db.rawQuery("SELECT app, path FROM apps WHERE path != ''", null)
       while (c.moveToNext()) {

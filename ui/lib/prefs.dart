@@ -15,6 +15,7 @@ class ViewPrefs {
   static int maxSec = 0;
   static bool avgLine = false;
   static bool compare = false;
+  static String androidControls = 'gestures';
 
   static void load() {
     try {
@@ -30,19 +31,23 @@ class ViewPrefs {
         if (k == 'maxsec') maxSec = (int.tryParse(v) ?? 0).clamp(0, maxDuration).toInt();
         if (k == 'avg') avgLine = v == '1';
         if (k == 'compare') compare = v == '1';
+        if (k == 'controls' && (v == 'gestures' || v == 'buttons')) androidControls = v;
       }
     } catch (_) {}
   }
 
-  static void update({bool? real, int? sec, int? max, bool? avg, bool? cmp}) {
+  static void update({bool? real, int? sec, int? max, bool? avg, bool? cmp, String? controls}) {
     realFocus = real ?? realFocus;
     minSec = sec ?? minSec;
     maxSec = max ?? maxSec;
     avgLine = avg ?? avgLine;
     compare = cmp ?? compare;
+    if (controls == 'gestures' || controls == 'buttons') androidControls = controls!;
     try {
       Directory(dataDir()).createSync(recursive: true);
-      File(_path('view')).writeAsStringSync('realfocus=${realFocus ? 1 : 0}\nminsec=$minSec\nmaxsec=$maxSec\navg=${avgLine ? 1 : 0}\ncompare=${compare ? 1 : 0}\n');
+      File(_path('view')).writeAsStringSync(
+        'realfocus=${realFocus ? 1 : 0}\nminsec=$minSec\nmaxsec=$maxSec\navg=${avgLine ? 1 : 0}\ncompare=${compare ? 1 : 0}\ncontrols=$androidControls\n',
+      );
     } catch (_) {}
     rev.value++;
   }

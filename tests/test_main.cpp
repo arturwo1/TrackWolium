@@ -942,6 +942,12 @@ void test_browser_api() {
   CHECK(top.body.find("\"title\":\"GitHub: Build\"") != std::string::npos);
   CHECK(top.body.find("\"url\":\"https://github.com/explore\"") != std::string::npos);
   CHECK(top.body.find("\"ms\":20000") != std::string::npos);
+
+  auto r3 = tw::route_api("POST", "/v1/browser", "{\"browser\":\"opera\",\"domain\":\"youtube.com\",\"title\":\"\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442 \\uD83D\\uDE00\",\"url\":\"https://youtube.com/watch?v=1\",\"ms\":5000}", "", store.get(), now);
+  CHECK(r3.status == 200);
+  auto top2 = tw::route_api("GET", "/v1/browser/top?days=1&limit=5", "", "", store.get(), now);
+  CHECK(top2.status == 200);
+  CHECK(top2.body.find("\"title\":\"\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 \xF0\x9F\x98\x80\"") != std::string::npos);
 }
 
 int main() {

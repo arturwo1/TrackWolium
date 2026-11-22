@@ -185,6 +185,43 @@ std::string metric_of(const std::string& q) {
   return (m == "open" || m == "minimized" || m == "background" || m == "all") ? m : "focused";
 }
 
+int hex_val(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+bool parse_hex4(const std::string& s, std::size_t pos, unsigned int& out) {
+  if (pos + 4 > s.size()) return false;
+  unsigned int v = 0;
+  for (int i = 0; i < 4; ++i) {
+    int h = hex_val(s[pos + i]);
+    if (h < 0) return false;
+    v = (v << 4) | static_cast<unsigned int>(h);
+  }
+  out = v;
+  return true;
+}
+
+void append_utf8(std::string& out, unsigned int cp) {
+  if (cp < 0x80) {
+    out.push_back(static_cast<char>(cp));
+  } else if (cp < 0x800) {
+    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else if (cp < 0x10000) {
+    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else if (cp <= 0x10FFFF) {
+    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  }
+}
+
 bool json_string(const std::string& json, const std::string& key, std::string& out) {
   std::string pat = "\"" + key + "\"";
   std::size_t p = json.find(pat);
@@ -198,8 +235,25 @@ bool json_string(const std::string& json, const std::string& key, std::string& o
   while (p < json.size() && json[p] != '"') {
     if (json[p] == '\\' && p + 1 < json.size()) {
       char next = json[++p];
-      if (next == 'n' || next == 'r' || next == 't') val.push_back(' ');
-      else val.push_back(next);
+      if (next == 'n' || next == 'r' || next == 't' || next == 'b' || next == 'f') {
+        val.push_back(' ');
+      } else if (next == 'u') {
+        unsigned int hi = 0;
+        if (parse_hex4(json, p + 1, hi)) {
+          p += 4;
+          if (hi >= 0xD800 && hi <= 0xDBFF && p + 6 < json.size() && json[p + 1] == '\\' && json[p + 2] == 'u') {
+            unsigned int lo = 0;
+            if (parse_hex4(json, p + 3, lo) && lo >= 0xDC00 && lo <= 0xDFFF) {
+              p += 6;
+              append_utf8(val, 0x10000 + (((hi - 0xD800) << 10) | (lo - 0xDC00)));
+            }
+          } else {
+            append_utf8(val, hi);
+          }
+        }
+      } else {
+        val.push_back(next);
+      }
       ++p;
       continue;
     }
@@ -300,6 +354,12 @@ ApiReply route_api(const std::string& method, const std::string& target, const s
     domain = clean_token(domain, 192);
     title = clean_title(title, 180);
     url = clean_url(url, 512);
+    {
+      std::string lt = lower(title);
+      if (lt == domain || lt == "www." + domain || lt.rfind("http://", 0) == 0 || lt.rfind("https://", 0) == 0) {
+        title.clear();
+      }
+    }
     if (browser.empty() || domain.empty() || ms <= 0 || ms > 3600000) {
       return {400, kJson, "{\"error\":\"bad payload\"}"};
     }

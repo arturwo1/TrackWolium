@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wolium Browser Companion",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Tracks active site domains locally and sends them to Wolium on this device.",
   "permissions": [
     "tabs",

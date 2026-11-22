@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
@@ -129,12 +130,9 @@ class _RootState extends State<Root> {
   @override
   Widget build(BuildContext context) {
     if (accepted) return Shell(onWithdraw: withdraw);
-    return DefaultSelectionStyle(
-      mouseCursor: SystemMouseCursors.basic,
-      child: SelectionArea(
-        contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
-        child: Scaffold(
-          body: Center(
+    return selectableRegion(
+      Scaffold(
+        body: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: ConstrainedBox(
@@ -161,7 +159,6 @@ class _RootState extends State<Root> {
               ),
             ),
           ),
-        ),
       ),
     );
   }
@@ -225,13 +222,15 @@ class Shell extends StatefulWidget {
   State<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> {
+class _ShellState extends State<Shell> with WidgetsBindingObserver {
   final usage = Usage();
   Timer? timer;
   int tab = 0;
   List<String> days = [];
   late DateTime from;
   late DateTime to;
+  TimeOfDay fromTime = const TimeOfDay(hour: 0, minute: 0);
+  TimeOfDay toTime = const TimeOfDay(hour: 23, minute: 59);
   String preset = 'day';
   String? hoverApp;
   bool showTime = true;
@@ -260,6 +259,7 @@ class _ShellState extends State<Shell> {
   Map<String, ResAgg> resMap = {};
   List<ResPoint> resPts = [];
   List<SysPoint> sysPts = [];
+  List<StatPoint> statPts = [];
   final resSel = <String>{};
   String? catFilter;
   List<Contrib> previous = [];
@@ -267,14 +267,39 @@ class _ShellState extends State<Shell> {
   Set<String> rowApps = {};
   bool dirty = false;
   final ScrollController tableHScroll = ScrollController();
+  final ScrollController vScroll = ScrollController();
+  final GlobalKey chartKey = GlobalKey();
+  final FocusNode shellFocus = FocusNode();
+  Offset? autoScrollOrigin;
+  Offset? autoScrollCursor;
+  Timer? autoScrollTimer;
+  bool autoScrollMoved = false;
   Set<String> selectedDevices = {'local'};
   List<DeviceInfo> peerDevices = [];
   Map<String, List<SiteUsage>> sitesByBrowser = {};
   List<SiteContrib> siteContribs = [];
   final Set<String> expandedBrowsers = {};
+  ActivityStats activityStats = const ActivityStats();
 
   bool get isLocalOnly => selectedDevices.length == 1 && selectedDevices.contains('local');
   bool get includesLocal => selectedDevices.isEmpty || selectedDevices.contains('local');
+  bool get hasCustomTime => preset == 'custom' && (fromTime.hour != 0 || fromTime.minute != 0 || toTime.hour != 23 || toTime.minute != 59);
+  int? get customStartEpoch => !hasCustomTime ? null : DateTime(from.year, from.month, from.day, fromTime.hour, fromTime.minute).millisecondsSinceEpoch ~/ 1000;
+  int? get customEndEpoch => !hasCustomTime ? null : DateTime(to.year, to.month, to.day, toTime.hour, toTime.minute).add(const Duration(minutes: 1)).millisecondsSinceEpoch ~/ 1000;
+  double? get customChartInitFrom {
+    final s = customStartEpoch;
+    if (s == null) return null;
+    final mid = DateTime(from.year, from.month, from.day).millisecondsSinceEpoch ~/ 1000;
+    return math.max(0.0, (s - mid).toDouble());
+  }
+
+  double? get customChartInitTo {
+    final e = customEndEpoch;
+    if (e == null) return null;
+    final mid = DateTime(from.year, from.month, from.day).millisecondsSinceEpoch ~/ 1000;
+    return math.min(dayCount * 86400.0, (e - mid).toDouble());
+  }
+
   String get deviceFilterKey {
     final list = selectedDevices.toList()..sort();
     return list.join(',');
@@ -333,13 +358,16 @@ class _ShellState extends State<Shell> {
     if (!force && inside && bin == loadBin && useSess == loadSess) return;
     final w0 = math.max(0, viewFrom - sp).floor();
     final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
-    contribs = usage.contribs(from, w0, w1, bin, useSess, realFocus: realFocusOn, devices: selectedDevices).where((c) => appAllowed(c.app)).toList();
+    final sEp = customStartEpoch;
+    final eEp = customEndEpoch;
+    contribs = usage.contribs(from, w0, w1, bin, useSess, realFocus: realFocusOn, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp).where((c) => appAllowed(c.app)).toList();
     previous = ViewPrefs.compare ? usage.contribs(prevFrom(), w0, w1, bin, false, realFocus: realFocusOn, devices: selectedDevices).where((c) => appAllowed(c.app)).toList() : [];
-    siteContribs = usage.browserContribs(from, w0, w1, bin, devices: selectedDevices);
+    siteContribs = usage.browserContribs(from, w0, w1, bin, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp);
     presenceRows = includesLocal ? usage.presence(from, w0, w1) : [];
     final en = MetricPrefs.enabled.value;
     resPts = includesLocal && en.any(procMetricIds.contains) ? usage.resPoints(from, w0, w1, bin) : [];
     sysPts = includesLocal && en.any(sysMetricIds.contains) ? usage.sysPoints(from, w0, w1) : [];
+    statPts = resSel.any(statMetricIds.contains) ? usage.statPoints(from, w0, w1, bin, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp) : [];
     for (final r in presenceRows) {
       if (r.name.isEmpty && r.clientId.isNotEmpty) resolveRpcName(r.clientId);
     }
@@ -515,6 +543,8 @@ class _ShellState extends State<Shell> {
         if (liveMode) 'now',
         if (multiState) ...['focused', if (!Platform.isAndroid && !MetricPrefs.has('notime')) 'realcol', 'open', 'minimized', 'background'],
         'total',
+        'opens',
+        if (Platform.isAndroid || peerDevices.isNotEmpty || activityStats.notifs.isNotEmpty) 'notifs',
         if (multiState) ...procMetricIds.where(MetricPrefs.enabled.value.contains),
       ];
 
@@ -562,13 +592,7 @@ class _ShellState extends State<Shell> {
       ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
   }
 
-  Widget selectableDialog(Widget child) => DefaultSelectionStyle(
-        mouseCursor: SystemMouseCursors.basic,
-        child: SelectionArea(
-          contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
-          child: child,
-        ),
-      );
+  Widget selectableDialog(Widget child) => selectableRegion(child);
 
   Future<bool> confirmEnd(AppUsage r) async {
     final ok = await showDialog<bool>(
@@ -637,22 +661,24 @@ class _ShellState extends State<Shell> {
     await openSiteDefault(s);
   }
 
-  Future<void> openSiteFromChart(SiteUsage s, String? browserApp) async {
+  Future<void> openSiteFromChart(SiteUsage s, String? browserApp, Offset? at) async {
     final row = browserApp != null ? rows.cast<AppUsage?>().firstWhere((r) => r?.app == browserApp, orElse: () => null) : _findBrowserRow(s.browser);
-    await siteMenu(s, row, null);
+    await siteMenu(s, row, at);
   }
 
   Future<void> siteMenu(SiteUsage s, AppUsage? browserRow, Offset? at) async {
     final target = _resolveBrowserLauncher(s, browserRow);
     final canSame = !Platform.isAndroid && ((target.exe != null && File(target.exe!).existsSync()) || (Platform.isMacOS && (target.macApp?.isNotEmpty ?? false)));
     String? action;
-    if (at != null) {
+    if (!Platform.isAndroid) {
+      final sz = MediaQuery.sizeOf(context);
+      final pos = at ?? Offset(sz.width / 2, sz.height / 2);
       Widget item(IconData icon, String text, {bool on = true}) {
         final c = on ? cPrimary : cMuted.withValues(alpha: 0.45);
         return Row(children: [Icon(icon, size: 18, color: on ? cMuted : c), const SizedBox(width: 10), Text(text, style: TextStyle(color: c))]);
       }
 
-      action = await darkMenu<String>(at, [
+      action = await darkMenu<String>(pos, [
         PopupMenuItem<String>(enabled: false, height: 32, child: Text(s.displayTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800, fontSize: 12))),
         PopupMenuItem<String>(value: 'default', child: item(Icons.open_in_browser, tr('siteOpenDefault'))),
         PopupMenuItem<String>(value: 'same', enabled: canSame, child: item(Icons.launch, tr('siteOpenSameBrowser'), on: canSame)),
@@ -663,19 +689,19 @@ class _ShellState extends State<Shell> {
         context: context,
         backgroundColor: cPanel,
         builder: (c) => SafeArea(
-          child: selectableDialog(
-            Column(mainAxisSize: MainAxisSize.min, children: [
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            selectableDialog(
               ListTile(
                 leading: const Icon(Icons.public, color: cPrimary),
                 title: Text(s.displayTitle, style: const TextStyle(fontWeight: FontWeight.w800), maxLines: 2, overflow: TextOverflow.ellipsis),
                 subtitle: Text('${s.domain} · ${s.openUrl}', style: const TextStyle(color: cMuted, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
-              const Divider(height: 1),
-              ListTile(leading: const Icon(Icons.open_in_browser), title: Text(tr('siteOpenDefault')), onTap: () => Navigator.pop(c, 'default')),
-              if (canSame) ListTile(leading: const Icon(Icons.launch), title: Text(tr('siteOpenSameBrowser')), onTap: () => Navigator.pop(c, 'same')),
-              ListTile(leading: const Icon(Icons.copy), title: Text(tr('siteCopyUrl')), onTap: () => Navigator.pop(c, 'copy')),
-            ]),
-          ),
+            ),
+            const Divider(height: 1),
+            ListTile(leading: const Icon(Icons.open_in_browser), title: Text(tr('siteOpenDefault')), onTap: () => Navigator.pop(c, 'default')),
+            if (canSame) ListTile(leading: const Icon(Icons.launch), title: Text(tr('siteOpenSameBrowser')), onTap: () => Navigator.pop(c, 'same')),
+            ListTile(leading: const Icon(Icons.copy), title: Text(tr('siteCopyUrl')), onTap: () => Navigator.pop(c, 'copy')),
+          ]),
         ),
       );
     }
@@ -820,6 +846,12 @@ class _ShellState extends State<Shell> {
         return Categories.of(r.app)?.name ?? '-';
       case 'total':
         return formatMs(r.total);
+      case 'opens':
+        final n = activityStats.opens[r.app] ?? 0;
+        return n == 0 ? '-' : '$n';
+      case 'notifs':
+        final n = activityStats.notifs[r.app] ?? 0;
+        return n == 0 ? '-' : '$n';
       case 'cpu':
         return a == null || a.cpuMs == 0 ? '-' : formatCpuMs(a.cpuMs);
       case 'ram':
@@ -846,6 +878,7 @@ class _ShellState extends State<Shell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     autostartEnabled();
     to = dateOnly(DateTime.now());
     from = to;
@@ -875,7 +908,21 @@ class _ShellState extends State<Shell> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!Platform.isAndroid) return;
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      P2pSync.instance.suspendForBackground();
+    } else if (state == AppLifecycleState.resumed) {
+      P2pSync.instance.resumeFromBackground();
+      requestFlush();
+      refresh();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    autoScrollTimer?.cancel();
     Hidden.apps.removeListener(onHiddenChanged);
     MetricPrefs.enabled.removeListener(onMetricsChanged);
     ColumnPrefs.hidden.removeListener(onColumnsChanged);
@@ -883,6 +930,8 @@ class _ShellState extends State<Shell> {
     Categories.list.removeListener(onViewChanged);
     P2pSync.instance.version.removeListener(onViewChanged);
     tableHScroll.dispose();
+    vScroll.dispose();
+    shellFocus.dispose();
     timer?.cancel();
     usage.close();
     super.dispose();
@@ -890,7 +939,7 @@ class _ShellState extends State<Shell> {
 
   void onMetricsChanged() {
     if (!mounted) return;
-    resSel.retainAll(MetricPrefs.enabled.value);
+    resSel.removeWhere((id) => !statMetricIds.contains(id) && !MetricPrefs.enabled.value.contains(id));
     final fk = keyOf(from);
     final tk = keyOf(to);
     setState(() {
@@ -995,6 +1044,8 @@ class _ShellState extends State<Shell> {
     preset = p;
     to = today;
     from = today.subtract(Duration(days: span));
+    fromTime = const TimeOfDay(hour: 0, minute: 0);
+    toTime = const TimeOfDay(hour: 23, minute: 59);
   }
 
   void refresh() {
@@ -1002,15 +1053,17 @@ class _ShellState extends State<Shell> {
     final today = dateOnly(DateTime.now());
     final fk = keyOf(from);
     final tk = keyOf(to);
+    final sEp = customStartEpoch;
+    final eEp = customEndEpoch;
     final latestPeers = usage.devices();
     final validIds = {'local', for (final d in latestPeers) d.id};
     selectedDevices.removeWhere((id) => !validIds.contains(id));
     if (selectedDevices.isEmpty) selectedDevices.add('local');
     final b = usage.sinceHeartbeat();
     final up = b != null && b <= const Duration(seconds: staleSeconds);
-    final l = isLocalOnly && up && from == to && to == today ? usage.live() : null;
-    final rk = '$fk|$tk|$deviceFilterKey';
-    final src = l ?? usage.range(fk, tk, devices: selectedDevices);
+    final l = isLocalOnly && up && !hasCustomTime && from == to && to == today ? usage.live() : null;
+    final rk = '$fk|$tk|${sEp ?? ''}|${eEp ?? ''}|$deviceFilterKey';
+    final src = l ?? usage.range(fk, tk, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp);
     final paths = {for (final r in src) if (r.visible > 0 || Platform.isAndroid || !isLocalOnly) r.app: r.path};
     final titles = {for (final r in src) r.app: r.title};
     if (rangeKey != rk || ticks % 30 == 0) {
@@ -1035,43 +1088,237 @@ class _ShellState extends State<Shell> {
       final every = dayCount > 1 ? 30 : 5;
       final changed = rangeKey != rk;
       if (changed) {
-        viewFrom = 0;
-        viewTo = dayCount * 86400.0;
-        viewBucket = bucketSecFor(viewTo, 600);
+        viewFrom = customChartInitFrom ?? 0;
+        viewTo = customChartInitTo ?? dayCount * 86400.0;
+        viewBucket = bucketSecFor(viewTo - viewFrom, 600);
       }
       if (changed || dirty || ticks % every == 0) {
         dirty = false;
         loadChart(force: true);
         names = usage.names(devices: selectedDevices);
-        sitesByBrowser = usage.browserSites(fk, tk, devices: selectedDevices);
+        sitesByBrowser = usage.browserSites(fk, tk, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp);
+        activityStats = usage.activityStats(fk, tk, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp);
         resMap = includesLocal && MetricPrefs.enabled.value.any(procMetricIds.contains) ? usage.resources(fk, tk) : {};
         rangeKey = rk;
       }
     });
   }
 
-  Future<void> pickRange() async {
+  Future<({DateTime from, DateTime to, TimeOfDay fromTime, TimeOfDay toTime})?> pickDateTimeRange(
+    DateTime initFrom,
+    DateTime initTo,
+    TimeOfDay initFromTime,
+    TimeOfDay initToTime, {
+    String? titleText,
+  }) async {
     final today = dateOnly(DateTime.now());
-    final picked = await showDateRangePicker(
+    var dFrom = initFrom.isAfter(today) ? today : initFrom;
+    var dTo = initTo.isAfter(today) ? today : initTo;
+    if (dTo.isBefore(dFrom)) dTo = dFrom;
+    final fHCtl = TextEditingController(text: two(initFromTime.hour));
+    final fMCtl = TextEditingController(text: two(initFromTime.minute));
+    final tHCtl = TextEditingController(text: two(initToTime.hour));
+    final tMCtl = TextEditingController(text: two(initToTime.minute));
+
+    TimeOfDay readTime(TextEditingController hc, TextEditingController mc, TimeOfDay fallback) {
+      final h = int.tryParse(hc.text.trim()) ?? fallback.hour;
+      final m = int.tryParse(mc.text.trim()) ?? fallback.minute;
+      return TimeOfDay(hour: h.clamp(0, 23).toInt(), minute: m.clamp(0, 59).toInt());
+    }
+
+    final res = await showDialog<({DateTime from, DateTime to, TimeOfDay fromTime, TimeOfDay toTime})>(
       context: context,
-      firstDate: DateTime(2000),
-      lastDate: today,
-      errorFormatText: tr('dateFormatError'),
-      errorInvalidText: tr('dateOutOfRange'),
-      errorInvalidRangeText: tr('dateRangeError'),
-      initialDateRange: DateTimeRange(start: from, end: to.isAfter(today) ? today : to),
+      builder: (c) => StatefulBuilder(
+        builder: (c, setDlg) {
+          void applyQuick(DateTime a, DateTime b, TimeOfDay ta, TimeOfDay tb) {
+            setDlg(() {
+              dFrom = a;
+              dTo = b;
+              fHCtl.text = two(ta.hour);
+              fMCtl.text = two(ta.minute);
+              tHCtl.text = two(tb.hour);
+              tMCtl.text = two(tb.minute);
+            });
+          }
+
+          Widget timeField(TextEditingController ctl, int maxVal) => SizedBox(
+                width: 48,
+                child: TextField(
+                  controller: ctl,
+                  keyboardType: TextInputType.number,
+                  maxLength: 2,
+                  textAlign: TextAlign.center,
+                  decoration: const InputDecoration(isDense: true, counterText: ''),
+                  onChanged: (_) => setDlg(() {}),
+                ),
+              );
+
+          Future<void> editClock(bool start) async {
+            final cur = start ? readTime(fHCtl, fMCtl, initFromTime) : readTime(tHCtl, tMCtl, initToTime);
+            final picked = await showTimePicker(
+              context: c,
+              initialTime: cur,
+              builder: (ctx, child) => MediaQuery(data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true), child: child!),
+            );
+            if (picked == null) return;
+            setDlg(() {
+              if (start) {
+                fHCtl.text = two(picked.hour);
+                fMCtl.text = two(picked.minute);
+              } else {
+                tHCtl.text = two(picked.hour);
+                tMCtl.text = two(picked.minute);
+              }
+            });
+          }
+
+          final ft = readTime(fHCtl, fMCtl, initFromTime);
+          final tt = readTime(tHCtl, tMCtl, initToTime);
+          final startDt = DateTime(dFrom.year, dFrom.month, dFrom.day, ft.hour, ft.minute);
+          final endDt = DateTime(dTo.year, dTo.month, dTo.day, tt.hour, tt.minute);
+          final valid = !endDt.isBefore(startDt);
+
+          return AlertDialog(
+            backgroundColor: cPanel,
+            title: Text(titleText ?? tr('rangeDialogTitle')),
+            content: SizedBox(
+              width: 390,
+              child: selectableDialog(
+                SingleChildScrollView(
+                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Wrap(spacing: 6, runSpacing: 6, children: [
+                      ActionChip(
+                        label: Text(tr('rangeFullDay'), style: const TextStyle(fontSize: 12)),
+                        onPressed: () => applyQuick(dFrom, dTo, const TimeOfDay(hour: 0, minute: 0), const TimeOfDay(hour: 23, minute: 59)),
+                      ),
+                      ActionChip(
+                        label: Text(tr('rangeWorkDay'), style: const TextStyle(fontSize: 12)),
+                        onPressed: () => applyQuick(dFrom, dTo, const TimeOfDay(hour: 9, minute: 0), const TimeOfDay(hour: 18, minute: 0)),
+                      ),
+                      ActionChip(
+                        label: Text(tr('rangeLastHour'), style: const TextStyle(fontSize: 12)),
+                        onPressed: () {
+                          final now = DateTime.now();
+                          final prev = now.subtract(const Duration(hours: 1));
+                          applyQuick(dateOnly(prev), dateOnly(now), TimeOfDay.fromDateTime(prev), TimeOfDay.fromDateTime(now));
+                        },
+                      ),
+                    ]),
+                    const SizedBox(height: 12),
+                    Text(tr('rangeFromLabel'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.calendar_today, size: 15),
+                        label: Text(shown(dFrom)),
+                        onPressed: () async {
+                          final picked = await showDateRangePicker(
+                            context: c,
+                            firstDate: DateTime(2000),
+                            lastDate: today,
+                            errorFormatText: tr('dateFormatError'),
+                            errorInvalidText: tr('dateOutOfRange'),
+                            errorInvalidRangeText: tr('dateRangeError'),
+                            initialDateRange: DateTimeRange(start: dFrom, end: dTo),
+                          );
+                          if (picked != null) {
+                            setDlg(() {
+                              dFrom = dateOnly(picked.start);
+                              dTo = dateOnly(picked.end);
+                            });
+                          }
+                        },
+                      ),
+                      const SizedBox(width: 10),
+                      timeField(fHCtl, 23),
+                      const Padding(padding: EdgeInsets.symmetric(horizontal: 4), child: Text(':', style: TextStyle(fontWeight: FontWeight.w900))),
+                      timeField(fMCtl, 59),
+                      IconButton(
+                        tooltip: tr('pickTime'),
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.access_time, size: 18, color: cPrimary),
+                        onPressed: () => editClock(true),
+                      ),
+                    ]),
+                    const SizedBox(height: 12),
+                    Text(tr('rangeToLabel'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.calendar_today, size: 15),
+                        label: Text(shown(dTo)),
+                        onPressed: () async {
+                          final picked = await showDatePicker(
+                            context: c,
+                            initialDate: dTo,
+                            firstDate: dFrom,
+                            lastDate: today,
+                          );
+                          if (picked != null) {
+                            setDlg(() => dTo = dateOnly(picked));
+                          }
+                        },
+                      ),
+                      const SizedBox(width: 10),
+                      timeField(tHCtl, 23),
+                      const Padding(padding: EdgeInsets.symmetric(horizontal: 4), child: Text(':', style: TextStyle(fontWeight: FontWeight.w900))),
+                      timeField(tMCtl, 59),
+                      IconButton(
+                        tooltip: tr('pickTime'),
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.access_time, size: 18, color: cPrimary),
+                        onPressed: () => editClock(false),
+                      ),
+                    ]),
+                    if (!valid)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Text(tr('dateRangeError'), style: const TextStyle(color: cDanger, fontSize: 12, fontWeight: FontWeight.w700)),
+                      ),
+                  ]),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('cancel'))),
+              FilledButton(
+                onPressed: !valid
+                    ? null
+                    : () => Navigator.pop(c, (from: dFrom, to: dTo, fromTime: ft, toTime: tt)),
+                child: Text(tr('ok')),
+              ),
+            ],
+          );
+        },
+      ),
     );
+    fHCtl.dispose();
+    fMCtl.dispose();
+    tHCtl.dispose();
+    tMCtl.dispose();
+    return res;
+  }
+
+  Future<void> pickRange() async {
+    final picked = await pickDateTimeRange(from, to, fromTime, toTime);
     if (picked == null) return;
     setState(() {
       preset = 'custom';
-      from = dateOnly(picked.start);
-      to = dateOnly(picked.end);
+      from = picked.from;
+      to = picked.to;
+      fromTime = picked.fromTime;
+      toTime = picked.toTime;
     });
     requestFlush();
     refresh();
   }
 
   Widget rangeSelect() {
+    final customLabel = preset != 'custom'
+        ? tr('presetCustom')
+        : (hasCustomTime
+            ? '${shown(from)} ${two(fromTime.hour)}:${two(fromTime.minute)} - ${shown(to)} ${two(toTime.hour)}:${two(toTime.minute)}'
+            : '${shown(from)} - ${shown(to)}');
     return SelectBox<String>(
       value: preset,
       items: [
@@ -1079,7 +1326,7 @@ class _ShellState extends State<Shell> {
         DropdownMenuItem(value: 'week', child: Text(tr('presetWeek'))),
         DropdownMenuItem(value: 'month', child: Text(tr('presetMonth'))),
         DropdownMenuItem(value: 'year', child: Text(tr('presetYear'))),
-        DropdownMenuItem(value: 'custom', child: Text(preset == 'custom' ? '${shown(from)} - ${shown(to)}' : tr('presetCustom'))),
+        DropdownMenuItem(value: 'custom', child: Text(customLabel)),
       ],
       onChanged: (v) {
         if (v == null) return;
@@ -1095,77 +1342,134 @@ class _ShellState extends State<Shell> {
   }
 
   List<String> exportChoices() => multiState
-      ? ['focused', if (!Platform.isAndroid) 'realcol', 'open', 'minimized', 'background', 'total', 'category', ...procMetricIds]
-      : ['total', 'category'];
+      ? ['focused', if (!Platform.isAndroid) 'realcol', 'open', 'minimized', 'background', 'total', 'opens', if (Platform.isAndroid || peerDevices.isNotEmpty || activityStats.notifs.isNotEmpty) 'notifs', 'category', ...procMetricIds]
+      : ['total', 'opens', 'notifs', 'category'];
 
-  Future<({Set<String> cols, String browserMode})?> exportColumnsDialog() {
+  Future<({Set<String> cols, String browserMode, Set<String> devices, String format})?> exportColumnsDialog() {
     final choices = exportChoices();
     final picked = <String>{for (final id in activeColumns()) if (choices.contains(id)) id, if (Categories.list.value.isNotEmpty) 'category'};
     if (picked.isEmpty) picked.add('total');
+    final expDevices = Set<String>.of(selectedDevices);
+    if (expDevices.isEmpty) expDevices.add('local');
     var browserMode = 'apps';
-    return showDialog<({Set<String> cols, String browserMode})>(
+    var format = 'summary';
+    return showDialog<({Set<String> cols, String browserMode, Set<String> devices, String format})>(
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, set) => AlertDialog(
           backgroundColor: cPanel,
           title: Text(tr('exportWhat')),
           content: SizedBox(
-            width: 360,
+            width: 400,
             child: selectableDialog(
               SingleChildScrollView(
                 child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Wrap(spacing: 8, children: [
-                    OutlinedButton(
-                      onPressed: () => set(() {
-                        picked
-                          ..clear()
-                          ..addAll([for (final id in activeColumns()) if (choices.contains(id)) id])
-                          ..add('category');
-                      }),
-                      child: Text(tr('exportVisible')),
-                    ),
-                    OutlinedButton(
-                      onPressed: () => set(() {
-                        picked
-                          ..clear()
-                          ..addAll(choices);
-                      }),
-                      child: Text(tr('exportAll')),
-                    ),
-                  ]),
-                  const SizedBox(height: 6),
-                  for (final id in choices)
-                    CheckboxListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      value: picked.contains(id),
-                      title: Text(columnLabel(id)),
-                      onChanged: (v) => set(() => v == true ? picked.add(id) : picked.remove(id)),
-                    ),
-                  const Divider(height: 18),
-                  Text(tr('exportBrowserMode'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  Text(tr('exportFormatTitle'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
                   const SizedBox(height: 4),
-                  for (final m in const ['apps', 'both', 'sites']) ...[
+                  for (final f in const ['summary', 'timesheet']) ...[
                     Builder(builder: (_) {
-                      final modeKey = m == 'apps' ? 'exportModeApps' : (m == 'both' ? 'exportModeBoth' : 'exportModeSites');
+                      final fk = f == 'summary' ? 'exportFormatSummary' : 'exportFormatTimesheet';
                       return InkWell(
-                        onTap: () => set(() => browserMode = m),
+                        onTap: () => set(() => format = f),
                         borderRadius: BorderRadius.circular(6),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 6),
                           child: Row(children: [
-                            Icon(browserMode == m ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 18, color: browserMode == m ? cPrimary : cMuted),
+                            Icon(format == f ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 18, color: format == f ? cPrimary : cMuted),
                             const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                tr(modeKey),
-                                style: TextStyle(color: browserMode == m ? cPrimary : cMuted, fontSize: 13, fontWeight: FontWeight.w600),
-                              ),
-                            ),
+                            Expanded(child: Text(tr(fk), style: TextStyle(color: format == f ? cPrimary : cMuted, fontSize: 13, fontWeight: FontWeight.w600))),
                           ]),
                         ),
                       );
                     }),
+                  ],
+                  if (peerDevices.isNotEmpty) ...[
+                    const Divider(height: 18),
+                    Text(tr('exportDevices'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    const SizedBox(height: 4),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: expDevices.contains('local'),
+                      title: Text('${deviceName()} (${tr('devThisTag')})'),
+                      onChanged: (v) => set(() {
+                        if (v == true) {
+                          expDevices.add('local');
+                        } else if (expDevices.length > 1) {
+                          expDevices.remove('local');
+                        }
+                      }),
+                    ),
+                    for (final d in peerDevices)
+                      CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        value: expDevices.contains(d.id),
+                        title: Text(d.name),
+                        onChanged: (v) => set(() {
+                          if (v == true) {
+                            expDevices.add(d.id);
+                          } else if (expDevices.length > 1) {
+                            expDevices.remove(d.id);
+                          }
+                        }),
+                      ),
+                  ],
+                  if (format == 'summary') ...[
+                    const Divider(height: 18),
+                    Wrap(spacing: 8, children: [
+                      OutlinedButton(
+                        onPressed: () => set(() {
+                          picked
+                            ..clear()
+                            ..addAll([for (final id in activeColumns()) if (choices.contains(id)) id])
+                            ..add('category');
+                        }),
+                        child: Text(tr('exportVisible')),
+                      ),
+                      OutlinedButton(
+                        onPressed: () => set(() {
+                          picked
+                            ..clear()
+                            ..addAll(choices);
+                        }),
+                        child: Text(tr('exportAll')),
+                      ),
+                    ]),
+                    const SizedBox(height: 6),
+                    for (final id in choices)
+                      CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        value: picked.contains(id),
+                        title: Text(columnLabel(id)),
+                        onChanged: (v) => set(() => v == true ? picked.add(id) : picked.remove(id)),
+                      ),
+                    const Divider(height: 18),
+                    Text(tr('exportBrowserMode'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    const SizedBox(height: 4),
+                    for (final m in const ['apps', 'both', 'sites']) ...[
+                      Builder(builder: (_) {
+                        final modeKey = m == 'apps' ? 'exportModeApps' : (m == 'both' ? 'exportModeBoth' : 'exportModeSites');
+                        return InkWell(
+                          onTap: () => set(() => browserMode = m),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Row(children: [
+                              Icon(browserMode == m ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 18, color: browserMode == m ? cPrimary : cMuted),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  tr(modeKey),
+                                  style: TextStyle(color: browserMode == m ? cPrimary : cMuted, fontSize: 13, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ]),
+                          ),
+                        );
+                      }),
+                    ],
                   ],
                 ]),
               ),
@@ -1174,7 +1478,9 @@ class _ShellState extends State<Shell> {
           actions: [
             TextButton(onPressed: () => Navigator.pop(c), child: Text(tr('cancel'))),
             TextButton(
-              onPressed: picked.isEmpty ? null : () => Navigator.pop(c, (cols: Set<String>.of(picked), browserMode: browserMode)),
+              onPressed: (format == 'summary' && picked.isEmpty)
+                  ? null
+                  : () => Navigator.pop(c, (cols: Set<String>.of(picked), browserMode: browserMode, devices: Set<String>.of(expDevices), format: format)),
               child: Text(tr('exportCsv')),
             ),
           ],
@@ -1184,104 +1490,151 @@ class _ShellState extends State<Shell> {
   }
 
   Future<String?> exportCsv() async {
-    final today = dateOnly(DateTime.now());
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2000),
-      lastDate: today,
-      errorFormatText: tr('dateFormatError'),
-      errorInvalidText: tr('dateOutOfRange'),
-      errorInvalidRangeText: tr('dateRangeError'),
-      helpText: tr('exportRange'),
-      initialDateRange: DateTimeRange(start: from, end: to.isAfter(today) ? today : to),
-    );
+    final picked = await pickDateTimeRange(from, to, fromTime, toTime, titleText: tr('exportRange'));
     if (picked == null) return null;
-    final fk = keyOf(dateOnly(picked.start));
-    final tk = keyOf(dateOnly(picked.end));
+    final fk = keyOf(picked.from);
+    final tk = keyOf(picked.to);
+    final customT = picked.fromTime.hour != 0 || picked.fromTime.minute != 0 || picked.toTime.hour != 23 || picked.toTime.minute != 59;
+    final sEp = customT ? DateTime(picked.from.year, picked.from.month, picked.from.day, picked.fromTime.hour, picked.fromTime.minute).millisecondsSinceEpoch ~/ 1000 : null;
+    final eEp = customT ? DateTime(picked.to.year, picked.to.month, picked.to.day, picked.toTime.hour, picked.toTime.minute).add(const Duration(minutes: 1)).millisecondsSinceEpoch ~/ 1000 : null;
     final resDlg = await exportColumnsDialog();
-    if (resDlg == null || resDlg.cols.isEmpty) return null;
-    final cols = resDlg.cols;
-    final browserMode = resDlg.browserMode;
+    if (resDlg == null) return null;
+    final expDevices = resDlg.devices;
+    final format = resDlg.format;
     requestFlush();
     String q(String v) => '"${v.replaceAll('"', '""')}"';
-    final idle = cols.contains('realcol') ? usage.afk(fk, tk) : <String, int>{};
-    final res = includesLocal && cols.any(procMetricIds.contains) ? usage.resources(fk, tk) : <String, ResAgg>{};
-    final sitesByB = browserMode == 'apps' ? const <String, List<SiteUsage>>{} : usage.browserSites(fk, tk, devices: selectedDevices);
-    String unit(String id) {
-      if (id == 'category') return '';
-      if (id == 'cpu') return ' (s)';
-      if (id == 'ram' || id == 'peak') return ' (KB)';
-      if (id == 'ior' || id == 'iow') return ' (B)';
-      return ' (s)';
-    }
-    String value(String id, AppUsage r) {
-      final a = res[r.app];
-      switch (id) {
-        case 'focused':
-          return '${r.ms[0] ~/ 1000}';
-        case 'realcol':
-          return '${math.max(0, r.ms[0] - (idle[r.app] ?? 0)) ~/ 1000}';
-        case 'open':
-          return '${r.ms[1] ~/ 1000}';
-        case 'minimized':
-          return '${r.ms[2] ~/ 1000}';
-        case 'background':
-          return '${r.ms[3] ~/ 1000}';
-        case 'total':
-          return '${r.total ~/ 1000}';
-        case 'category':
-          return q(Categories.of(r.app)?.name ?? '');
-        case 'cpu':
-          return a == null ? '' : '${a.cpuMs ~/ 1000}';
-        case 'ram':
-          return a == null || a.ramN == 0 ? '' : '${a.ramKb}';
-        case 'peak':
-          return a == null ? '' : '${a.peakKb}';
-        case 'ior':
-          return a == null ? '' : '${a.ior}';
-        case 'iow':
-          return a == null ? '' : '${a.iow}';
-      }
-      return '';
-    }
-    String siteValue(String id, SiteUsage s, String catName) {
-      switch (id) {
-        case 'focused':
-        case 'total':
-          return '${s.ms ~/ 1000}';
-        case 'category':
-          return q(catName);
-        default:
-          return '';
-      }
-    }
-    String siteCsvLabel(SiteUsage s, {String prefix = '', String suffix = ''}) {
-      final t = s.displayTitle;
-      final core = t == s.domain ? s.domain : '$t (${s.domain})';
-      return '$prefix$core$suffix';
+    final peerMap = {for (final d in peerDevices) d.id: d.name};
+    String devLabel(String id) => id == 'local' ? deviceName() : (peerMap[id] ?? id);
+    String fmtTs(int sec) {
+      final d = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
+      return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}:${two(d.second)}';
     }
 
-    final ids = [for (final id in exportChoices()) if (cols.contains(id)) id];
     final b = StringBuffer('\uFEFF');
-    b.writeln([tr('app'), for (final id in ids) '${columnLabel(id)}${unit(id)}'].join(','));
-    for (final r in usage.range(fk, tk, devices: selectedDevices)) {
-      final bId = Usage.browserIdForApp(r.app);
-      final sites = bId == null ? const <SiteUsage>[] : (sitesByB[bId] ?? const <SiteUsage>[]);
-      final catName = Categories.of(r.app)?.name ?? '';
-      if (browserMode == 'sites' && sites.isNotEmpty) {
-        for (final s in sites) {
-          b.writeln([q(siteCsvLabel(s, suffix: ' — ${r.title}')), for (final id in ids) siteValue(id, s, catName)].join(','));
+    if (format == 'timesheet') {
+      final rangeStart = sEp ?? DateTime(picked.from.year, picked.from.month, picked.from.day).millisecondsSinceEpoch ~/ 1000;
+      final rangeEnd = eEp ?? DateTime(picked.to.year, picked.to.month, picked.to.day).add(const Duration(days: 1)).millisecondsSinceEpoch ~/ 1000;
+      final devNames = {for (final id in expDevices) id: usage.names(devices: {id})};
+      b.writeln([
+        tr('exportColStart'),
+        tr('exportColEnd'),
+        '${tr('exportColDuration')} (s)',
+        tr('app'),
+        tr('exportColState'),
+        tr('category'),
+        tr('exportColDevice'),
+      ].join(','));
+      for (final s in usage.sessionsRange(rangeStart, rangeEnd, devices: expDevices)) {
+        final appMeta = devNames[s.device]?[s.app];
+        final appTitle = (appMeta?.name.isNotEmpty ?? false) ? appMeta!.name : prettyApp(s.app);
+        final catName = Categories.of(s.app)?.name ?? '';
+        b.writeln([
+          q(fmtTs(s.start)),
+          q(fmtTs(s.stop)),
+          '${s.stop - s.start}',
+          q(appTitle),
+          q(stateText(s.state)),
+          q(catName),
+          q(devLabel(s.device)),
+        ].join(','));
+      }
+    } else {
+      final cols = resDlg.cols;
+      if (cols.isEmpty) return null;
+      final browserMode = resDlg.browserMode;
+      final expHasLocal = expDevices.contains('local');
+      final idle = cols.contains('realcol') ? usage.afk(fk, tk) : <String, int>{};
+      final res = expHasLocal && cols.any(procMetricIds.contains) ? usage.resources(fk, tk) : <String, ResAgg>{};
+      final wbByDev = <String, ActivityStats>{
+        if (cols.contains('opens') || cols.contains('notifs'))
+          for (final id in expDevices) id: usage.activityStats(fk, tk, devices: {id}, startEpoch: sEp, endEpoch: eEp),
+      };
+      final sitesByDev = browserMode == 'apps' ? const <String, Map<String, List<SiteUsage>>>{} : usage.browserSitesByDevice(fk, tk, devices: expDevices, startEpoch: sEp, endEpoch: eEp);
+      String unit(String id) {
+        if (id == 'category' || id == 'opens' || id == 'notifs') return '';
+        if (id == 'cpu') return ' (s)';
+        if (id == 'ram' || id == 'peak') return ' (KB)';
+        if (id == 'ior' || id == 'iow') return ' (B)';
+        return ' (s)';
+      }
+
+      String value(String id, AppUsage r, String devId) {
+        final a = devId == 'local' ? res[r.app] : null;
+        final wb = wbByDev[devId];
+        switch (id) {
+          case 'focused':
+            return '${r.ms[0] ~/ 1000}';
+          case 'realcol':
+            return '${devId == 'local' ? math.max(0, r.ms[0] - (idle[r.app] ?? 0)) ~/ 1000 : r.ms[0] ~/ 1000}';
+          case 'open':
+            return '${r.ms[1] ~/ 1000}';
+          case 'minimized':
+            return '${r.ms[2] ~/ 1000}';
+          case 'background':
+            return '${r.ms[3] ~/ 1000}';
+          case 'total':
+            return '${r.total ~/ 1000}';
+          case 'opens':
+            return '${wb?.opens[r.app] ?? 0}';
+          case 'notifs':
+            return '${wb?.notifs[r.app] ?? 0}';
+          case 'category':
+            return q(Categories.of(r.app)?.name ?? '');
+          case 'cpu':
+            return a == null ? '' : '${a.cpuMs ~/ 1000}';
+          case 'ram':
+            return a == null || a.ramN == 0 ? '' : '${a.ramKb}';
+          case 'peak':
+            return a == null ? '' : '${a.peakKb}';
+          case 'ior':
+            return a == null ? '' : '${a.ior}';
+          case 'iow':
+            return a == null ? '' : '${a.iow}';
         }
-      } else {
-        b.writeln([q(r.title), for (final id in ids) value(id, r)].join(','));
-        if (browserMode == 'both' && sites.isNotEmpty) {
+        return '';
+      }
+
+      String siteValue(String id, SiteUsage s, String catName) {
+        switch (id) {
+          case 'focused':
+          case 'total':
+            return '${s.ms ~/ 1000}';
+          case 'category':
+            return q(catName);
+          default:
+            return '';
+        }
+      }
+
+      String siteCsvLabel(SiteUsage s, {String prefix = '', String suffix = ''}) {
+        final t = s.displayTitle;
+        final core = t == s.domain ? s.domain : '$t (${s.domain})';
+        return '$prefix$core$suffix';
+      }
+
+      final ids = [for (final id in exportChoices()) if (cols.contains(id)) id];
+      b.writeln([tr('app'), tr('exportColDevice'), for (final id in ids) '${columnLabel(id)}${unit(id)}'].join(','));
+      for (final dRow in usage.rangeByDevice(fk, tk, devices: expDevices, startEpoch: sEp, endEpoch: eEp)) {
+        final r = dRow.usage;
+        final dName = devLabel(dRow.device);
+        final bId = Usage.browserIdForApp(r.app);
+        final sites = bId == null ? const <SiteUsage>[] : (sitesByDev[dRow.device]?[bId] ?? const <SiteUsage>[]);
+        final catName = Categories.of(r.app)?.name ?? '';
+        if (browserMode == 'sites' && sites.isNotEmpty) {
           for (final s in sites) {
-            b.writeln([q(siteCsvLabel(s, prefix: '  • ')), for (final id in ids) siteValue(id, s, catName)].join(','));
+            b.writeln([q(siteCsvLabel(s, suffix: ' — ${r.title}')), q(dName), for (final id in ids) siteValue(id, s, catName)].join(','));
+          }
+        } else {
+          b.writeln([q(r.title), q(dName), for (final id in ids) value(id, r, dRow.device)].join(','));
+          if (browserMode == 'both' && sites.isNotEmpty) {
+            for (final s in sites) {
+              b.writeln([q(siteCsvLabel(s, prefix: '  • ')), q(dName), for (final id in ids) siteValue(id, s, catName)].join(','));
+            }
           }
         }
       }
     }
-    final fileName = 'wolium_${fk}_$tk.csv';
+    final fileName = format == 'timesheet' ? 'wolium_${fk}_${tk}_timesheet.csv' : 'wolium_${fk}_$tk.csv';
     if (Platform.isAndroid) {
       return collector?.bridge.saveFile(fileName, utf8.encode(b.toString()));
     }
@@ -1442,6 +1795,10 @@ class _ShellState extends State<Shell> {
           return r.ms[3];
         case 'total':
           return r.total;
+        case 'opens':
+          return activityStats.opens[r.app] ?? 0;
+        case 'notifs':
+          return activityStats.notifs[r.app] ?? 0;
         case 'cpu':
           return resMap[r.app]?.cpuMs ?? 0;
         case 'ram':
@@ -1496,19 +1853,15 @@ class _ShellState extends State<Shell> {
       builder: (context) => AlertDialog(
         backgroundColor: cPanel,
         title: Text(tr('helpTitle')),
-        content: DefaultSelectionStyle(
-          mouseCursor: SystemMouseCursors.basic,
-          child: SelectionArea(
-            contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
-            child: SingleChildScrollView(
-              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(tr('helpWhat')),
-                const SizedBox(height: 12),
-                Text(tr('helpMouse'), style: const TextStyle(color: cMuted)),
-                const SizedBox(height: 8),
-                Text(tr('helpTouch'), style: const TextStyle(color: cMuted)),
-              ]),
-            ),
+        content: selectableDialog(
+          SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(tr('helpWhat')),
+              const SizedBox(height: 12),
+              Text(tr('helpMouse'), style: const TextStyle(color: cMuted)),
+              const SizedBox(height: 8),
+              Text(tr('helpTouch'), style: const TextStyle(color: cMuted)),
+            ]),
           ),
         ),
         actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(tr('ok')))],
@@ -1521,7 +1874,7 @@ class _ShellState extends State<Shell> {
   }
 
   String chartHeading() {
-    if (showTime || Platform.isAndroid) {
+    if (showTime) {
       switch (metric) {
         case Metric.focused:
           return tr('chartTitle');
@@ -1533,7 +1886,11 @@ class _ShellState extends State<Shell> {
           return tr('chartTitleVisible');
       }
     }
-    final ids = [for (final id in allMetricIds) if (resSel.contains(id) && MetricPrefs.enabled.value.contains(id)) id];
+    final ids = [
+      for (final id in statMetricIds) if (resSel.contains(id)) id,
+      if (!Platform.isAndroid)
+        for (final id in allMetricIds) if (resSel.contains(id) && MetricPrefs.enabled.value.contains(id)) id,
+    ];
     if (ids.isEmpty) return tr('chartTitle');
     return ids.length == 1 ? metricName(ids.first) : tr('chartTitleLines');
   }
@@ -1724,27 +2081,48 @@ class _ShellState extends State<Shell> {
 
   Future<void> linesPopover(BuildContext ctx) {
     return popover(ctx, (set) {
-      final ids = allMetricIds.where(MetricPrefs.enabled.value.contains).toList();
+      final ids = Platform.isAndroid ? const <String>[] : allMetricIds.where(MetricPrefs.enabled.value.contains).toList();
+      void toggleSeries(String id) {
+        setState(() {
+          if (resSel.contains(id)) {
+            resSel.remove(id);
+          } else {
+            resSel.add(id);
+          }
+          loadChart(force: true);
+        });
+        set(() {});
+      }
+
       return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         popHeader(tr('linesBtn')),
         popRow(tr('lineTime'), showTime, () {
           setState(() => showTime = !showTime);
           set(() {});
         }, dot: cPrimary),
-        for (final id in ids)
+        for (final id in statMetricIds)
           popRow(
             metricName(id),
             resSel.contains(id),
-            () {
-              setState(() => resSel.contains(id) ? resSel.remove(id) : resSel.add(id));
-              set(() {});
-            },
+            () => toggleSeries(id),
             dot: metricColor(id),
             enter: () => seriesFocus.value = id,
             leave: () => seriesFocus.value = null,
           ),
-        if (ids.isEmpty)
-          Padding(padding: const EdgeInsets.fromLTRB(14, 4, 14, 12), child: Text(tr('linesHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
+        if (!Platform.isAndroid) ...[
+          const Divider(height: 8),
+          for (final id in ids)
+            popRow(
+              metricName(id),
+              resSel.contains(id),
+              () => toggleSeries(id),
+              dot: metricColor(id),
+              enter: () => seriesFocus.value = id,
+              leave: () => seriesFocus.value = null,
+            ),
+          if (ids.isEmpty)
+            Padding(padding: const EdgeInsets.fromLTRB(14, 4, 14, 8), child: Text(tr('linesHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
+        ],
         const SizedBox(height: 6),
       ]);
     });
@@ -1872,7 +2250,25 @@ class _ShellState extends State<Shell> {
   }
 
   Widget chartPanelBody(bool narrow) {
-    final noLines = !Platform.isAndroid && !showTime && resSel.where(MetricPrefs.enabled.value.contains).isEmpty;
+    final activeStat = [for (final id in statMetricIds) if (resSel.contains(id)) id];
+    final activeRes = Platform.isAndroid ? const <String>[] : [for (final id in allMetricIds) if (resSel.contains(id) && MetricPrefs.enabled.value.contains(id)) id];
+    final lineCount = (showTime ? 1 : 0) + activeStat.length + activeRes.length;
+    final noLines = lineCount == 0;
+    final seriesList = noLines
+        ? const <ResSeries>[]
+        : [
+            if (activeRes.isNotEmpty) ...buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: (a) => !appAllowed(a)),
+            if (activeStat.isNotEmpty)
+              ...buildStatSeries(
+                ids: resSel,
+                pts: statPts,
+                w0: loadW0 < 0 ? 0 : loadW0,
+                w1: loadW1 <= 0 ? dayCount * 86400 : loadW1,
+                bin: loadBin <= 0 ? 1 : loadBin,
+                only: only,
+                skip: (a) => !appAllowed(a),
+              ),
+          ];
     return Panel(
       padding: EdgeInsets.all(narrow ? 12 : 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1906,10 +2302,8 @@ class _ShellState extends State<Shell> {
             toolDivider(),
             Builder(builder: (ctx) => toolButton(deviceButtonLabel(), Icons.devices, () => devicesPopover(ctx), badge: deviceButtonBadge())),
           ],
-          if (!Platform.isAndroid) ...[
-            toolDivider(),
-            Builder(builder: (ctx) => toolButton(tr('linesBtn'), Icons.show_chart, () => linesPopover(ctx), badge: '${(showTime ? 1 : 0) + resSel.where(MetricPrefs.enabled.value.contains).length}')),
-          ],
+          toolDivider(),
+          Builder(builder: (ctx) => toolButton(tr('linesBtn'), Icons.show_chart, () => linesPopover(ctx), badge: '$lineCount')),
           toolDivider(),
           Builder(builder: (ctx) => toolButton(tr('optionsBtn'), Icons.tune, () => optionsPopover(ctx, narrow))),
           IconButton(
@@ -1919,8 +2313,70 @@ class _ShellState extends State<Shell> {
             onPressed: showChartHelp,
           ),
         ]),
+        if (!noLines && seriesList.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          ValueListenableBuilder<String?>(
+            valueListenable: seriesFocus,
+            builder: (context, focusedId, _) => Wrap(
+              spacing: 14,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (showTime)
+                  HoverBox(
+                    onTap: () => seriesFocus.value = null,
+                    builder: (_) => Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(width: 9, height: 9, decoration: const BoxDecoration(color: cPrimary, shape: BoxShape.circle)),
+                      const SizedBox(width: 6),
+                      Text(tr('lineTime'), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: focusedId == null ? cPrimary : cMuted)),
+                    ]),
+                  ),
+                for (final s in seriesList)
+                  HoverBox(
+                    onTap: () => seriesFocus.value = focusedId == s.id ? null : s.id,
+                    builder: (_) => Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(width: 9, height: 9, decoration: BoxDecoration(color: s.color, shape: BoxShape.circle)),
+                      const SizedBox(width: 6),
+                      Text(
+                        s.label,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: focusedId == s.id ? s.color : (focusedId == null ? cPrimary : cMuted),
+                        ),
+                      ),
+                    ]),
+                  ),
+              ],
+            ),
+          ),
+        ],
         if (!noLines) const SizedBox(height: 10),
-        if (!noLines) ActivityChart(first: from, total: dayCount * 86400, contribs: contribs, presence: [for (final r in presenceRows) presenceMark(r)], siteContribs: siteContribs, onOpenSite: openSiteFromChart, assetUrl: rpcAssetUrl, only: only, metric: metric, title: titleOf, icon: iconOf, height: narrow ? 220 : 280, onView: onChartView, showTime: showTime, onPickApp: toggleOnly, previous: previous, avgLine: ViewPrefs.avgLine, compare: ViewPrefs.compare, series: Platform.isAndroid ? const [] : buildSeries(ids: resSel, pts: resPts, sys: sysPts, only: only, skip: (a) => !appAllowed(a))),
+        if (!noLines)
+          ActivityChart(
+            key: chartKey,
+            first: from,
+            total: dayCount * 86400,
+            contribs: contribs,
+            presence: [for (final r in presenceRows) presenceMark(r)],
+            siteContribs: siteContribs,
+            onOpenSite: openSiteFromChart,
+            assetUrl: rpcAssetUrl,
+            only: only,
+            metric: metric,
+            title: titleOf,
+            icon: iconOf,
+            height: narrow ? 220 : 280,
+            onView: onChartView,
+            showTime: showTime,
+            onPickApp: toggleOnly,
+            previous: previous,
+            avgLine: ViewPrefs.avgLine,
+            compare: ViewPrefs.compare,
+            initFrom: customChartInitFrom,
+            initTo: customChartInitTo,
+            series: seriesList,
+          ),
       ]),
     );
   }
@@ -1935,7 +2391,7 @@ class _ShellState extends State<Shell> {
           row.app,
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
-            child: EllipsisText(t, style: style),
+            child: selectableDialog(EllipsisText(t, style: style)),
           ),
           row: row,
         );
@@ -2076,13 +2532,18 @@ class _ShellState extends State<Shell> {
 
   Widget compactList(TextStyle head) {
     final ids = activeColumns();
-    Widget stat(String label, String text) => Padding(
-          padding: const EdgeInsets.only(right: 14, top: 4),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label, style: const TextStyle(color: cMuted, fontSize: 12)),
-            Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
-          ]),
-        );
+    final useButtons = !Platform.isAndroid || ViewPrefs.androidControls == 'buttons';
+    Widget stat(String label, String text) {
+      final w = Padding(
+        padding: const EdgeInsets.only(right: 14, top: 4),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(color: cMuted, fontSize: 12)),
+          Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
+        ]),
+      );
+      return useButtons ? selectableDialog(w) : w;
+    }
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Expanded(
@@ -2103,69 +2564,72 @@ class _ShellState extends State<Shell> {
           final bId = Usage.browserIdForApp(r.app);
           final sites = bId == null ? const <SiteUsage>[] : (sitesByBrowser[bId] ?? const <SiteUsage>[]);
           final expanded = sites.isNotEmpty && expandedBrowsers.contains(r.app);
+          final titleWidget = EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800));
+          final cardBody = Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(rMd),
+              border: Border.all(color: only == r.app ? cPrimary : cBorder),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                if (liveMode && ids.contains('now')) ...[
+                  Container(width: 8, height: 8, decoration: BoxDecoration(color: r.now == null ? cMuted : stateColor(r.now), shape: BoxShape.circle)),
+                  const SizedBox(width: 8),
+                ],
+                AppIcon(title: r.title, path: r.path, size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Flexible(child: useButtons ? selectableDialog(titleWidget) : titleWidget),
+                    if (remoteDeviceBadge(r) case final b?) b,
+                  ]),
+                ),
+                if (sites.isNotEmpty)
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 20, color: cPrimary),
+                    onPressed: () => setState(() => expanded ? expandedBrowsers.remove(r.app) : expandedBrowsers.add(r.app)),
+                  ),
+                if (ids.contains('total')) Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
+                if (Platform.isAndroid && useButtons)
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.more_vert, size: 18, color: cMuted),
+                    onPressed: () => androidMenu(r),
+                  ),
+                hideButton(r),
+              ]),
+              Wrap(children: [
+                for (final id in ids)
+                  if (id != 'total' && id != 'now') stat(columnLabel(id), cellText(id, r)),
+              ]),
+              if (expanded) ...[
+                const Divider(height: 14),
+                for (final s in sites.take(6))
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTapUp: (d) => siteMenu(s, r, Platform.isAndroid ? null : d.globalPosition),
+                    onSecondaryTapUp: (d) => siteMenu(s, r, d.globalPosition),
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Row(children: [
+                        const Icon(Icons.public, size: 14, color: cMuted),
+                        const SizedBox(width: 6),
+                        Expanded(child: EllipsisText(s.displayTitle, style: const TextStyle(color: cPrimary, fontSize: 12))),
+                        Text(formatMs(s.ms), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+                      ]),
+                    ),
+                  ),
+              ],
+            ]),
+          );
           return GestureDetector(
             onTap: () => toggleOnly(r.app),
-            child: Container(
-              width: double.infinity,
-              margin: const EdgeInsets.only(top: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(rMd),
-                border: Border.all(color: only == r.app ? cPrimary : cBorder),
-              ),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  if (liveMode && ids.contains('now')) ...[
-                    Container(width: 8, height: 8, decoration: BoxDecoration(color: r.now == null ? cMuted : stateColor(r.now), shape: BoxShape.circle)),
-                    const SizedBox(width: 8),
-                  ],
-                  AppIcon(title: r.title, path: r.path, size: 22),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Flexible(child: EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800))),
-                      if (remoteDeviceBadge(r) case final b?) b,
-                    ]),
-                  ),
-                  if (sites.isNotEmpty)
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      icon: Icon(expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right, size: 20, color: cPrimary),
-                      onPressed: () => setState(() => expanded ? expandedBrowsers.remove(r.app) : expandedBrowsers.add(r.app)),
-                    ),
-                  if (ids.contains('total')) Text(formatMs(r.total), style: const TextStyle(fontWeight: FontWeight.w900)),
-                  if (Platform.isAndroid)
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.more_vert, size: 18, color: cMuted),
-                      onPressed: () => androidMenu(r),
-                    ),
-                  hideButton(r),
-                ]),
-                Wrap(children: [
-                  for (final id in ids)
-                    if (id != 'total' && id != 'now') stat(columnLabel(id), cellText(id, r)),
-                ]),
-                if (expanded) ...[
-                  const Divider(height: 14),
-                  for (final s in sites.take(6))
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => siteMenu(s, r, null),
-                      onSecondaryTapUp: (d) => siteMenu(s, r, d.globalPosition),
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Row(children: [
-                          const Icon(Icons.public, size: 14, color: cMuted),
-                          const SizedBox(width: 6),
-                          Expanded(child: EllipsisText(s.displayTitle, style: const TextStyle(color: cPrimary, fontSize: 12))),
-                          Text(formatMs(s.ms), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
-                        ]),
-                      ),
-                    ),
-                ],
-              ]),
-            ),
+            onLongPress: Platform.isAndroid && !useButtons ? () => androidMenu(r) : null,
+            child: useButtons ? cardBody : noSelect(cardBody),
           );
         }(),
       ],
@@ -2191,14 +2655,16 @@ class _ShellState extends State<Shell> {
           AppIcon(title: best.title, path: best.path, size: 24),
           const SizedBox(width: 10),
           Expanded(
-            child: Text.rich(
-              TextSpan(children: [
-                TextSpan(text: '$label: ', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
-                TextSpan(text: best.title, style: const TextStyle(fontWeight: FontWeight.w800)),
-                TextSpan(text: ' (${formatMs(score(best))})', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800)),
-              ]),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+            child: selectableDialog(
+              Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: '$label: ', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
+                  TextSpan(text: best.title, style: const TextStyle(fontWeight: FontWeight.w800)),
+                  TextSpan(text: ' (${formatMs(score(best))})', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w800)),
+                ]),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ),
           if (remoteDeviceBadge(best) case final b?) b,
@@ -2224,7 +2690,7 @@ class _ShellState extends State<Shell> {
       chartPanel(narrow),
       const SizedBox(height: 12),
       if (rows.isEmpty)
-        Panel(child: Text(tr('noData')))
+        Panel(child: selectableDialog(Text(tr('noData'))))
       else
         Panel(
           padding: EdgeInsets.all(narrow ? 12 : 16),
@@ -2289,6 +2755,56 @@ class _ShellState extends State<Shell> {
     );
   }
 
+  bool _inBox(GlobalKey k, Offset globalPos) {
+    final box = k.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached) return false;
+    return (box.localToGlobal(Offset.zero) & box.size).contains(globalPos);
+  }
+
+  void _stopAutoScroll() {
+    autoScrollTimer?.cancel();
+    autoScrollTimer = null;
+    if (autoScrollOrigin != null || autoScrollCursor != null) {
+      setState(() {
+        autoScrollOrigin = null;
+        autoScrollCursor = null;
+        autoScrollMoved = false;
+      });
+    }
+  }
+
+  void _startAutoScroll(Offset origin) {
+    autoScrollTimer?.cancel();
+    setState(() {
+      autoScrollOrigin = origin;
+      autoScrollCursor = origin;
+      autoScrollMoved = false;
+    });
+    shellFocus.requestFocus();
+    autoScrollTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (!mounted || autoScrollOrigin == null || autoScrollCursor == null) return;
+      final d = autoScrollCursor! - autoScrollOrigin!;
+      const dz = 14.0;
+      double step(double delta) => delta.abs() <= dz ? 0 : (delta - delta.sign * dz) * 0.22;
+      final dx = step(d.dx);
+      final dy = step(d.dy);
+      if (dy != 0 && vScroll.hasClients) {
+        vScroll.jumpTo((vScroll.offset + dy).clamp(0.0, vScroll.position.maxScrollExtent));
+      }
+      if (dx != 0 && tableHScroll.hasClients) {
+        tableHScroll.jumpTo((tableHScroll.offset + dx).clamp(0.0, tableHScroll.position.maxScrollExtent));
+      }
+    });
+  }
+
+  Widget _unlocksBadge() {
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      const Icon(Icons.lock_open_rounded, size: 15, color: cMuted),
+      const SizedBox(width: 6),
+      Text('${tr('unlocksLabel')}: ${activityStats.unlocks}', style: const TextStyle(color: cMuted, fontWeight: FontWeight.w700)),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
@@ -2297,69 +2813,127 @@ class _ShellState extends State<Shell> {
       final pad = narrow ? 12.0 : 18.0;
       return Scaffold(
         body: SafeArea(
-          child: Builder(builder: (context) {
-            final content = ValueListenableBuilder<bool>(
-              valueListenable: chartPinch,
-              builder: (context, pinching, _) => column(narrow, title, pad, pinching),
-            );
-            return DefaultSelectionStyle(
+          child: ValueListenableBuilder<bool>(
+            valueListenable: chartPinch,
+            builder: (context, pinching, _) => DefaultSelectionStyle(
               mouseCursor: SystemMouseCursors.basic,
-              child: SelectionArea(
-                contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
-                child: content,
-              ),
-            );
-          }),
+              child: column(narrow, title, pad, pinching),
+            ),
+          ),
         ),
       );
     });
   }
 
   Widget column(bool narrow, String title, double pad, bool pinching) {
-    return Column(children: [
-          topbar(narrow),
-          Expanded(
-            child: Row(children: [
-              if (!narrow) sidebar(),
-              Expanded(
-                child: Column(children: [
-                  if (update != null) updateBanner(),
-                  if (serviceDown) banner() else if (isPaused) pausedBanner(),
-                  if (collector != null)
-                    ValueListenableBuilder<bool>(
-                      valueListenable: collector!.access,
-                      builder: (_, ok, __) => ok ? const SizedBox.shrink() : accessBanner(),
-                    ),
-                  Expanded(
-                    child: NotificationListener<ScrollStartNotification>(
-                      onNotification: (_) {
-                        tipsReset.value++;
-                        return false;
-                      },
-                      child: ListView(physics: pinching ? const NeverScrollableScrollPhysics() : null, padding: EdgeInsets.fromLTRB(pad, pad, pad, 28), children: [
-                      Wrap(spacing: 16, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                        Text(title, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
-                        if (tab == 0) statusChip(),
-                      ]),
-                      const SizedBox(height: 14),
-                      tab == 0 ? activity(narrow) : SettingsPage(
-                        onWithdraw: widget.onWithdraw,
-                        onExport: exportCsv,
-                        onCheck: () async {
-                          final info = await checkUpdate();
-                          if (mounted) setState(() => update = info);
-                          return info;
-                        },
+    final list = ListView(
+      controller: vScroll,
+      physics: pinching ? const NeverScrollableScrollPhysics() : null,
+      padding: EdgeInsets.fromLTRB(pad, pad, pad, 28),
+      children: [
+        Wrap(spacing: 16, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          selectableDialog(Text(title, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900))),
+          if (tab == 0) statusChip(),
+          if (tab == 0 && (Platform.isAndroid || activityStats.unlocks > 0)) _unlocksBadge(),
+        ]),
+        const SizedBox(height: 14),
+        tab == 0
+            ? activity(narrow)
+            : SettingsPage(
+                onWithdraw: widget.onWithdraw,
+                onExport: exportCsv,
+                onCheck: () async {
+                  final info = await checkUpdate();
+                  if (mounted) setState(() => update = info);
+                  return info;
+                },
+              ),
+      ],
+    );
+
+    final scrollable = Platform.isAndroid
+        ? list
+        : KeyboardListener(
+            focusNode: shellFocus,
+            onKeyEvent: (ev) {
+              if (ev is KeyDownEvent && ev.logicalKey == LogicalKeyboardKey.escape && autoScrollOrigin != null) {
+                _stopAutoScroll();
+              }
+            },
+            child: Listener(
+              onPointerDown: (e) {
+                if (autoScrollOrigin != null) {
+                  _stopAutoScroll();
+                  return;
+                }
+                if (e.kind == PointerDeviceKind.mouse && e.buttons == kMiddleMouseButton && !_inBox(chartKey, e.position)) {
+                  _startAutoScroll(e.localPosition);
+                }
+              },
+              onPointerMove: (e) {
+                if (autoScrollOrigin == null) return;
+                autoScrollCursor = e.localPosition;
+                if ((e.localPosition - autoScrollOrigin!).distance > 14) autoScrollMoved = true;
+              },
+              onPointerUp: (_) {
+                if (autoScrollOrigin != null && autoScrollMoved) _stopAutoScroll();
+              },
+              onPointerCancel: (_) {
+                if (autoScrollOrigin != null) _stopAutoScroll();
+              },
+              child: Stack(children: [
+                list,
+                if (autoScrollOrigin != null)
+                  Positioned(
+                    left: autoScrollOrigin!.dx - 16,
+                    top: autoScrollOrigin!.dy - 16,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: cBg.withValues(alpha: 0.92),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: cPrimary, width: 1.5),
+                          boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 8)],
+                        ),
+                        child: const Icon(Icons.open_with, size: 17, color: cPrimary),
                       ),
-                    ]),
                     ),
                   ),
-                ]),
+              ]),
+            ),
+          );
+
+    return Column(children: [
+      topbar(narrow),
+      Expanded(
+        child: Row(children: [
+          if (!narrow) sidebar(),
+          Expanded(
+            child: Column(children: [
+              if (update != null) updateBanner(),
+              if (serviceDown) banner() else if (isPaused) pausedBanner(),
+              if (collector != null)
+                ValueListenableBuilder<bool>(
+                  valueListenable: collector!.access,
+                  builder: (_, ok, __) => ok ? const SizedBox.shrink() : accessBanner(),
+                ),
+              Expanded(
+                child: NotificationListener<ScrollStartNotification>(
+                  onNotification: (_) {
+                    tipsReset.value++;
+                    return false;
+                  },
+                  child: scrollable,
+                ),
               ),
             ]),
           ),
-          if (narrow) bottomNav(),
-        ]);
+        ]),
+      ),
+      if (narrow) bottomNav(),
+    ]);
   }
 }
 
@@ -2400,6 +2974,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool p2pEnabled = P2pSync.instance.enabled;
   List<LocalAddress> localIps = [];
   String? p2pStatusText;
+  bool p2pStatusOk = true;
   late bool crashLogs = !prefs.flag('nocrashlogs');
 
   void copyText(String value) {
@@ -2410,13 +2985,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ..showSnackBar(SnackBar(content: Text('${tr('copied')}: $value'), duration: const Duration(seconds: 2)));
   }
 
-  Widget wrapSelectable(Widget child) => DefaultSelectionStyle(
-        mouseCursor: SystemMouseCursors.basic,
-        child: SelectionArea(
-          contextMenuBuilder: Platform.isAndroid ? null : copyOnlyMenu,
-          child: child,
-        ),
-      );
+  Widget wrapSelectable(Widget child) => selectableRegion(child);
 
   List<AppEntry> appEntries() {
     final m = metricsUsage.names();
@@ -2903,11 +3472,15 @@ class _SettingsPageState extends State<SettingsPage> {
       final res = await req.close();
       final body = await utf8.decoder.bind(res).join();
       final map = jsonDecode(body) as Map<String, dynamic>;
-      final count = (map['domains'] as List<dynamic>? ?? const []).length;
+      final domains = map['domains'] as List<dynamic>? ?? const [];
+      final count = domains.length;
+      final missingTitle = count > 0 && domains.every((d) => d is Map && ((d['title'] as String? ?? '').trim().isEmpty));
       if (mounted) {
         setState(() {
           extConnected = res.statusCode == 200;
-          extStatusText = res.statusCode == 200 ? tr('extConnected').replaceAll('{n}', '$count') : tr('extOffline');
+          extStatusText = res.statusCode == 200
+              ? (missingTitle ? '${tr('extConnected').replaceAll('{n}', '$count')}\n${tr('extReloadHint')}' : tr('extConnected').replaceAll('{n}', '$count'))
+              : tr('extOffline');
         });
       }
     } catch (_) {
@@ -2975,7 +3548,12 @@ class _SettingsPageState extends State<SettingsPage> {
                       if (!c.mounted) return;
                       if (e == null) {
                         Navigator.pop(c);
-                        if (mounted) setState(() => p2pStatusText = tr('p2pPaired'));
+                        if (mounted) {
+                          setState(() {
+                            p2pStatusOk = true;
+                            p2pStatusText = tr('p2pPaired');
+                          });
+                        }
                       } else {
                         setDlg(() {
                           busy = false;
@@ -3084,7 +3662,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 label: Text(tr('p2pSyncNow')),
                 onPressed: () async {
                   final n = await P2pSync.instance.syncAll();
-                  if (mounted) setState(() => p2pStatusText = tr('p2pSynced').replaceAll('{n}', '$n'));
+                  if (mounted) {
+                    setState(() {
+                      p2pStatusOk = n > 0;
+                      p2pStatusText = tr('p2pSynced').replaceAll('{n}', '$n');
+                    });
+                  }
                 },
               ),
           ]),
@@ -3108,7 +3691,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (p2pStatusText != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(p2pStatusText!, style: const TextStyle(color: cOk, fontSize: 12, fontWeight: FontWeight.w700)),
+              child: Text(p2pStatusText!, style: TextStyle(color: p2pStatusOk ? cOk : cDanger, fontSize: 12, fontWeight: FontWeight.w700)),
             ),
           for (final d in peers)
             Padding(
@@ -3123,7 +3706,12 @@ class _SettingsPageState extends State<SettingsPage> {
                   icon: const Icon(Icons.sync, size: 18),
                   onPressed: () async {
                     final ok = await P2pSync.instance.syncPeer(d);
-                    if (mounted) setState(() => p2pStatusText = ok ? tr('p2pSynced').replaceAll('{n}', '1') : tr('p2pSyncErr'));
+                    if (mounted) {
+                      setState(() {
+                        p2pStatusOk = ok;
+                        p2pStatusText = ok ? tr('p2pSynced').replaceAll('{n}', '1') : tr('p2pSyncErr');
+                      });
+                    }
                   },
                 ),
                 IconButton(
@@ -3302,6 +3890,27 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
         if (Platform.isAndroid) ...[
           Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(tr('androidControlsTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(tr('androidControlsHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+              ]),
+            ),
+            SelectBox<String>(
+              value: ViewPrefs.androidControls,
+              items: [
+                DropdownMenuItem(value: 'gestures', child: Text(tr('androidControlsGestures'))),
+                DropdownMenuItem(value: 'buttons', child: Text(tr('androidControlsButtons'))),
+              ],
+              onChanged: (v) {
+                ViewPrefs.update(controls: v ?? 'gestures');
+                buzz(1);
+                setState(() {});
+              },
+            ),
+          ]),
+          const Divider(height: 28),
+          Row(children: [
             Expanded(child: Text(tr('hapticsTitle'), style: const TextStyle(fontWeight: FontWeight.w700))),
             SelectBox<int>(
               value: hapticLevel,
@@ -3449,7 +4058,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ]),
       ]),
     );
-    return panel;
+    return wrapSelectable(panel);
   }
 }
 

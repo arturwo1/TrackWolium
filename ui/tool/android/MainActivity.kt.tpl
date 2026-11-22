@@ -53,6 +53,25 @@ class MainActivity : FlutterActivity() {
     action = intent.getStringExtra("action")
   }
 
+  override fun onResume() {
+    super.onResume()
+    try {
+      P2pService.apply(applicationContext, false)
+    } catch (_: Exception) {
+    }
+  }
+
+  override fun onStop() {
+    super.onStop()
+    try {
+      val dir = Sync.dir(applicationContext)
+      if (File(dir, "consent").exists() && (File(dir, "p2p").exists() || File(dir, "peers.json").exists())) {
+        P2pService.apply(applicationContext, true)
+      }
+    } catch (_: Exception) {
+    }
+  }
+
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
     if (requestCode == 4711) {
       val r = pendingResult
@@ -162,31 +181,7 @@ class MainActivity : FlutterActivity() {
           action = null
           result.success(a)
         }
-        "deviceName" -> {
-          fun setting(name: String): String {
-            var v: String? = null
-            try {
-              v = Settings.Global.getString(contentResolver, name)
-            } catch (ex: Exception) {
-            }
-            if (v.isNullOrBlank()) {
-              try {
-                v = Settings.Secure.getString(contentResolver, name)
-              } catch (ex: Exception) {
-              }
-            }
-            return (v ?: "").trim()
-          }
-          var name = setting("device_name")
-          if (name.isEmpty()) name = setting("bluetooth_name")
-          if (name.isEmpty()) {
-            val maker = Build.MANUFACTURER ?: ""
-            val model = Build.MODEL ?: ""
-            val brand = if (maker.isEmpty()) "" else maker.substring(0, 1).uppercase() + maker.substring(1)
-            name = if (model.lowercase().startsWith(maker.lowercase())) model else "$brand $model".trim()
-          }
-          result.success(name)
-        }
+        "deviceName" -> result.success(Sync.deviceName(applicationContext))
         "readyApk" -> {
           result.success(try {
             Sync.readyApk(applicationContext)?.path
@@ -202,6 +197,15 @@ class MainActivity : FlutterActivity() {
           var outcome = "ok"
           try {
             ApiService.apply(applicationContext, call.argument<Boolean>("on") ?: false)
+          } catch (ex: Exception) {
+            outcome = "error: " + ex.toString()
+          }
+          result.success(outcome)
+        }
+        "p2pService" -> {
+          var outcome = "ok"
+          try {
+            P2pService.apply(applicationContext, call.argument<Boolean>("on") ?: false)
           } catch (ex: Exception) {
             outcome = "error: " + ex.toString()
           }

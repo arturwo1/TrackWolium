@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'haptics.dart';
@@ -70,6 +71,11 @@ ThemeData buildTheme() {
       trackOutlineColor: WidgetStateProperty.all(cBorder),
       mouseCursor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.disabled) ? SystemMouseCursors.basic : SystemMouseCursors.click),
     ),
+    textSelectionTheme: const TextSelectionThemeData(
+      selectionColor: Color(0x4480E0F5),
+      cursorColor: cPrimary,
+      selectionHandleColor: cPrimary,
+    ),
   );
 }
 
@@ -98,16 +104,28 @@ class Panel extends StatelessWidget {
 }
 
 Widget copyOnlyMenu(BuildContext context, SelectableRegionState state) {
+  if (Platform.isAndroid) {
+    return AdaptiveTextSelectionToolbar.selectableRegion(selectableRegionState: state);
+  }
   final items = state.contextMenuButtonItems.where((i) => i.type == ContextMenuButtonType.copy).toList();
   if (items.isEmpty) return const SizedBox.shrink();
   return AdaptiveTextSelectionToolbar.buttonItems(anchors: state.contextMenuAnchors, buttonItems: items);
 }
 
+Widget selectableRegion(Widget child) => DefaultSelectionStyle(
+      mouseCursor: SystemMouseCursors.basic,
+      child: SelectionArea(
+        contextMenuBuilder: copyOnlyMenu,
+        child: child,
+      ),
+    );
+
 class HoverBox extends StatefulWidget {
-  const HoverBox({super.key, required this.builder, this.onTap});
+  const HoverBox({super.key, required this.builder, this.onTap, this.onTapAt});
 
   final Widget Function(bool hovered) builder;
   final VoidCallback? onTap;
+  final ValueChanged<Offset>? onTapAt;
 
   @override
   State<HoverBox> createState() => _HoverBoxState();
@@ -118,23 +136,25 @@ class _HoverBoxState extends State<HoverBox> {
 
   @override
   Widget build(BuildContext context) {
+    final active = widget.onTap != null || widget.onTapAt != null;
     final w = MouseRegion(
-      cursor: widget.onTap == null ? MouseCursor.defer : SystemMouseCursors.click,
+      cursor: !active ? MouseCursor.defer : SystemMouseCursors.click,
       onEnter: (_) => setState(() => hovered = true),
       onExit: (_) => setState(() => hovered = false),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap == null
+        onTapUp: !active
             ? null
-            : () {
+            : (d) {
                 buzz(0);
-                widget.onTap!();
+                widget.onTap?.call();
+                widget.onTapAt?.call(d.globalPosition);
               },
         child: widget.builder(hovered),
       ),
     );
-    if (widget.onTap == null) return w;
-    return DefaultSelectionStyle(mouseCursor: SystemMouseCursors.click, child: w);
+    if (!active) return w;
+    return noSelect(DefaultSelectionStyle(mouseCursor: SystemMouseCursors.click, child: w));
   }
 }
 

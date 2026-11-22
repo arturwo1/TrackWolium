@@ -186,6 +186,41 @@ class SiteContrib {
   final int ms;
 }
 
+class DeviceAppUsage {
+  const DeviceAppUsage(this.device, this.usage);
+
+  final String device;
+  final AppUsage usage;
+}
+
+class SessionRecord {
+  const SessionRecord(this.app, this.state, this.start, this.stop, this.device);
+
+  final String app;
+  final int state;
+  final int start;
+  final int stop;
+  final String device;
+}
+
+class ActivityStats {
+  const ActivityStats({this.unlocks = 0, this.opens = const {}, this.notifs = const {}});
+
+  final int unlocks;
+  final Map<String, int> opens;
+  final Map<String, int> notifs;
+}
+
+class StatPoint {
+  const StatPoint(this.start, this.end, this.app, this.kind, this.count);
+
+  final int start;
+  final int end;
+  final String app;
+  final String kind;
+  final int count;
+}
+
 class Usage {
   Database? _db;
 
@@ -231,41 +266,29 @@ class Usage {
   static bool _hasLocal(Set<String> devices) => devices.isEmpty || devices.contains('local');
   static List<String> _remoteIds(Set<String> devices) => [for (final d in devices) if (d != 'local') d];
 
+  static int _slotOverlapMs(String day, int slot, int ms, int startEpoch, int endEpoch) {
+    final mid = DateTime.parse('${day}T00:00:00').millisecondsSinceEpoch ~/ 1000;
+    final a = mid + slot * 300;
+    final b = a + 300;
+    final ov = math.min(b, endEpoch) - math.max(a, startEpoch);
+    if (ov <= 0) return 0;
+    return ov >= 300 ? ms : (ms * ov / 300.0).round();
+  }
+
   List<AppUsage> day(String day, {Set<String> devices = const {'local'}}) => range(day, day, devices: devices);
 
-  List<AppUsage> range(String from, String to, {Set<String> devices = const {'local'}}) {
-    final db = _open();
-    if (db == null) return [];
+  List<AppUsage> range(String from, String to, {Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
+    final byDev = rangeByDevice(from, to, devices: devices, startEpoch: startEpoch, endEpoch: endEpoch);
     final map = <String, AppUsage>{};
-    final names = this.names(devices: devices);
-    void feed(Iterable<Row> rows, {String? forcedDevice}) {
-      for (final r in rows) {
-        final state = r['state'] as int;
-        if (state < 0 || state > 3) continue;
-        final app = r['app'] as String;
-        final u = map.putIfAbsent(app, () {
-          final m = names[app];
-          return AppUsage(app, m?.name ?? '')..path = m?.path ?? '';
-        });
-        u.ms[state] += r['ms'] as int;
-        final dev = forcedDevice ?? (r['device'] as String? ?? '');
-        if (dev.isNotEmpty) u.devices.add(dev);
+    for (final entry in byDev) {
+      final src = entry.usage;
+      final u = map.putIfAbsent(src.app, () => AppUsage(src.app, src.name)..path = src.path);
+      if (u.name.isEmpty && src.name.isNotEmpty) u.name = src.name;
+      if (u.path.isEmpty && src.path.isNotEmpty) u.path = src.path;
+      for (var i = 0; i < 4; i++) {
+        u.ms[i] += src.ms[i];
       }
-    }
-
-    try {
-      if (_hasLocal(devices)) {
-        feed(db.select('SELECT app, state, ms FROM usage WHERE day BETWEEN ? AND ?', [from, to]), forcedDevice: 'local');
-      }
-      final remotes = _remoteIds(devices);
-      if (remotes.isNotEmpty) {
-        try {
-          final ph = List.filled(remotes.length, '?').join(',');
-          feed(db.select('SELECT device, app, state, ms FROM remote_usage WHERE device IN ($ph) AND day BETWEEN ? AND ?', [...remotes, from, to]));
-        } catch (_) {}
-      }
-    } catch (_) {
-      return [];
+      u.devices.addAll(src.devices);
     }
     final list = map.values.where((a) => a.total > 0).toList();
     if (list.any((a) => a.visible > 0)) list.removeWhere((a) => a.visible == 0);
@@ -274,6 +297,100 @@ class Usage {
       return c != 0 ? c : b.total.compareTo(a.total);
     });
     return list;
+  }
+
+  List<DeviceAppUsage> rangeByDevice(String from, String to, {Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
+    final db = _open();
+    if (db == null) return [];
+    final out = <String, Map<String, AppUsage>>{};
+    final localMeta = _hasLocal(devices) ? names(devices: const {'local'}) : const <String, AppMeta>{};
+    final remoteMetaCache = <String, Map<String, AppMeta>>{};
+    final sliced = startEpoch != null && endEpoch != null && endEpoch > startEpoch;
+
+    AppMeta? metaFor(String dev, String app) {
+      if (dev == 'local') return localMeta[app];
+      final m = remoteMetaCache.putIfAbsent(dev, () => names(devices: {dev}));
+      return m[app];
+    }
+
+    void addMs(String dev, String app, int state, int ms) {
+      if (state < 0 || state > 3 || ms <= 0) return;
+      final devMap = out.putIfAbsent(dev, () => {});
+      final u = devMap.putIfAbsent(app, () {
+        final m = metaFor(dev, app);
+        return AppUsage(app, m?.name ?? '')
+          ..path = m?.path ?? ''
+          ..devices.add(dev);
+      });
+      u.ms[state] += ms;
+    }
+
+    try {
+      if (_hasLocal(devices)) {
+        if (!sliced) {
+          for (final r in db.select('SELECT app, state, ms FROM usage WHERE day BETWEEN ? AND ?', [from, to])) {
+            addMs('local', r['app'] as String, r['state'] as int, r['ms'] as int);
+          }
+        } else {
+          int? minSessionStart;
+          try {
+            final r = db.select('SELECT MIN(start) AS m FROM sessions');
+            if (r.isNotEmpty && r.first['m'] != null) minSessionStart = r.first['m'] as int;
+          } catch (_) {}
+          try {
+            final lowest = startEpoch - sessionLowerSlack(db);
+            for (final r in db.select('SELECT app, state, start, stop FROM sessions WHERE start >= ?3 AND start < ?2 AND stop > ?1', [startEpoch, endEpoch, lowest])) {
+              final ov = math.min(r['stop'] as int, endEpoch) - math.max(r['start'] as int, startEpoch);
+              if (ov > 0) addMs('local', r['app'] as String, r['state'] as int, ov * 1000);
+            }
+          } catch (_) {}
+          if (minSessionStart == null || startEpoch < minSessionStart) {
+            try {
+              final cutEnd = minSessionStart == null ? endEpoch : math.min(endEpoch, minSessionStart);
+              for (final r in db.select('SELECT day, slot, app, state, ms FROM timeline WHERE day BETWEEN ? AND ?', [from, to])) {
+                final ovMs = _slotOverlapMs(r['day'] as String, r['slot'] as int, r['ms'] as int, startEpoch, cutEnd);
+                if (ovMs > 0) addMs('local', r['app'] as String, r['state'] as int, ovMs);
+              }
+            } catch (_) {}
+          }
+        }
+      }
+      final remotes = _remoteIds(devices);
+      if (remotes.isNotEmpty) {
+        final ph = List.filled(remotes.length, '?').join(',');
+        if (!sliced) {
+          try {
+            for (final r in db.select('SELECT device, app, state, ms FROM remote_usage WHERE device IN ($ph) AND day BETWEEN ? AND ?', [...remotes, from, to])) {
+              addMs(r['device'] as String, r['app'] as String, r['state'] as int, r['ms'] as int);
+            }
+          } catch (_) {}
+        } else {
+          try {
+            for (final r in db.select('SELECT device, day, slot, app, state, ms FROM remote_timeline WHERE device IN ($ph) AND day BETWEEN ? AND ?', [...remotes, from, to])) {
+              final ovMs = _slotOverlapMs(r['day'] as String, r['slot'] as int, r['ms'] as int, startEpoch, endEpoch);
+              if (ovMs > 0) addMs(r['device'] as String, r['app'] as String, r['state'] as int, ovMs);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      return [];
+    }
+    final result = <DeviceAppUsage>[];
+    out.forEach((dev, map) {
+      final list = map.values.where((a) => a.total > 0).toList();
+      if (list.any((a) => a.visible > 0)) list.removeWhere((a) => a.visible == 0);
+      for (final u in list) {
+        result.add(DeviceAppUsage(dev, u));
+      }
+    });
+    result.sort((a, b) {
+      final c = b.usage.visible.compareTo(a.usage.visible);
+      if (c != 0) return c;
+      final t = b.usage.total.compareTo(a.usage.total);
+      return t != 0 ? t : a.device.compareTo(b.device);
+    });
+    return result;
   }
 
   static String? browserIdForApp(String app) {
@@ -289,61 +406,23 @@ class Usage {
     return null;
   }
 
-  Map<String, List<SiteUsage>> browserSites(String from, String to, {Set<String> devices = const {'local'}}) {
-    final db = _open();
-    final out = <String, List<SiteUsage>>{};
-    if (db == null) return out;
+  Map<String, List<SiteUsage>> browserSites(String from, String to, {Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
+    final byDev = browserSitesByDevice(from, to, devices: devices, startEpoch: startEpoch, endEpoch: endEpoch);
     final agg = <String, Map<String, ({int ms, String title, String url})>>{};
-    void feed(Iterable<Row> rows, {bool withMeta = true}) {
-      for (final r in rows) {
-        final b = (r['browser'] as String).toLowerCase();
-        final d = r['domain'] as String;
-        final ms = r['ms'] as int;
-        if (ms <= 0 || d.isEmpty) continue;
-        final t = withMeta ? (r['title'] as String? ?? '').trim() : '';
-        final u = withMeta ? (r['url'] as String? ?? '').trim() : '';
+    byDev.forEach((_, browsers) {
+      browsers.forEach((b, list) {
         final map = agg.putIfAbsent(b, () => {});
-        final prev = map[d];
-        map[d] = (
-          ms: (prev?.ms ?? 0) + ms,
-          title: t.isNotEmpty ? t : (prev?.title ?? ''),
-          url: u.isNotEmpty ? u : (prev?.url ?? ''),
-        );
-      }
-    }
-
-    if (_hasLocal(devices)) {
-      try {
-        feed(db.select('''
-          SELECT b.browser, b.domain, SUM(b.ms) AS ms,
-            COALESCE((SELECT b2.title FROM browser_usage b2 WHERE b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.title != '' ORDER BY b2.day DESC LIMIT 1), '') AS title,
-            COALESCE((SELECT b2.url FROM browser_usage b2 WHERE b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.url != '' ORDER BY b2.day DESC LIMIT 1), '') AS url
-          FROM browser_usage b WHERE b.day BETWEEN ?1 AND ?2 GROUP BY b.browser, b.domain
-        ''', [from, to]));
-      } catch (_) {
-        try {
-          feed(db.select('SELECT browser, domain, SUM(ms) AS ms FROM browser_usage WHERE day BETWEEN ? AND ? GROUP BY browser, domain', [from, to]), withMeta: false);
-        } catch (_) {}
-      }
-    }
-    final remotes = _remoteIds(devices);
-    if (remotes.isNotEmpty) {
-      final ph = List.filled(remotes.length, '?').join(',');
-      final ph2 = List.generate(remotes.length, (i) => '?${3 + i}').join(',');
-      try {
-        feed(db.select('''
-          SELECT b.browser, b.domain, SUM(b.ms) AS ms,
-            COALESCE((SELECT b2.title FROM remote_browser_usage b2 WHERE b2.device IN ($ph2) AND b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.title != '' ORDER BY b2.day DESC LIMIT 1), '') AS title,
-            COALESCE((SELECT b2.url FROM remote_browser_usage b2 WHERE b2.device IN ($ph2) AND b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.url != '' ORDER BY b2.day DESC LIMIT 1), '') AS url
-          FROM remote_browser_usage b WHERE b.day BETWEEN ?1 AND ?2 AND b.device IN ($ph2) GROUP BY b.browser, b.domain
-        ''', [from, to, ...remotes]));
-      } catch (_) {
-        try {
-          feed(db.select('SELECT browser, domain, SUM(ms) AS ms FROM remote_browser_usage WHERE device IN ($ph) AND day BETWEEN ? AND ? GROUP BY browser, domain', [...remotes, from, to]), withMeta: false);
-        } catch (_) {}
-      }
-    }
-
+        for (final s in list) {
+          final prev = map[s.domain];
+          map[s.domain] = (
+            ms: (prev?.ms ?? 0) + s.ms,
+            title: s.title.isNotEmpty ? s.title : (prev?.title ?? ''),
+            url: s.url.isNotEmpty ? s.url : (prev?.url ?? ''),
+          );
+        }
+      });
+    });
+    final out = <String, List<SiteUsage>>{};
     agg.forEach((b, m) {
       final list = m.entries.map((e) => SiteUsage(b, e.key, e.value.ms, e.value.title, e.value.url)).toList()
         ..sort((a, b) => b.ms.compareTo(a.ms));
@@ -352,7 +431,382 @@ class Usage {
     return out;
   }
 
-  List<SiteContrib> browserContribs(DateTime first, int w0, int w1, int bin, {Set<String> devices = const {'local'}}) {
+  Map<String, Map<String, List<SiteUsage>>> browserSitesByDevice(String from, String to, {Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
+    final db = _open();
+    final out = <String, Map<String, List<SiteUsage>>>{};
+    if (db == null) return out;
+    final agg = <String, Map<String, Map<String, ({int ms, String title, String url})>>>{};
+    final sliced = startEpoch != null && endEpoch != null && endEpoch > startEpoch;
+
+    void feedAgg(String dev, String browser, String domain, int ms, String title, String url) {
+      if (ms <= 0 || domain.isEmpty) return;
+      final dMap = agg.putIfAbsent(dev, () => {});
+      final bMap = dMap.putIfAbsent(browser.toLowerCase(), () => {});
+      final prev = bMap[domain];
+      bMap[domain] = (
+        ms: (prev?.ms ?? 0) + ms,
+        title: title.trim().isNotEmpty ? title.trim() : (prev?.title ?? ''),
+        url: url.trim().isNotEmpty ? url.trim() : (prev?.url ?? ''),
+      );
+    }
+
+    if (_hasLocal(devices)) {
+      final urlCache = <String, ({String title, String url})>{};
+      try {
+        for (final r in db.select('SELECT browser, domain, title, url FROM browser_usage WHERE day BETWEEN ? AND ?', [from, to])) {
+          final key = '${(r['browser'] as String).toLowerCase()}\u0000${r['domain']}';
+          final prev = urlCache[key];
+          final t = (r['title'] as String? ?? '').trim();
+          final u = (r['url'] as String? ?? '').trim();
+          urlCache[key] = (
+            title: t.isNotEmpty ? t : (prev?.title ?? ''),
+            url: u.isNotEmpty ? u : (prev?.url ?? ''),
+          );
+        }
+      } catch (_) {}
+      if (!sliced) {
+        try {
+          for (final r in db.select('''
+            SELECT b.browser, b.domain, SUM(b.ms) AS ms,
+              COALESCE((SELECT b2.title FROM browser_usage b2 WHERE b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.title != '' ORDER BY b2.day DESC LIMIT 1), '') AS title,
+              COALESCE((SELECT b2.url FROM browser_usage b2 WHERE b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.url != '' ORDER BY b2.day DESC LIMIT 1), '') AS url
+            FROM browser_usage b WHERE b.day BETWEEN ?1 AND ?2 GROUP BY b.browser, b.domain
+          ''', [from, to])) {
+            feedAgg('local', r['browser'] as String, r['domain'] as String, r['ms'] as int, r['title'] as String? ?? '', r['url'] as String? ?? '');
+          }
+        } catch (_) {
+          try {
+            for (final r in db.select('SELECT browser, domain, SUM(ms) AS ms FROM browser_usage WHERE day BETWEEN ? AND ? GROUP BY browser, domain', [from, to])) {
+              feedAgg('local', r['browser'] as String, r['domain'] as String, r['ms'] as int, '', '');
+            }
+          } catch (_) {}
+        }
+      } else {
+        try {
+          for (final r in db.select('SELECT day, slot, browser, domain, title, ms FROM browser_timeline WHERE day BETWEEN ? AND ?', [from, to])) {
+            final ovMs = _slotOverlapMs(r['day'] as String, r['slot'] as int, r['ms'] as int, startEpoch, endEpoch);
+            if (ovMs <= 0) continue;
+            final b = (r['browser'] as String).toLowerCase();
+            final d = r['domain'] as String;
+            final meta = urlCache['$b\u0000$d'];
+            final t = (r['title'] as String? ?? '').trim();
+            feedAgg('local', b, d, ovMs, t.isNotEmpty ? t : (meta?.title ?? ''), meta?.url ?? '');
+          }
+        } catch (_) {}
+      }
+    }
+    final remotes = _remoteIds(devices);
+    if (remotes.isNotEmpty) {
+      final ph = List.filled(remotes.length, '?').join(',');
+      final ph2 = List.generate(remotes.length, (i) => '?${3 + i}').join(',');
+      if (!sliced) {
+        try {
+          for (final r in db.select('''
+            SELECT b.device, b.browser, b.domain, SUM(b.ms) AS ms,
+              COALESCE((SELECT b2.title FROM remote_browser_usage b2 WHERE b2.device = b.device AND b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.title != '' ORDER BY b2.day DESC LIMIT 1), '') AS title,
+              COALESCE((SELECT b2.url FROM remote_browser_usage b2 WHERE b2.device = b.device AND b2.browser = b.browser AND b2.domain = b.domain AND b2.day BETWEEN ?1 AND ?2 AND b2.url != '' ORDER BY b2.day DESC LIMIT 1), '') AS url
+            FROM remote_browser_usage b WHERE b.day BETWEEN ?1 AND ?2 AND b.device IN ($ph2) GROUP BY b.device, b.browser, b.domain
+          ''', [from, to, ...remotes])) {
+            feedAgg(r['device'] as String, r['browser'] as String, r['domain'] as String, r['ms'] as int, r['title'] as String? ?? '', r['url'] as String? ?? '');
+          }
+        } catch (_) {
+          try {
+            for (final r in db.select('SELECT device, browser, domain, SUM(ms) AS ms FROM remote_browser_usage WHERE device IN ($ph) AND day BETWEEN ? AND ? GROUP BY device, browser, domain', [...remotes, from, to])) {
+              feedAgg(r['device'] as String, r['browser'] as String, r['domain'] as String, r['ms'] as int, '', '');
+            }
+          } catch (_) {}
+        }
+      } else {
+        final remoteUrlCache = <String, ({String title, String url})>{};
+        try {
+          for (final r in db.select('SELECT device, browser, domain, title, url FROM remote_browser_usage WHERE device IN ($ph) AND day BETWEEN ? AND ?', [...remotes, from, to])) {
+            final key = '${r['device']}\u0000${(r['browser'] as String).toLowerCase()}\u0000${r['domain']}';
+            final t = (r['title'] as String? ?? '').trim();
+            final u = (r['url'] as String? ?? '').trim();
+            final prev = remoteUrlCache[key];
+            remoteUrlCache[key] = (
+              title: t.isNotEmpty ? t : (prev?.title ?? ''),
+              url: u.isNotEmpty ? u : (prev?.url ?? ''),
+            );
+          }
+        } catch (_) {}
+        try {
+          for (final r in db.select('SELECT device, day, slot, browser, domain, title, ms FROM remote_browser_timeline WHERE device IN ($ph) AND day BETWEEN ? AND ?', [...remotes, from, to])) {
+            final ovMs = _slotOverlapMs(r['day'] as String, r['slot'] as int, r['ms'] as int, startEpoch, endEpoch);
+            if (ovMs <= 0) continue;
+            final dev = r['device'] as String;
+            final b = (r['browser'] as String).toLowerCase();
+            final d = r['domain'] as String;
+            final meta = remoteUrlCache['$dev\u0000$b\u0000$d'];
+            final t = (r['title'] as String? ?? '').trim();
+            feedAgg(dev, b, d, ovMs, t.isNotEmpty ? t : (meta?.title ?? ''), meta?.url ?? '');
+          }
+        } catch (_) {}
+      }
+    }
+
+    agg.forEach((dev, browsers) {
+      final bOut = <String, List<SiteUsage>>{};
+      browsers.forEach((b, m) {
+        bOut[b] = m.entries.map((e) => SiteUsage(b, e.key, e.value.ms, e.value.title, e.value.url)).toList()
+          ..sort((a, b) => b.ms.compareTo(a.ms));
+      });
+      out[dev] = bOut;
+    });
+    return out;
+  }
+
+  List<SessionRecord> sessionsRange(int startEpoch, int endEpoch, {Set<String> devices = const {'local'}}) {
+    final db = _open();
+    if (db == null || endEpoch <= startEpoch) return [];
+    final out = <SessionRecord>[];
+    if (_hasLocal(devices)) {
+      try {
+        final lowest = startEpoch - sessionLowerSlack(db);
+        for (final r in db.select(
+          'SELECT app, state, start, stop FROM sessions WHERE start >= ?3 AND start < ?2 AND stop > ?1 ORDER BY start ASC',
+          [startEpoch, endEpoch, lowest],
+        )) {
+          final a = math.max(r['start'] as int, startEpoch);
+          final b = math.min(r['stop'] as int, endEpoch);
+          if (b > a) out.add(SessionRecord(r['app'] as String, r['state'] as int, a, b, 'local'));
+        }
+      } catch (_) {}
+    }
+    final remotes = _remoteIds(devices);
+    if (remotes.isNotEmpty) {
+      final aDt = DateTime.fromMillisecondsSinceEpoch(startEpoch * 1000);
+      final bDt = DateTime.fromMillisecondsSinceEpoch((endEpoch - 1) * 1000);
+      String dk(DateTime d) => '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      final ph = List.filled(remotes.length, '?').join(',');
+      try {
+        for (final r in db.select(
+          'SELECT device, day, slot, app, state, ms FROM remote_timeline WHERE device IN ($ph) AND day BETWEEN ? AND ? ORDER BY device, day, slot, state, app',
+          [...remotes, dk(aDt), dk(bDt)],
+        )) {
+          final ms = r['ms'] as int;
+          if (ms <= 0) continue;
+          final mid = DateTime.parse('${r['day']}T00:00:00').millisecondsSinceEpoch ~/ 1000;
+          final s0 = mid + (r['slot'] as int) * 300;
+          final dur = math.min(300, math.max(1, (ms / 1000).round()));
+          final a = math.max(s0, startEpoch);
+          final b = math.min(s0 + dur, endEpoch);
+          if (b > a) out.add(SessionRecord(r['app'] as String, r['state'] as int, a, b, r['device'] as String));
+        }
+      } catch (_) {}
+    }
+    out.sort((a, b) => a.start.compareTo(b.start));
+    return out;
+  }
+
+  ActivityStats activityStats(String from, String to, {Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
+    final db = _open();
+    if (db == null) return const ActivityStats();
+    var unlocks = 0;
+    final opens = <String, int>{};
+    final notifs = <String, int>{};
+    final sliced = startEpoch != null && endEpoch != null && endEpoch > startEpoch;
+    final hasLocal = _hasLocal(devices);
+    final remotes = _remoteIds(devices);
+
+    bool slotInside(String day, int slot) {
+      if (!sliced) return true;
+      final mid = DateTime.parse('${day}T00:00:00').millisecondsSinceEpoch ~/ 1000;
+      final a = mid + slot * 300;
+      return a + 300 > startEpoch && a < endEpoch;
+    }
+
+    if (hasLocal) {
+      var gotSlotUnlocks = false;
+      var gotSlotNotifs = false;
+      if (sliced) {
+        try {
+          for (final r in db.select('SELECT day, slot, app, kind, n FROM slot_stats WHERE day BETWEEN ? AND ?', [from, to])) {
+            final k = r['kind'] as String;
+            if (k == 'unlocks') {
+              gotSlotUnlocks = true;
+              if (slotInside(r['day'] as String, r['slot'] as int)) unlocks += r['n'] as int;
+            } else if (k == 'notifs') {
+              gotSlotNotifs = true;
+              if (slotInside(r['day'] as String, r['slot'] as int)) {
+                final app = r['app'] as String;
+                notifs[app] = (notifs[app] ?? 0) + (r['n'] as int);
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      if (!gotSlotUnlocks) {
+        try {
+          for (final r in db.select("SELECT COALESCE(SUM(n), 0) AS n FROM day_stats WHERE kind = 'unlocks' AND day BETWEEN ? AND ?", [from, to])) {
+            unlocks += (r['n'] as int?) ?? 0;
+          }
+        } catch (_) {}
+      }
+      if (!gotSlotNotifs) {
+        try {
+          for (final r in db.select("SELECT app, SUM(n) AS n FROM app_stats WHERE kind = 'notifs' AND day BETWEEN ? AND ? GROUP BY app", [from, to])) {
+            notifs[r['app'] as String] = (notifs[r['app'] as String] ?? 0) + (r['n'] as int);
+          }
+        } catch (_) {}
+      }
+      var gotOpens = false;
+      if (!sliced) {
+        try {
+          for (final r in db.select("SELECT app, SUM(n) AS n FROM app_stats WHERE kind = 'opens' AND day BETWEEN ? AND ? GROUP BY app", [from, to])) {
+            opens[r['app'] as String] = (opens[r['app'] as String] ?? 0) + (r['n'] as int);
+            gotOpens = true;
+          }
+        } catch (_) {}
+      }
+      if (!gotOpens) {
+        try {
+          final a = startEpoch ?? (DateTime.parse('${from}T00:00:00').millisecondsSinceEpoch ~/ 1000);
+          final b = endEpoch ?? (DateTime.parse('${to}T00:00:00').add(const Duration(days: 1)).millisecondsSinceEpoch ~/ 1000);
+          for (final r in db.select('SELECT app, COUNT(*) AS n FROM sessions WHERE state = 0 AND start >= ? AND start < ? GROUP BY app', [a, b])) {
+            opens[r['app'] as String] = (opens[r['app'] as String] ?? 0) + (r['n'] as int);
+            gotOpens = true;
+          }
+        } catch (_) {}
+      }
+      if (!gotOpens && sliced) {
+        try {
+          for (final r in db.select("SELECT day, slot, app, n FROM slot_stats WHERE kind = 'opens' AND day BETWEEN ? AND ?", [from, to])) {
+            if (slotInside(r['day'] as String, r['slot'] as int)) {
+              final app = r['app'] as String;
+              opens[app] = (opens[app] ?? 0) + (r['n'] as int);
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    if (remotes.isNotEmpty) {
+      final ph = List.filled(remotes.length, '?').join(',');
+      var gotRemoteSlots = false;
+      if (sliced) {
+        try {
+          for (final r in db.select('SELECT day, slot, app, kind, n FROM remote_slot_stats WHERE device IN ($ph) AND day BETWEEN ? AND ?', [...remotes, from, to])) {
+            gotRemoteSlots = true;
+            if (!slotInside(r['day'] as String, r['slot'] as int)) continue;
+            final k = r['kind'] as String;
+            final n = r['n'] as int;
+            if (k == 'unlocks') {
+              unlocks += n;
+            } else if (k == 'notifs') {
+              final app = r['app'] as String;
+              notifs[app] = (notifs[app] ?? 0) + n;
+            } else if (k == 'opens') {
+              final app = r['app'] as String;
+              opens[app] = (opens[app] ?? 0) + n;
+            }
+          }
+        } catch (_) {}
+      }
+      if (!gotRemoteSlots) {
+        try {
+          for (final r in db.select("SELECT COALESCE(SUM(n), 0) AS n FROM remote_day_stats WHERE device IN ($ph) AND kind = 'unlocks' AND day BETWEEN ? AND ?", [...remotes, from, to])) {
+            unlocks += (r['n'] as int?) ?? 0;
+          }
+        } catch (_) {}
+        try {
+          for (final r in db.select("SELECT app, kind, SUM(n) AS n FROM remote_app_stats WHERE device IN ($ph) AND day BETWEEN ? AND ? GROUP BY app, kind", [...remotes, from, to])) {
+            final app = r['app'] as String;
+            final n = r['n'] as int;
+            if (r['kind'] == 'notifs') {
+              notifs[app] = (notifs[app] ?? 0) + n;
+            } else if (r['kind'] == 'opens') {
+              opens[app] = (opens[app] ?? 0) + n;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    return ActivityStats(unlocks: unlocks, opens: opens, notifs: notifs);
+  }
+
+  List<StatPoint> statPoints(DateTime first, int w0, int w1, int bin, {Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
+    final db = _open();
+    if (db == null) return [];
+    final a = first.add(Duration(seconds: w0));
+    final b = first.add(Duration(seconds: w1));
+    String key(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    final ka = key(a);
+    final kb = key(b);
+    final step = bin * 300;
+    final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
+    final sliced = startEpoch != null && endEpoch != null && endEpoch > startEpoch;
+    final clipA = sliced ? startEpoch - firstUnix : null;
+    final clipB = sliced ? endEpoch - firstUnix : null;
+    final agg = <String, int>{};
+
+    void addCount(int start, int end, String app, String kind, int n) {
+      if (n <= 0) return;
+      if (clipA != null && clipB != null) {
+        if (end <= clipA || start >= clipB) return;
+      }
+      final k = '$start\u0000$end\u0000$kind\u0000$app';
+      agg[k] = (agg[k] ?? 0) + n;
+    }
+
+    if (_hasLocal(devices)) {
+      var hasSlotOpens = false;
+      try {
+        for (final r in db.select(
+          'SELECT day, (slot / ?3) * ?3 AS bslot, app, kind, SUM(n) AS n FROM slot_stats WHERE day BETWEEN ?1 AND ?2 GROUP BY day, slot / ?3, app, kind',
+          [ka, kb, bin],
+        )) {
+          final kind = r['kind'] as String;
+          if (kind == 'opens') hasSlotOpens = true;
+          final midnight = DateTime.parse('${r['day']}T00:00:00');
+          final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
+          addCount(start, start + step, r['app'] as String, kind, r['n'] as int);
+        }
+      } catch (_) {}
+      if (!hasSlotOpens) {
+        try {
+          final lo = sliced ? math.max(firstUnix + w0, startEpoch) : firstUnix + w0;
+          final hi = sliced ? math.min(firstUnix + w1, endEpoch) : firstUnix + w1;
+          for (final r in db.select('SELECT app, start FROM sessions WHERE state = 0 AND start >= ?1 AND start < ?2', [lo, hi])) {
+            final sec = (r['start'] as int) - firstUnix;
+            final bStart = (sec ~/ step) * step;
+            addCount(bStart, bStart + step, r['app'] as String, 'opens', 1);
+          }
+        } catch (_) {}
+      }
+    }
+
+    final remotes = _remoteIds(devices);
+    if (remotes.isNotEmpty) {
+      final ph = List.generate(remotes.length, (i) => '?${4 + i}').join(',');
+      try {
+        for (final r in db.select(
+          'SELECT day, (slot / ?3) * ?3 AS bslot, app, kind, SUM(n) AS n FROM remote_slot_stats WHERE day BETWEEN ?1 AND ?2 AND device IN ($ph) GROUP BY day, slot / ?3, app, kind',
+          [ka, kb, bin, ...remotes],
+        )) {
+          final midnight = DateTime.parse('${r['day']}T00:00:00');
+          final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
+          addCount(start, start + step, r['app'] as String, r['kind'] as String, r['n'] as int);
+        }
+      } catch (_) {}
+    }
+
+    final out = <StatPoint>[];
+    agg.forEach((k, n) {
+      final p1 = k.indexOf('\u0000');
+      final p2 = k.indexOf('\u0000', p1 + 1);
+      final p3 = k.indexOf('\u0000', p2 + 1);
+      out.add(StatPoint(
+        int.parse(k.substring(0, p1)),
+        int.parse(k.substring(p1 + 1, p2)),
+        k.substring(p3 + 1),
+        k.substring(p2 + 1, p3),
+        n,
+      ));
+    });
+    return out;
+  }
+
+  List<SiteContrib> browserContribs(DateTime first, int w0, int w1, int bin, {Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
     final db = _open();
     if (db == null) return [];
     final out = <SiteContrib>[];
@@ -361,14 +815,27 @@ class Usage {
     String key(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
     final ka = key(a);
     final kb = key(b);
+    final sliced = startEpoch != null && endEpoch != null && endEpoch > startEpoch;
+    final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
+    final clipA = sliced ? startEpoch - firstUnix : null;
+    final clipB = sliced ? endEpoch - firstUnix : null;
 
     void feed(Iterable<Row> rows) {
       for (final r in rows) {
-        final ms = r['ms'] as int;
+        var ms = r['ms'] as int;
         if (ms <= 0) continue;
         final midnight = DateTime.parse('${r['day']}T00:00:00');
-        final start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
-        final end = start + bin * 300;
+        var start = midnight.add(Duration(seconds: (r['bslot'] as int) * 300)).difference(first).inSeconds;
+        var end = start + bin * 300;
+        if (clipA != null && clipB != null) {
+          final ca = math.max(start, clipA);
+          final cb = math.min(end, clipB);
+          if (cb <= ca) continue;
+          if (cb - ca < end - start) ms = (ms * (cb - ca) / (end - start)).round();
+          if (ms <= 0) continue;
+          start = ca;
+          end = cb;
+        }
         out.add(SiteContrib(start, end, (r['browser'] as String).toLowerCase(), r['domain'] as String, (r['title'] as String? ?? '').trim(), ms));
       }
     }
@@ -423,7 +890,7 @@ class Usage {
     return maxSpan + (now - maxSpanAt) + 60;
   }
 
-  List<Contrib> contribs(DateTime first, int w0, int w1, int bin, bool sessions, {bool realFocus = false, Set<String> devices = const {'local'}}) {
+  List<Contrib> contribs(DateTime first, int w0, int w1, int bin, bool sessions, {bool realFocus = false, Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
     final db = _open();
     if (db == null) return [];
     final out = <Contrib>[];
@@ -431,6 +898,9 @@ class Usage {
     final hasLocal = _hasLocal(devices);
     final remotes = _remoteIds(devices);
     final firstUnix = first.millisecondsSinceEpoch ~/ 1000;
+    final sliced = startEpoch != null && endEpoch != null && endEpoch > startEpoch;
+    final clipA = sliced ? startEpoch - firstUnix : null;
+    final clipB = sliced ? endEpoch - firstUnix : null;
     int? cutoff;
     if (sessions && hasLocal) {
       try {
@@ -438,6 +908,20 @@ class Usage {
         if (r.isNotEmpty && r.first['m'] != null) cutoff = (r.first['m'] as int) - firstUnix;
       } catch (_) {}
     }
+    void pushClipped(int start, int end, String app, int state, int ms) {
+      if (clipA != null && clipB != null) {
+        final ca = math.max(start, clipA);
+        final cb = math.min(end, clipB);
+        if (cb <= ca) return;
+        final dur = end - start;
+        final scaled = dur > 0 && cb - ca < dur ? (ms * (cb - ca) / dur).round() : ms;
+        if (scaled <= 0) return;
+        out.add(Contrib(ca, cb, app, state, scaled));
+      } else {
+        out.add(Contrib(start, end, app, state, ms));
+      }
+    }
+
     try {
       final a = first.add(Duration(seconds: w0));
       final b = first.add(Duration(seconds: w1));
@@ -462,7 +946,7 @@ class Usage {
           var ms = r['ms'] as int;
           if (realFocus && r['state'] == 0) ms = math.max(0, ms - (idle['${r['day']}|${r['bslot']}|${r['app']}'] ?? 0));
           if (ms == 0) continue;
-          out.add(Contrib(start, end, r['app'] as String, r['state'] as int, ms));
+          pushClipped(start, end, r['app'] as String, r['state'] as int, ms);
         }
       }
       if (remotes.isNotEmpty) {
@@ -479,7 +963,7 @@ class Usage {
             final end = start + bin * 300;
             final ms = r['ms'] as int;
             if (ms == 0) continue;
-            out.add(Contrib(start, end, r['app'] as String, r['state'] as int, ms));
+            pushClipped(start, end, r['app'] as String, r['state'] as int, ms);
           }
         } catch (_) {}
       }
@@ -490,7 +974,7 @@ class Usage {
         for (final r in db.select('SELECT app, state, start, stop FROM sessions WHERE start >= ?3 AND start <= ?2 AND stop >= ?1', [firstUnix + w0, firstUnix + w1, lowest])) {
           final start = (r['start'] as int) - firstUnix;
           final end = (r['stop'] as int) - firstUnix;
-          out.add(Contrib(start, end, r['app'] as String, r['state'] as int, (end - start) * 1000));
+          pushClipped(start, end, r['app'] as String, r['state'] as int, (end - start) * 1000);
         }
       } catch (_) {}
     }

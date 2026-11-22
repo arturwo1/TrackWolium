@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'data.dart';
 import 'device.dart' as dev;
@@ -111,6 +112,12 @@ class P2pSync {
       CREATE TABLE IF NOT EXISTS remote_apps(device TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, app)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_browser_usage(device TEXT NOT NULL, day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, day, browser, domain)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_browser_timeline(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', ms INTEGER NOT NULL, PRIMARY KEY(device, day, slot, browser, domain)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS day_stats(day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS app_stats(day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, app, kind)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS slot_stats(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, slot, app, kind)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS remote_day_stats(device TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, kind)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS remote_app_stats(device TEXT NOT NULL, day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, app, kind)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS remote_slot_stats(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, slot, app, kind)) WITHOUT ROWID;
     ''');
     for (final sql in [
       "ALTER TABLE browser_usage ADD COLUMN title TEXT NOT NULL DEFAULT ''",
@@ -252,20 +259,34 @@ class P2pSync {
     if (enabled || peers.value.isNotEmpty) await start();
   }
 
+  static const _androidChannel = MethodChannel('wolium/usage');
+
   Future<void> start() async {
     loadPeers();
     if (_server != null) return;
-    try {
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, kP2pPort, shared: true);
-      running.value = true;
-      _server!.listen(_handleRequest, onError: (_) {});
-      _autoTimer?.cancel();
-      _autoTimer = Timer.periodic(const Duration(minutes: 5), (_) {
-        if (peers.value.isNotEmpty) syncAll();
-      });
-    } catch (_) {
-      running.value = false;
+    if (Platform.isAndroid) {
+      try {
+        await _androidChannel.invokeMethod('p2pService', {'on': false});
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      } catch (_) {}
     }
+    for (var attempt = 0; attempt < (Platform.isAndroid ? 3 : 1); attempt++) {
+      try {
+        _server = await HttpServer.bind(InternetAddress.anyIPv4, kP2pPort, shared: true);
+        running.value = true;
+        _server!.listen(_handleRequest, onError: (_) {});
+        _autoTimer?.cancel();
+        _autoTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+          if (peers.value.isNotEmpty) syncAll();
+        });
+        return;
+      } catch (_) {
+        if (Platform.isAndroid && attempt < 2) {
+          await Future<void>.delayed(const Duration(milliseconds: 180));
+        }
+      }
+    }
+    running.value = false;
   }
 
   Future<void> stop() async {
@@ -277,6 +298,36 @@ class P2pSync {
     await _server?.close(force: true);
     _server = null;
     running.value = false;
+    if (Platform.isAndroid && !enabled && peers.value.isEmpty) {
+      try {
+        await _androidChannel.invokeMethod('p2pService', {'on': false});
+      } catch (_) {}
+    }
+  }
+
+  Future<void> suspendForBackground() async {
+    if (!Platform.isAndroid) return;
+    final wantService = enabled || peers.value.isNotEmpty;
+    await _server?.close(force: true);
+    _server = null;
+    running.value = false;
+    if (wantService) {
+      try {
+        await _androidChannel.invokeMethod('p2pService', {'on': true});
+      } catch (_) {}
+    }
+  }
+
+  Future<void> resumeFromBackground() async {
+    if (!Platform.isAndroid) return;
+    loadPeers();
+    if (enabled || peers.value.isNotEmpty) {
+      await start();
+    } else {
+      try {
+        await _androidChannel.invokeMethod('p2pService', {'on': false});
+      } catch (_) {}
+    }
   }
 
   String startPinSession() {
@@ -304,7 +355,7 @@ class P2pSync {
           'id': deviceId,
           'name': deviceName,
           'platform': platformName,
-          'version': '0.18.0',
+          'version': '0.19.0',
         });
         return;
       }
@@ -479,6 +530,9 @@ class P2pSync {
         db.execute('DELETE FROM remote_apps WHERE device = ?', [id]);
         db.execute('DELETE FROM remote_browser_usage WHERE device = ?', [id]);
         db.execute('DELETE FROM remote_browser_timeline WHERE device = ?', [id]);
+        db.execute('DELETE FROM remote_day_stats WHERE device = ?', [id]);
+        db.execute('DELETE FROM remote_app_stats WHERE device = ?', [id]);
+        db.execute('DELETE FROM remote_slot_stats WHERE device = ?', [id]);
       } finally {
         db.dispose();
       }
@@ -516,6 +570,9 @@ class P2pSync {
     final apps = <Map<String, dynamic>>[];
     final browser = <Map<String, dynamic>>[];
     final browserTimeline = <Map<String, dynamic>>[];
+    final dayStats = <Map<String, dynamic>>[];
+    final appStats = <Map<String, dynamic>>[];
+    final slotStats = <Map<String, dynamic>>[];
     if (File(dbPath()).existsSync()) {
       final db = sqlite3.open(dbPath(), mode: OpenMode.readOnly);
       try {
@@ -575,6 +632,62 @@ class P2pSync {
             browserTimeline.add({'day': r['day'], 'slot': r['slot'], 'browser': r['browser'], 'domain': r['domain'], 'title': r['title'], 'ms': r['ms']});
           }
         } catch (_) {}
+        try {
+          for (final r in db.select('SELECT day, kind, n FROM day_stats WHERE day >= ?', [fromDay])) {
+            dayStats.add({'day': r['day'], 'kind': r['kind'], 'n': r['n']});
+          }
+        } catch (_) {}
+        var hasOpens = false;
+        try {
+          for (final r in db.select('SELECT day, app, kind, n FROM app_stats WHERE day >= ?', [fromDay])) {
+            if (r['kind'] == 'opens') hasOpens = true;
+            appStats.add({'day': r['day'], 'app': r['app'], 'kind': r['kind'], 'n': r['n']});
+          }
+        } catch (_) {}
+        var hasSlotOpens = false;
+        try {
+          for (final r in db.select('SELECT day, slot, app, kind, n FROM slot_stats WHERE day >= ?', [fromDay])) {
+            if (r['kind'] == 'opens') hasSlotOpens = true;
+            slotStats.add({'day': r['day'], 'slot': r['slot'], 'app': r['app'], 'kind': r['kind'], 'n': r['n']});
+          }
+        } catch (_) {}
+        if (!hasOpens || !hasSlotOpens) {
+          try {
+            final sinceUnix = DateTime(since.year, since.month, since.day).millisecondsSinceEpoch ~/ 1000;
+            final sessOpens = <String, int>{};
+            final sessSlotOpens = <String, int>{};
+            for (final r in db.select('SELECT app, start FROM sessions WHERE state = 0 AND start >= ?', [sinceUnix])) {
+              final st = r['start'] as int;
+              final dt = DateTime.fromMillisecondsSinceEpoch(st * 1000);
+              final dk = '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+              final k = '$dk\u0000${r['app']}';
+              sessOpens[k] = (sessOpens[k] ?? 0) + 1;
+              final mid = DateTime(dt.year, dt.month, dt.day).millisecondsSinceEpoch ~/ 1000;
+              final sl = ((st - mid) ~/ 300).clamp(0, 287);
+              final sk = '$dk\u0000$sl\u0000${r['app']}';
+              sessSlotOpens[sk] = (sessSlotOpens[sk] ?? 0) + 1;
+            }
+            if (!hasOpens) {
+              sessOpens.forEach((k, n) {
+                final i = k.indexOf('\u0000');
+                appStats.add({'day': k.substring(0, i), 'app': k.substring(i + 1), 'kind': 'opens', 'n': n});
+              });
+            }
+            if (!hasSlotOpens) {
+              sessSlotOpens.forEach((sk, n) {
+                final i1 = sk.indexOf('\u0000');
+                final i2 = sk.indexOf('\u0000', i1 + 1);
+                slotStats.add({
+                  'day': sk.substring(0, i1),
+                  'slot': int.parse(sk.substring(i1 + 1, i2)),
+                  'app': sk.substring(i2 + 1),
+                  'kind': 'opens',
+                  'n': n,
+                });
+              });
+            }
+          } catch (_) {}
+        }
       } finally {
         db.dispose();
       }
@@ -586,6 +699,9 @@ class P2pSync {
       'apps': apps,
       'browser_usage': browser,
       'browser_timeline': browserTimeline,
+      'day_stats': dayStats,
+      'app_stats': appStats,
+      'slot_stats': slotStats,
     };
   }
 
@@ -677,6 +793,33 @@ class P2pSync {
           final st = db.prepare('INSERT OR REPLACE INTO remote_browser_timeline(device, day, slot, browser, domain, title, ms) VALUES(?, ?, ?, ?, ?, ?, ?)');
           for (final item in btList.whereType<Map<String, dynamic>>()) {
             st.execute([peerId, item['day'], item['slot'], item['browser'], item['domain'], item['title'] ?? '', item['ms']]);
+          }
+          st.dispose();
+        }
+
+        final dsList = data['day_stats'] as List<dynamic>? ?? const [];
+        if (dsList.isNotEmpty) {
+          final st = db.prepare('INSERT OR REPLACE INTO remote_day_stats(device, day, kind, n) VALUES(?, ?, ?, ?)');
+          for (final item in dsList.whereType<Map<String, dynamic>>()) {
+            st.execute([peerId, item['day'], item['kind'], item['n']]);
+          }
+          st.dispose();
+        }
+
+        final asList = data['app_stats'] as List<dynamic>? ?? const [];
+        if (asList.isNotEmpty) {
+          final st = db.prepare('INSERT OR REPLACE INTO remote_app_stats(device, day, app, kind, n) VALUES(?, ?, ?, ?, ?)');
+          for (final item in asList.whereType<Map<String, dynamic>>()) {
+            st.execute([peerId, item['day'], item['app'], item['kind'], item['n']]);
+          }
+          st.dispose();
+        }
+
+        final ssList = data['slot_stats'] as List<dynamic>? ?? const [];
+        if (ssList.isNotEmpty) {
+          final st = db.prepare('INSERT OR REPLACE INTO remote_slot_stats(device, day, slot, app, kind, n) VALUES(?, ?, ?, ?, ?, ?)');
+          for (final item in ssList.whereType<Map<String, dynamic>>()) {
+            st.execute([peerId, item['day'], item['slot'], item['app'], item['kind'], item['n']]);
           }
           st.dispose();
         }

@@ -17,7 +17,20 @@ const seriesColors = [
   Color(0xFF9AA5B1),
 ];
 
-const _idColor = {'cpu': 0, 'ram': 1, 'peak': 2, 'ior': 3, 'iow': 4, 'sysram': 5, 'sysdisk': 6};
+const statMetricIds = ['opens', 'notifs', 'unlocks'];
+
+const _idColor = {
+  'cpu': 0,
+  'ram': 1,
+  'peak': 2,
+  'ior': 3,
+  'iow': 4,
+  'sysram': 5,
+  'sysdisk': 6,
+  'opens': 1,
+  'notifs': 2,
+  'unlocks': 3,
+};
 
 Color metricColor(String id) => seriesColors[_idColor[id] ?? 0];
 
@@ -45,6 +58,12 @@ String metricName(String id) {
       return tr('mSysRam');
     case 'sysdisk':
       return tr('mSysDisk');
+    case 'opens':
+      return tr('opens');
+    case 'notifs':
+      return tr('notifs');
+    case 'unlocks':
+      return tr('unlocksLabel');
     default:
       return id;
   }
@@ -61,6 +80,7 @@ class ResSeries {
   final List<Map<String, double>> apps;
 
   bool get isPeak => id == 'peak';
+  bool get isSum => id == 'opens' || id == 'notifs' || id == 'unlocks';
 
   double maxIn(double a, double b) {
     var m = 0.0;
@@ -95,6 +115,7 @@ class ResSeries {
     final l = v.toList();
     if (l.isEmpty) return 0;
     if (isPeak) return l.reduce(math.max);
+    if (isSum) return l.reduce((a, b) => a + b);
     return l.reduce((a, b) => a + b) / l.length;
   }
 
@@ -120,6 +141,8 @@ String _cpuText(double v) => '${v.toStringAsFixed(v < 10 ? 1 : 0)}%';
 String _rate(double v) => '${formatBytes(v.round())}/${tr('unitS')}';
 
 String _size(double v) => formatKb(v.round());
+
+String _countText(double v) => '${v.round()}';
 
 List<ResSeries> buildSeries({required Set<String> ids, required List<ResPoint> pts, required List<SysPoint> sys, String? only, required bool Function(String) skip}) {
   final out = <ResSeries>[];
@@ -175,6 +198,55 @@ List<ResSeries> buildSeries({required Set<String> ids, required List<ResPoint> p
       final k = kinds[i];
       out.add(ResSeries('sysdisk:$k', '${metricName('sysdisk')} ${k.substring(5)}', seriesColors[(6 + i) % seriesColors.length], _size, [for (final p in sys) if (p.kind == k) Offset(p.t.toDouble(), (p.total - p.free).toDouble())]));
     }
+  }
+  return out;
+}
+
+List<ResSeries> buildStatSeries({
+  required Set<String> ids,
+  required List<StatPoint> pts,
+  required int w0,
+  required int w1,
+  required int bin,
+  String? only,
+  required bool Function(String) skip,
+}) {
+  final active = [for (final id in statMetricIds) if (ids.contains(id)) id];
+  if (active.isEmpty || w1 <= w0) return const [];
+  final step = math.max(300, bin * 300);
+  final gridStart = (w0 ~/ step) * step;
+  final out = <ResSeries>[];
+  for (final kind in active) {
+    final byStart = <int, Map<String, double>>{};
+    final unlockTotals = <int, double>{};
+    for (final p in pts) {
+      if (p.kind != kind || p.count <= 0) continue;
+      final st = (p.start ~/ step) * step;
+      if (kind == 'unlocks') {
+        unlockTotals[st] = (unlockTotals[st] ?? 0) + p.count;
+      } else {
+        if (p.app.isEmpty || skip(p.app) || (only != null && p.app != only)) continue;
+        final map = byStart.putIfAbsent(st, () => {});
+        map[p.app] = (map[p.app] ?? 0) + p.count;
+      }
+    }
+    final points = <Offset>[];
+    final apps = <Map<String, double>>[];
+    for (var st = gridStart; st < w1; st += step) {
+      if (kind == 'unlocks') {
+        points.add(Offset(st + step / 2, unlockTotals[st] ?? 0.0));
+        apps.add(const <String, double>{});
+      } else {
+        final per = byStart[st] ?? const <String, double>{};
+        var total = 0.0;
+        for (final v in per.values) {
+          total += v;
+        }
+        points.add(Offset(st + step / 2, total));
+        apps.add(per);
+      }
+    }
+    out.add(ResSeries(kind, metricName(kind), metricColor(kind), _countText, points, apps));
   }
   return out;
 }

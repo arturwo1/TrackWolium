@@ -8,7 +8,9 @@ import 'data.dart';
 
 const evResumed = 1;
 const evPaused = 2;
+const evNotif = 12;
 const evScreenOff = 16;
+const evUnlock = 18;
 const evShutdown = 26;
 
 class UsageEvent {
@@ -106,6 +108,12 @@ CREATE TABLE IF NOT EXISTS remote_timeline(device TEXT NOT NULL, day TEXT NOT NU
 CREATE TABLE IF NOT EXISTS remote_apps(device TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, app)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS remote_browser_usage(device TEXT NOT NULL, day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, day, browser, domain)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS remote_browser_timeline(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', ms INTEGER NOT NULL, PRIMARY KEY(device, day, slot, browser, domain)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS day_stats(day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS app_stats(day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, app, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS slot_stats(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, slot, app, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS remote_day_stats(device TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS remote_app_stats(device TEXT NOT NULL, day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, app, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS remote_slot_stats(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, slot, app, kind)) WITHOUT ROWID;
 ''';
 
 int _maxSpan = -1;
@@ -128,7 +136,7 @@ int sessionSlack(Database db, List<SessionSpan> fresh) {
   return _maxSpan + (now - _maxSpanAt) + 60;
 }
 
-void storeSessions(Database db, List<SessionSpan> sessions, DateTime firstDay, DateTime lastDay) {
+void storeSessions(Database db, List<SessionSpan> sessions, DateTime firstDay, DateTime lastDay, [List<UsageEvent> events = const []]) {
   db.execute('BEGIN');
   try {
     final from = firstDay.millisecondsSinceEpoch ~/ 1000;
@@ -145,21 +153,79 @@ void storeSessions(Database db, List<SessionSpan> sessions, DateTime firstDay, D
     }
     final putUsage = db.prepare('INSERT INTO usage(day, app, state, ms) VALUES(?, ?, 0, ?)');
     final putSlot = db.prepare('INSERT INTO timeline(day, slot, app, state, ms) VALUES(?, ?, ?, 0, ?)');
+    final putDayStat = db.prepare('INSERT INTO day_stats(day, kind, n) VALUES(?, ?, ?)');
+    final putAppStat = db.prepare('INSERT INTO app_stats(day, app, kind, n) VALUES(?, ?, ?, ?)');
+    final putSlotStat = db.prepare('INSERT INTO slot_stats(day, slot, app, kind, n) VALUES(?, ?, ?, ?, ?)');
     var day = firstDay;
     while (!day.isAfter(lastDay)) {
       final key = dayKey(day);
+      final dayNext = DateTime(day.year, day.month, day.day + 1);
+      final aMs = day.millisecondsSinceEpoch;
+      final bMs = dayNext.millisecondsSinceEpoch;
+      final aSec = aMs ~/ 1000;
+      final bSec = bMs ~/ 1000;
       db.execute('DELETE FROM usage WHERE day = ?', [key]);
       db.execute('DELETE FROM timeline WHERE day = ?', [key]);
+      db.execute("DELETE FROM app_stats WHERE day = ? AND kind = 'opens'", [key]);
+      db.execute("DELETE FROM slot_stats WHERE day = ? AND kind = 'opens'", [key]);
       final totals = aggregateDay(all, day);
       totals.usage.forEach((app, ms) => putUsage.execute([key, app, ms]));
       totals.timeline.forEach((k, ms) {
         final i = k.indexOf('\u0000');
         putSlot.execute([key, int.parse(k.substring(0, i)), k.substring(i + 1), ms]);
       });
-      day = DateTime(day.year, day.month, day.day + 1);
+      final opens = <String, int>{};
+      final slotOpens = <String, int>{};
+      for (final s in all) {
+        if (s.start >= aSec && s.start < bSec) {
+          opens[s.app] = (opens[s.app] ?? 0) + 1;
+          final sl = ((s.start - aSec) ~/ 300).clamp(0, 287);
+          final sk = '$sl\u0000${s.app}';
+          slotOpens[sk] = (slotOpens[sk] ?? 0) + 1;
+        }
+      }
+      opens.forEach((app, n) => putAppStat.execute([key, app, 'opens', n]));
+      slotOpens.forEach((sk, n) {
+        final i = sk.indexOf('\u0000');
+        putSlotStat.execute([key, int.parse(sk.substring(0, i)), sk.substring(i + 1), 'opens', n]);
+      });
+      var dayEvents = 0;
+      var unlocks = 0;
+      final notifs = <String, int>{};
+      final slotUnlocks = <int, int>{};
+      final slotNotifs = <String, int>{};
+      for (final ev in events) {
+        if (ev.ms < aMs || ev.ms >= bMs) continue;
+        dayEvents++;
+        final sl = ((ev.ms - aMs) ~/ 300000).clamp(0, 287);
+        if (ev.type == evUnlock) {
+          unlocks++;
+          slotUnlocks[sl] = (slotUnlocks[sl] ?? 0) + 1;
+        } else if (ev.type == evNotif && ev.pkg.isNotEmpty) {
+          notifs[ev.pkg] = (notifs[ev.pkg] ?? 0) + 1;
+          final nk = '$sl\u0000${ev.pkg}';
+          slotNotifs[nk] = (slotNotifs[nk] ?? 0) + 1;
+        }
+      }
+      if (dayEvents > 0 || unlocks > 0 || notifs.isNotEmpty) {
+        db.execute("DELETE FROM day_stats WHERE day = ? AND kind = 'unlocks'", [key]);
+        db.execute("DELETE FROM app_stats WHERE day = ? AND kind = 'notifs'", [key]);
+        db.execute("DELETE FROM slot_stats WHERE day = ? AND kind IN ('unlocks', 'notifs')", [key]);
+        if (unlocks > 0) putDayStat.execute([key, 'unlocks', unlocks]);
+        notifs.forEach((app, n) => putAppStat.execute([key, app, 'notifs', n]));
+        slotUnlocks.forEach((sl, n) => putSlotStat.execute([key, sl, '', 'unlocks', n]));
+        slotNotifs.forEach((nk, n) {
+          final i = nk.indexOf('\u0000');
+          putSlotStat.execute([key, int.parse(nk.substring(0, i)), nk.substring(i + 1), 'notifs', n]);
+        });
+      }
+      day = dayNext;
     }
     putUsage.dispose();
     putSlot.dispose();
+    putDayStat.dispose();
+    putAppStat.dispose();
+    putSlotStat.dispose();
     db.execute('COMMIT');
   } catch (_) {
     db.execute('ROLLBACK');
@@ -191,6 +257,8 @@ class UsageBridge {
   Future<void> requestNotifications() async => _channel.invokeMethod('requestNotifications');
 
   Future<void> setApiService(bool on) async => _channel.invokeMethod('apiService', {'on': on});
+
+  Future<void> setP2pService(bool on) async => _channel.invokeMethod('p2pService', {'on': on});
 
   Future<void> setCrashLogs(bool on) async => _channel.invokeMethod('setCrashLogs', {'on': on});
 
@@ -299,7 +367,7 @@ class AndroidCollector {
       final db = sqlite3.open(dbPath());
       try {
         db.execute(_schema);
-        storeSessions(db, sessions, firstDay, DateTime(now.year, now.month, now.day));
+        storeSessions(db, sessions, firstDay, DateTime(now.year, now.month, now.day), events);
         final known = {
           for (final r in db.select("SELECT app, path FROM apps WHERE path != ''"))
             if (File(r['path'] as String).existsSync()) r['app'] as String

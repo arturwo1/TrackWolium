@@ -51,6 +51,9 @@ if "ApiService" not in text:
         '        <service android:name=".ApiService" android:exported="false" android:foregroundServiceType="specialUse">\n'
         '            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="local_loopback_api"/>\n'
         "        </service>\n"
+        '        <service android:name=".P2pService" android:exported="false" android:foregroundServiceType="specialUse">\n'
+        '            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="lan_p2p_sync"/>\n'
+        "        </service>\n"
         '        <receiver android:name=".BootReceiver" android:exported="true">\n'
         '            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>\n'
         "        </receiver>\n"
@@ -69,6 +72,7 @@ kt = next(main_dir.glob("kotlin/**/MainActivity.kt"))
 package = re.search(r"^package\s+(\S+)", kt.read_text(encoding="utf-8"), re.M).group(1)
 kt.write_text((here / "android" / "MainActivity.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
 (kt.parent / "ApiService.kt").write_text((here / "android" / "ApiService.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
+(kt.parent / "P2pService.kt").write_text((here / "android" / "P2pService.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
 (kt.parent / "SyncWorker.kt").write_text((here / "android" / "SyncWorker.kt.tpl").read_text(encoding="utf-8").replace("__PACKAGE__", package), encoding="utf-8")
 
 merged = {}
