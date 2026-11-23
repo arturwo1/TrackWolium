@@ -948,6 +948,36 @@ void test_browser_api() {
   auto top2 = tw::route_api("GET", "/v1/browser/top?days=1&limit=5", "", "", store.get(), now);
   CHECK(top2.status == 200);
   CHECK(top2.body.find("\"title\":\"\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 \xF0\x9F\x98\x80\"") != std::string::npos);
+
+  auto r4 = tw::route_api("POST", "/v1/browser", "{\"browser\":\"chrome\",\"domain\":\"example.com\",\"title\":\"example.com/path/to/page\",\"url\":\"https://example.com/path/to/page\",\"ms\":4000}", "", store.get(), now);
+  CHECK(r4.status == 200);
+  auto top3 = tw::route_api("GET", "/v1/browser/top?days=1&limit=10", "", "", store.get(), now);
+  CHECK(top3.body.find("\"domain\":\"example.com\",\"title\":\"\"") != std::string::npos);
+}
+
+void test_sys_events() {
+  std::string err;
+  auto store = tw::SqliteStore::open(":memory:", &err);
+  CHECK(store != nullptr);
+  if (!store) return;
+  CHECK(store->add_sys_events({{1000, "sleep", 65000, ""}, {1200, "lock", 15000, ""}, {1300, "reboot", 0, ""}}));
+  CHECK(store->add_sys_events({{1000, "sleep", 80000, "ac"}}));
+  auto got = store->load_sys_events(900, 1400);
+  CHECK(got.size() == 3);
+  CHECK(got[0].ts == 1000 && got[0].kind == "sleep" && got[0].duration_ms == 80000 && got[0].extra == "ac");
+  CHECK(got[1].ts == 1200 && got[1].kind == "lock" && got[1].duration_ms == 15000);
+  CHECK(got[2].ts == 1300 && got[2].kind == "reboot" && got[2].duration_ms == 0);
+
+  auto probe = std::make_shared<tw::PushProbe>();
+  tw::Engine engine(probe);
+  auto store_ptr = std::shared_ptr<tw::SqliteStore>(tw::SqliteStore::open(":memory:", &err));
+  CHECK(store_ptr != nullptr);
+  if (!store_ptr) return;
+  engine.set_store(store_ptr);
+  engine.record_sys_event({2000, "shutdown", 0, ""});
+  engine.finish();
+  auto got2 = store_ptr->load_sys_events(1900, 2100);
+  CHECK(got2.size() == 1 && got2[0].kind == "shutdown" && got2[0].ts == 2000);
 }
 
 int main() {
@@ -994,6 +1024,7 @@ int main() {
   test_sqlite_resources();
   test_native_metrics_smoke();
   test_browser_api();
+  test_sys_events();
 #ifdef _WIN32
   test_ipc_roundtrip();
 #endif

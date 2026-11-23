@@ -25,6 +25,13 @@ The UI and the core coordinate through plain files in the data folder: `consent`
 
 Focusing and closing apps from the UI uses native Win32 calls through Dart FFI. No PowerShell or other helper processes are involved.
 
-## Resource metrics
+## Resource & system metrics
 
-A per-process tracker computes deltas per PID every 10 seconds, results are summed per app in 5-minute slots and flushed with the regular batch. Memory is private memory, CPU is normalized by logical core count.
+A per-process tracker computes deltas per PID every 10 seconds, results are summed per app in 5-minute slots and flushed with the regular batch. Memory is private memory, CPU is normalized by logical core count. System RAM, per-mount disk capacity (`sysmon`), and OS power state transitions (`sys_events`: `sleep`, `hibernate`, `lock`, `reboot`, `shutdown`) are recorded alongside app usage.
+
+## Cross-device LAN P2P sync & Android workers
+
+- Paired devices exchange signed snapshots over LAN (port `9096`), storing peer data in `remote_*` tables (`remote_usage`, `remote_timeline`, `remote_apps`, `remote_browser_usage`, `remote_browser_timeline`, `remote_day_stats`, `remote_app_stats`, `remote_slot_stats`, `remote_res`, `remote_sysmon`, `remote_afk`, `remote_sys_events`).
+- On Android, `SyncWorker` handles periodic background collection and silent LAN P2P sync without keeping a persistent foreground P2P notification when the app is in the background.
+- Browser website tracking uses `extensions/wolium-browser/` on desktop (`POST /v1/browser`) and an optional `BrowserService` (`AccessibilityService`) on Android, normalizing clean page titles separately from URLs.
+

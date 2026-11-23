@@ -7,6 +7,8 @@
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <cwctype>
+#include <chrono>
+#include <ctime>
 #include <map>
 #include <string>
 
@@ -201,9 +203,19 @@ public:
     wchar_t buf[MAX_PATH];
     UINT n = GetWindowsDirectoryW(buf, MAX_PATH);
     if (n > 0 && n < MAX_PATH) windows_dir_ = lower(std::wstring(buf, n)) + L"\\";
+    last_wall_ = static_cast<long long>(std::time(nullptr));
+    last_unbiased_100ns_ = read_unbiased_100ns();
+    last_steady_ = std::chrono::steady_clock::now();
+  }
+
+  std::vector<SysEvent> take_sys_events() override {
+    std::vector<SysEvent> out;
+    out.swap(pending_events_);
+    return out;
   }
 
   std::vector<AppSample> sample() override {
+    update_power_lock();
     std::vector<AppSample> out;
 
     HWND fg = GetForegroundWindow();
@@ -330,8 +342,97 @@ public:
   }
 
 private:
+  static long long read_unbiased_100ns() {
+    using QueryUnbiasedFn = BOOL(WINAPI*)(PULONGLONG);
+    static QueryUnbiasedFn fn = reinterpret_cast<QueryUnbiasedFn>(
+        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "QueryUnbiasedInterruptTime")));
+    if (fn) {
+      ULONGLONG t = 0;
+      if (fn(&t)) return static_cast<long long>(t);
+    }
+    return -1;
+  }
+
+  static bool query_screen_locked() {
+    using WtsQueryFn = BOOL(WINAPI*)(HANDLE, DWORD, int, LPWSTR*, DWORD*);
+    using WtsFreeFn = VOID(WINAPI*)(PVOID);
+    static HMODULE wts = LoadLibraryW(L"wtsapi32.dll");
+    static WtsQueryFn wts_query = wts ? reinterpret_cast<WtsQueryFn>(reinterpret_cast<void*>(GetProcAddress(wts, "WTSQuerySessionInformationW"))) : nullptr;
+    static WtsFreeFn wts_free = wts ? reinterpret_cast<WtsFreeFn>(reinterpret_cast<void*>(GetProcAddress(wts, "WTSFreeMemory"))) : nullptr;
+    if (wts_query && wts_free) {
+      LPWSTR buf = nullptr;
+      DWORD bytes = 0;
+      // WTS_CURRENT_SERVER_HANDLE=NULL, WTS_CURRENT_SESSION=(DWORD)-1, WTSSessionInfoEx=25
+      if (wts_query(nullptr, static_cast<DWORD>(-1), 25, &buf, &bytes) && buf && bytes >= 16) {
+        // WTSINFOEXW layout: Level (ULONG=4B), Reserved (ULONG=4B), Data.WTSINFOEX_LEVEL1_W: SessionId(4), SessionState(4), SessionFlags(LONG at offset 16 or 12 depending alignment)
+        const DWORD level = *reinterpret_cast<const DWORD*>(buf);
+        if (level == 1 && bytes >= 24) {
+          // Offset 16 is SessionFlags in WTSINFOEXW (WTS_SESSIONSTATE_LOCK == 0 on Vista+/Win8+, UNLOCK == 1)
+          const LONG flags = *reinterpret_cast<const LONG*>(reinterpret_cast<const unsigned char*>(buf) + 16);
+          wts_free(buf);
+          if (flags == 0) return true;
+          if (flags == 1) return false;
+        } else {
+          wts_free(buf);
+        }
+      }
+    }
+    HDESK d = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+    if (!d) return GetLastError() == ERROR_ACCESS_DENIED;
+    wchar_t name[64]{};
+    DWORD need = 0;
+    bool is_lock = false;
+    if (GetUserObjectInformationW(d, UOI_NAME, name, sizeof(name), &need)) {
+      is_lock = _wcsicmp(name, L"Winlogon") == 0;
+    }
+    CloseDesktop(d);
+    return is_lock;
+  }
+
+  void update_power_lock() {
+    long long wall = static_cast<long long>(std::time(nullptr));
+    long long unbiased = read_unbiased_100ns();
+    auto steady = std::chrono::steady_clock::now();
+    if (unbiased >= 0 && last_unbiased_100ns_ >= 0) {
+      long long wall_d = wall - last_wall_;
+      long long unb_d = (unbiased - last_unbiased_100ns_) / 10000000LL;
+      long long sleep_s = wall_d - unb_d;
+      if (sleep_s >= 20 && sleep_s < 86400LL * 90) {
+        pending_events_.push_back({last_wall_, "sleep", sleep_s * 1000LL, ""});
+      }
+    } else {
+      long long wall_d = wall - last_wall_;
+      long long steady_d = std::chrono::duration_cast<std::chrono::seconds>(steady - last_steady_).count();
+      long long sleep_s = wall_d - steady_d;
+      if (sleep_s >= 20 && sleep_s < 86400LL * 90) {
+        pending_events_.push_back({last_wall_, "sleep", sleep_s * 1000LL, ""});
+      }
+    }
+    last_wall_ = wall;
+    last_unbiased_100ns_ = unbiased;
+    last_steady_ = steady;
+
+    bool is_locked = query_screen_locked();
+    if (is_locked && !locked_) {
+      locked_ = true;
+      lock_start_ = wall;
+    } else if (!is_locked && locked_) {
+      locked_ = false;
+      long long dur_s = wall - lock_start_;
+      if (dur_s >= 3 && dur_s < 86400LL * 90) {
+        pending_events_.push_back({lock_start_, "lock", dur_s * 1000LL, ""});
+      }
+    }
+  }
+
   bool include_system_;
   std::wstring windows_dir_;
+  long long last_wall_ = 0;
+  long long last_unbiased_100ns_ = -1;
+  std::chrono::steady_clock::time_point last_steady_;
+  bool locked_ = false;
+  long long lock_start_ = 0;
+  std::vector<SysEvent> pending_events_;
 };
 
 }

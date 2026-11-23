@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -143,7 +145,16 @@ long long xss_idle_ms() {
 
 class LinuxProbe : public IProbe {
 public:
-  explicit LinuxProbe(bool include_system) : include_system_(include_system) {}
+  explicit LinuxProbe(bool include_system)
+      : include_system_(include_system),
+        last_wall_(static_cast<long long>(std::time(nullptr))),
+        last_steady_(std::chrono::steady_clock::now()) {}
+
+  std::vector<SysEvent> take_sys_events() override {
+    std::vector<SysEvent> out;
+    out.swap(pending_events_);
+    return out;
+  }
 
   bool reports_windows() const override { return wayland_.available() || windows_.available(); }
 
@@ -161,16 +172,19 @@ public:
     std::map<std::string, State> best;
     std::error_code ec;
     const uid_t me = getuid();
+    bool locker_running = false;
     for (fs::directory_iterator it("/proc", ec), end; !ec && it != end; it.increment(ec)) {
       const std::string id = it->path().filename().string();
       if (id.empty() || !std::all_of(id.begin(), id.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) continue;
       struct stat st{};
       if (stat(it->path().c_str(), &st) != 0) continue;
-      if (!include_system_ && st.st_uid != me) continue;
       std::string name = process_name(it->path());
       if (name.empty()) continue;
+      if (st.st_uid == me && is_locker_process(name)) locker_running = true;
+      if (!include_system_ && st.st_uid != me) continue;
       best.emplace(std::move(name), State::Background);
     }
+    update_power_lock(locker_running);
     std::vector<X11Window> listed = wayland_.available() ? wayland_.list() : windows_.list();
     if (wayland_.available() && listed.empty()) listed = windows_.list();
     for (const auto& w : listed) {
@@ -284,11 +298,51 @@ public:
   }
 
 private:
+  static bool is_locker_process(const std::string& name) {
+    static const char* kLockers[] = {
+        "kscreenlocker_greet", "swaylock", "hyprlock", "i3lock",
+        "gtklock", "slock", "xsecurelock", "waylock", "gnome-screensaver-dialog"};
+    std::string lo = lower(name);
+    for (const char* lk : kLockers) {
+      if (lo == lk) return true;
+    }
+    return false;
+  }
+
+  void update_power_lock(bool is_locked) {
+    long long wall = static_cast<long long>(std::time(nullptr));
+    auto steady = std::chrono::steady_clock::now();
+    long long wall_d = wall - last_wall_;
+    long long steady_d = std::chrono::duration_cast<std::chrono::seconds>(steady - last_steady_).count();
+    long long sleep_s = wall_d - steady_d;
+    if (sleep_s >= 20 && sleep_s < 86400LL * 90) {
+      pending_events_.push_back({last_wall_, "sleep", sleep_s * 1000LL, ""});
+    }
+    last_wall_ = wall;
+    last_steady_ = steady;
+
+    if (is_locked && !locked_) {
+      locked_ = true;
+      lock_start_ = wall;
+    } else if (!is_locked && locked_) {
+      locked_ = false;
+      long long dur_s = wall - lock_start_;
+      if (dur_s >= 1 && dur_s < 86400LL * 90) {
+        pending_events_.push_back({lock_start_, "lock", dur_s * 1000LL, ""});
+      }
+    }
+  }
+
   bool include_system_;
   X11Windows windows_;
   WaylandWindows wayland_;
   std::map<std::string, std::string> labels_;
   std::map<std::string, std::string> paths_;
+  long long last_wall_ = 0;
+  std::chrono::steady_clock::time_point last_steady_;
+  bool locked_ = false;
+  long long lock_start_ = 0;
+  std::vector<SysEvent> pending_events_;
 };
 
 }

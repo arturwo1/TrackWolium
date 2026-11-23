@@ -142,6 +142,7 @@ void Engine::flush_pending() {
     if (rows.empty() || store_->add_resources(day_, rows)) pending_res_.clear();
   }
   if (!pending_sys_.empty() && store_->add_system(pending_sys_)) pending_sys_.clear();
+  if (!pending_sys_events_.empty() && store_->add_sys_events(pending_sys_events_)) pending_sys_events_.clear();
   if (!pending_afk_.empty()) {
     std::vector<SlotEntry> rows;
     rows.reserve(pending_afk_.size());
@@ -279,6 +280,10 @@ void Engine::step(TimePoint now) {
       }
     }
     if (metrics_.any()) sample_metrics(now, samples);
+    auto sevs = probe_->take_sys_events();
+    if (!sevs.empty()) {
+      pending_sys_events_.insert(pending_sys_events_.end(), sevs.begin(), sevs.end());
+    }
     bool focus_changed = flush_started_ && focus != last_focus_;
     last_focus_ = focus;
     if (!flush_started_) {
@@ -316,6 +321,11 @@ void Engine::finish() {
 void Engine::flush() {
   flush_pending();
   last_flush_ = Clock::now();
+}
+
+void Engine::record_sys_event(const SysEvent& ev) {
+  if (ev.kind.empty() || ev.ts <= 0) return;
+  pending_sys_events_.push_back(ev);
 }
 
 Report Engine::report() const {

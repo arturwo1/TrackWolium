@@ -6,6 +6,8 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
 #endif
 #include <spawn.h>
 #include <atomic>
@@ -254,7 +256,31 @@ int main(int argc, char** argv) {
     std::string path = opt.db.empty() ? data + "/usage.db" : opt.db;
     std::string err;
     auto store = tw::SqliteStore::open(path, &err);
-    if (store) engine.set_store(std::shared_ptr<tw::IStore>(std::move(store)), tw::Duration(180000));
+    if (store) {
+      engine.set_store(std::shared_ptr<tw::IStore>(std::move(store)), tw::Duration(180000));
+      std::string boot_id;
+      long long boot_ts = static_cast<long long>(std::time(nullptr));
+#ifdef __APPLE__
+      struct timeval bt{};
+      size_t sz = sizeof(bt);
+      if (sysctlbyname("kern.boottime", &bt, &sz, nullptr, 0) == 0 && bt.tv_sec > 0) {
+        boot_id = std::to_string(static_cast<long long>(bt.tv_sec));
+        boot_ts = static_cast<long long>(bt.tv_sec);
+      }
+#else
+      std::ifstream bi("/proc/sys/kernel/random/boot_id");
+      std::getline(bi, boot_id);
+#endif
+      if (!boot_id.empty()) {
+        std::string prev_boot;
+        std::ifstream pbi(data + "/boot_id");
+        std::getline(pbi, prev_boot);
+        if (!prev_boot.empty() && prev_boot != boot_id) {
+          engine.record_sys_event({boot_ts, "reboot", 0, ""});
+        }
+        write_atomic(data + "/boot_id", boot_id);
+      }
+    }
   }
   app::LocalApi api;
   tw::PresenceQueue presence;
@@ -333,6 +359,11 @@ int main(int argc, char** argv) {
     }
   }
 
+#ifndef __APPLE__
+  if (exists("/run/systemd/shutdown/scheduled") || exists("/run/nologin")) {
+    engine.record_sys_event({static_cast<long long>(std::time(nullptr)), "shutdown", 0, ""});
+  }
+#endif
   api.stop();
   proxy.stop();
   engine.finish();

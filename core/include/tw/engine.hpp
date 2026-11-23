@@ -37,6 +37,7 @@ public:
   void run(Duration interval, const std::function<bool()>& stop);
   void finish();
   void flush();
+  void record_sys_event(const SysEvent& ev);
   Report report() const;
 
 private:
@@ -87,6 +88,7 @@ private:
   ProcTracker proc_tracker_;
   std::map<std::pair<int, std::string>, ResAgg> pending_res_;
   std::vector<SysEntry> pending_sys_;
+  std::vector<SysEvent> pending_sys_events_;
   Duration proc_every_{10000};
   Duration sys_every_{600000};
   TimePoint last_proc_{};

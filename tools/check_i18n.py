@@ -55,6 +55,17 @@ def cpp_keys():
     return found
 
 
+def kotlin_keys():
+    found = {}
+    kt_dir = ROOT / "ui" / "tool" / "android"
+    if kt_dir.exists():
+        for f in kt_dir.glob("*.kt.tpl"):
+            text = f.read_text(encoding="utf-8")
+            for lit in re.findall(r'Sync\.text\([^,]+,\s*["\']([A-Za-z][A-Za-z0-9_]*)["\']\)', text):
+                found.setdefault(lit, f.name)
+    return found
+
+
 def main():
     langs = {f.stem: json.loads(f.read_text(encoding="utf-8")) for f in sorted(TRANSLATIONS.glob("*.json"))}
     errors = []
@@ -78,6 +89,10 @@ def main():
         for code, d in langs.items():
             if key not in d["ui"]:
                 errors.append(f"{where}: tr('{key}') missing in {code}.json ui")
+    for key, where in kotlin_keys().items():
+        for code, d in langs.items():
+            if key not in d["ui"]:
+                errors.append(f"{where}: Sync.text(..., '{key}') missing in {code}.json ui")
     for key, where in cpp_keys().items():
         for code, d in langs.items():
             if key not in d["native"]:

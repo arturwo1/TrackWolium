@@ -44,6 +44,13 @@ struct SysEntry {
   long long b = 0;
 };
 
+struct SysEvent {
+  long long ts = 0;
+  std::string kind;
+  long long duration_ms = 0;
+  std::string extra;
+};
+
 class IStore {
 public:
   virtual ~IStore() = default;
@@ -55,6 +62,7 @@ public:
   virtual bool set_names(const std::vector<AppMeta>&) { return true; }
   virtual bool add_resources(const std::string&, const std::vector<ResEntry>&) { return true; }
   virtual bool add_system(const std::vector<SysEntry>&) { return true; }
+  virtual bool add_sys_events(const std::vector<SysEvent>&) { return true; }
   virtual bool add_afk(const std::string&, const std::vector<SlotEntry>&) { return true; }
 };
 

@@ -224,7 +224,15 @@ class ApiService : Service() {
         val obj = org.json.JSONObject(reqBody)
         val browser = obj.optString("browser", "").trim().lowercase(Locale.ROOT).take(64)
         val domain = obj.optString("domain", "").trim().lowercase(Locale.ROOT).take(192)
-        val title = obj.optString("title", "").replace(Regex("[\\u0000-\\u001F]"), " ").replace(Regex("\\s+"), " ").trim().take(180)
+        val rawTitle = obj.optString("title", "").replace(Regex("[\\u0000-\\u001F]"), " ").replace(Regex("\\s+"), " ").trim().take(180)
+        val lt = rawTitle.lowercase(Locale.ROOT)
+        val bare = if (domain.startsWith("www.")) domain.substring(4) else domain
+        val badTitle = lt.isEmpty() || lt == domain || lt == "www.$domain" || lt == bare ||
+          lt.startsWith("http://") || lt.startsWith("https://") || lt.startsWith("about:") || lt.startsWith("file://") ||
+          lt.startsWith("chrome:") || lt.startsWith("edge:") || lt.startsWith("opera:") || lt.startsWith("moz-extension:") ||
+          lt.startsWith("$domain/") || lt.startsWith("www.$domain/") || lt.startsWith("$bare/") ||
+          (!lt.contains(' ') && Regex("^[a-z0-9-]+(\\.[a-z0-9-]+)+(:\\d+)?(/.*)?$").matches(lt))
+        val title = if (badTitle) "" else rawTitle
         val rawUrl = obj.optString("url", "").trim().take(512)
         val urlOk = (rawUrl.startsWith("http://", ignoreCase = true) || rawUrl.startsWith("https://", ignoreCase = true)) && rawUrl.none { it.code < 0x20 || it == ' ' || it == '<' || it == '>' }
         val url = if (urlOk) rawUrl else ""
@@ -244,6 +252,7 @@ class ApiService : Service() {
             db.execSQL("CREATE TABLE IF NOT EXISTS browser_timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', ms INTEGER NOT NULL, PRIMARY KEY(day, slot, browser, domain)) WITHOUT ROWID")
             try { db.execSQL("ALTER TABLE browser_usage ADD COLUMN title TEXT NOT NULL DEFAULT ''") } catch (_: Exception) {}
             try { db.execSQL("ALTER TABLE browser_usage ADD COLUMN url TEXT NOT NULL DEFAULT ''") } catch (_: Exception) {}
+            try { db.execSQL("ALTER TABLE browser_timeline ADD COLUMN title TEXT NOT NULL DEFAULT ''") } catch (_: Exception) {}
             db.beginTransaction()
             try {
               db.execSQL(
@@ -484,7 +493,6 @@ class BootReceiver : BroadcastReceiver() {
       val dir = Sync.dir(context)
       if (!File(dir, "consent").exists()) return
       if (File(dir, "localapi").exists()) ApiService.apply(context, true)
-      if (File(dir, "p2p").exists() || File(dir, "peers.json").exists()) P2pService.apply(context, true)
     } catch (ex: Exception) {
     }
   }

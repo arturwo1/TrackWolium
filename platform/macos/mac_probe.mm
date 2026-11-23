@@ -8,7 +8,9 @@
 #include <sys/sysctl.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -94,8 +96,17 @@ void count_windows(CGWindowListOption options, std::map<pid_t, WindowCount>& out
 
 class MacProbe : public IProbe {
 public:
-  explicit MacProbe(bool include_system) : include_system_(include_system) {
+  explicit MacProbe(bool include_system)
+      : include_system_(include_system),
+        last_wall_(static_cast<long long>(std::time(nullptr))),
+        last_steady_(std::chrono::steady_clock::now()) {
     NSApplicationLoad();
+  }
+
+  std::vector<SysEvent> take_sys_events() override {
+    std::vector<SysEvent> out;
+    out.swap(pending_events_);
+    return out;
   }
 
   bool reports_windows() const override { return true; }
@@ -115,6 +126,7 @@ public:
     @autoreleasepool {
       @try {
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+        update_power_lock();
       std::map<pid_t, WindowCount> visible;
       std::map<pid_t, WindowCount> all;
       pid_t front = -1;
@@ -245,9 +257,46 @@ public:
   }
 
 private:
+  void update_power_lock() {
+    long long wall = static_cast<long long>(std::time(nullptr));
+    auto steady = std::chrono::steady_clock::now();
+    long long wall_d = wall - last_wall_;
+    long long steady_d = std::chrono::duration_cast<std::chrono::seconds>(steady - last_steady_).count();
+    long long sleep_s = wall_d - steady_d;
+    if (sleep_s >= 20 && sleep_s < 86400LL * 90) {
+      pending_events_.push_back({last_wall_, "sleep", sleep_s * 1000LL, ""});
+    }
+    last_wall_ = wall;
+    last_steady_ = steady;
+
+    bool is_locked = false;
+    CFDictionaryRef sess = CGSessionCopyCurrentDictionary();
+    if (sess) {
+      NSDictionary* dict = (__bridge NSDictionary*)sess;
+      NSNumber* lck = dict[@"CGSSessionScreenIsLocked"];
+      is_locked = lck && [lck boolValue];
+      CFRelease(sess);
+    }
+    if (is_locked && !locked_) {
+      locked_ = true;
+      lock_start_ = wall;
+    } else if (!is_locked && locked_) {
+      locked_ = false;
+      long long dur_s = wall - lock_start_;
+      if (dur_s >= 1 && dur_s < 86400LL * 90) {
+        pending_events_.push_back({lock_start_, "lock", dur_s * 1000LL, ""});
+      }
+    }
+  }
+
   bool include_system_;
   std::map<std::string, std::string> labels_;
   std::map<std::string, std::string> paths_;
+  long long last_wall_ = 0;
+  std::chrono::steady_clock::time_point last_steady_;
+  bool locked_ = false;
+  long long lock_start_ = 0;
+  std::vector<SysEvent> pending_events_;
 };
 
 }

@@ -250,6 +250,7 @@ class _ActivityChartState extends State<ActivityChart> {
   Offset downPos = Offset.zero;
 
   int bucket = 300;
+  int lastReportedBucket = -1;
   int top = 60000;
   double plotW = 1;
   double plotH = 1;
@@ -354,7 +355,10 @@ class _ActivityChartState extends State<ActivityChart> {
 
   void scheduleView() {
     viewTimer?.cancel();
-    viewTimer = Timer(const Duration(milliseconds: 140), () => widget.onView?.call(vx0, vx1, bucket));
+    viewTimer = Timer(const Duration(milliseconds: 140), () {
+      lastReportedBucket = bucket;
+      widget.onView?.call(vx0, vx1, bucket);
+    });
   }
 
   String rangeText(int i) {
@@ -400,6 +404,12 @@ class _ActivityChartState extends State<ActivityChart> {
     final total = widget.total;
     final b = bucketSecFor(span, plotW);
     bucket = b;
+    if (lastReportedBucket != b) {
+      lastReportedBucket = b;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onView?.call(vx0, vx1, bucket);
+      });
+    }
     final count = (total / b).ceil();
     final needLo = (vx0 / b).floor() - 1;
     final needHi = (vx1 / b).ceil() + 1;
@@ -546,7 +556,15 @@ class _ActivityChartState extends State<ActivityChart> {
     if (scrub && tip.value?.bucket != i) buzz(0);
     final Offset anchor;
     if (touchMode) {
-      final y = yOf(valueAt(i).toDouble()).clamp(_top, _top + plotH).toDouble();
+      final activeSeries = focusSeries ?? (!widget.showTime && widget.series.isNotEmpty ? widget.series.first : null);
+      final double y;
+      if (activeSeries != null) {
+        final sTop = seriesScaleTop(activeSeries, vx0, vx1);
+        final sv = activeSeries.valueIn(i * bucket.toDouble(), math.min(widget.total, (i + 1) * bucket).toDouble());
+        y = (_top + plotH * (1 - (sv / sTop).clamp(0.0, 1.0))).clamp(_top, _top + plotH).toDouble();
+      } else {
+        y = yOf(valueAt(i).toDouble()).clamp(_top, _top + plotH).toDouble();
+      }
       anchor = box.localToGlobal(Offset(xOf(slotCenter(i)), y));
     } else {
       anchor = box.localToGlobal(local);
@@ -611,7 +629,7 @@ class _ActivityChartState extends State<ActivityChart> {
     final t = tip.value;
     if (t != null && t.interactive) return;
     final p = e.localPosition;
-    if (p.dx < _left || p.dx > _left + plotW || cache.isEmpty) {
+    if (p.dx < _left || p.dx > _left + plotW || (cache.isEmpty && widget.series.isEmpty)) {
       setLine(null);
       scheduleHide();
       return;
@@ -1459,24 +1477,48 @@ class _ChartPainter extends CustomPainter {
       final color = s.color.withValues(alpha: alpha);
       if (pts.length == 1) {
         canvas.drawCircle(pts.first, width + 1, Paint()..color = color);
-        continue;
+      } else {
+        final path = Path()..moveTo(pts.first.dx, pts.first.dy);
+        for (var i = 1; i < pts.length; i++) {
+          path.lineTo(pts[i].dx, pts[i].dy);
+        }
+        canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = width
+            ..strokeJoin = StrokeJoin.round
+            ..strokeCap = StrokeCap.round
+            ..color = color,
+        );
       }
-      final path = Path()..moveTo(pts.first.dx, pts.first.dy);
-      for (var i = 1; i < pts.length; i++) {
-        path.lineTo(pts[i].dx, pts[i].dy);
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = width
-          ..strokeJoin = StrokeJoin.round
-          ..strokeCap = StrokeCap.round
-          ..color = color,
-      );
-      if (isFocus && hover != null) {
-        final v = s.valueIn(hover! * bucket.toDouble(), math.min(total, (hover! + 1) * bucket).toDouble());
-        final c = Offset(xOf((hover! + 0.5) * bucket), yOf(v));
+      final shouldDrawDot = (isFocus || (focus == null && series.length == 1)) && hover != null;
+      if (shouldDrawDot && pts.isNotEmpty) {
+        final targetX = xOf((hover! + 0.5) * bucket);
+        double dotY;
+        if (pts.length == 1 || targetX <= pts.first.dx) {
+          dotY = pts.first.dy;
+        } else if (targetX >= pts.last.dx) {
+          dotY = pts.last.dy;
+        } else {
+          var yFound = pts.first.dy;
+          for (var i = 0; i < pts.length - 1; i++) {
+            final p0 = pts[i];
+            final p1 = pts[i + 1];
+            if ((p0.dx <= targetX && targetX <= p1.dx) || (p1.dx <= targetX && targetX <= p0.dx)) {
+              final dx = p1.dx - p0.dx;
+              if (dx.abs() < 1e-4) {
+                yFound = p0.dy;
+              } else {
+                final frac = ((targetX - p0.dx) / dx).clamp(0.0, 1.0);
+                yFound = p0.dy + frac * (p1.dy - p0.dy);
+              }
+              break;
+            }
+          }
+          dotY = yFound;
+        }
+        final c = Offset(targetX, dotY);
         canvas.drawLine(Offset(c.dx, _top), Offset(c.dx, _top + plotH), Paint()
           ..color = s.color.withValues(alpha: 0.35)
           ..strokeWidth = 1);

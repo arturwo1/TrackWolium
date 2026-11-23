@@ -20,6 +20,35 @@ std::string column_text(sqlite3_stmt* st, int col) {
   return p ? reinterpret_cast<const char*>(p) : std::string();
 }
 
+std::string lower_ascii(std::string s) {
+  for (char& c : s) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  return s;
+}
+
+bool is_bad_browser_title(const std::string& title, const std::string& domain) {
+  if (title.empty()) return true;
+  std::string lt = lower_ascii(title);
+  std::string ld = lower_ascii(domain);
+  std::string bare_d = ld.rfind("www.", 0) == 0 ? ld.substr(4) : ld;
+  auto starts = [&](const std::string& p) { return lt.rfind(p, 0) == 0; };
+  if (lt == ld || lt == "www." + ld || lt == bare_d ||
+      starts("http://") || starts("https://") || starts("file://") ||
+      starts("about:") || starts("chrome:") || starts("chrome-extension:") ||
+      starts("edge:") || starts("opera:") || starts("brave:") ||
+      starts("vivaldi:") || starts("moz-extension:") ||
+      starts(ld + "/") || starts("www." + ld + "/") || starts(bare_d + "/") ||
+      starts(ld + ":") || starts("www." + ld + ":")) {
+    return true;
+  }
+  if (lt.find(' ') == std::string::npos) {
+    std::size_t sl = lt.find('/');
+    if (sl != std::string::npos && lt.find('.') < sl) return true;
+  }
+  return false;
+}
+
 }
 
 SqliteStore::SqliteStore(sqlite3* db) : db_(db) {}
@@ -56,6 +85,7 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
       "CREATE TABLE IF NOT EXISTS res(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, cpu INTEGER NOT NULL DEFAULT 0, ram INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 0, peak INTEGER NOT NULL DEFAULT 0, ior INTEGER NOT NULL DEFAULT 0, iow INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS afk(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS sys_events(ts INTEGER NOT NULL, kind TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, extra TEXT NOT NULL DEFAULT '', PRIMARY KEY(ts, kind)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS browser_usage(day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', PRIMARY KEY(day, browser, domain)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS browser_timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', ms INTEGER NOT NULL, PRIMARY KEY(day, slot, browser, domain)) WITHOUT ROWID;";
@@ -67,6 +97,25 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
   sqlite3_exec(db, "ALTER TABLE apps ADD COLUMN path TEXT NOT NULL DEFAULT ''", nullptr, nullptr, nullptr);
   sqlite3_exec(db, "ALTER TABLE browser_usage ADD COLUMN title TEXT NOT NULL DEFAULT ''", nullptr, nullptr, nullptr);
   sqlite3_exec(db, "ALTER TABLE browser_usage ADD COLUMN url TEXT NOT NULL DEFAULT ''", nullptr, nullptr, nullptr);
+  sqlite3_exec(db, "ALTER TABLE browser_timeline ADD COLUMN title TEXT NOT NULL DEFAULT ''", nullptr, nullptr, nullptr);
+  sqlite3_exec(
+      db,
+      "UPDATE browser_usage SET title = '' WHERE title != '' AND ("
+      "lower(title) LIKE 'http://%' OR lower(title) LIKE 'https://%' OR lower(title) LIKE 'about:%' OR lower(title) LIKE 'file://%' OR "
+      "lower(title) LIKE 'chrome:%' OR lower(title) LIKE 'edge:%' OR lower(title) LIKE 'opera:%' OR "
+      "lower(title) = lower(domain) OR lower(title) = 'www.' || lower(domain) OR "
+      "lower(title) LIKE lower(domain) || '/%' OR lower(title) LIKE 'www.' || lower(domain) || '/%' OR "
+      "(instr(title, ' ') = 0 AND instr(title, '/') > 0 AND instr(title, '.') > 0 AND instr(title, '.') < instr(title, '/')))",
+      nullptr, nullptr, nullptr);
+  sqlite3_exec(
+      db,
+      "UPDATE browser_timeline SET title = '' WHERE title != '' AND ("
+      "lower(title) LIKE 'http://%' OR lower(title) LIKE 'https://%' OR lower(title) LIKE 'about:%' OR lower(title) LIKE 'file://%' OR "
+      "lower(title) LIKE 'chrome:%' OR lower(title) LIKE 'edge:%' OR lower(title) LIKE 'opera:%' OR "
+      "lower(title) = lower(domain) OR lower(title) = 'www.' || lower(domain) OR "
+      "lower(title) LIKE lower(domain) || '/%' OR lower(title) LIKE 'www.' || lower(domain) || '/%' OR "
+      "(instr(title, ' ') = 0 AND instr(title, '/') > 0 AND instr(title, '.') > 0 AND instr(title, '.') < instr(title, '/')))",
+      nullptr, nullptr, nullptr);
   return std::unique_ptr<SqliteStore>(new SqliteStore(db));
 }
 
@@ -241,6 +290,58 @@ bool SqliteStore::add_system(const std::vector<SysEntry>& entries) {
     return false;
   }
   return exec(db_, "COMMIT", &last_error_);
+}
+
+bool SqliteStore::add_sys_events(const std::vector<SysEvent>& entries) {
+  if (entries.empty()) return true;
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
+  sqlite3_stmt* st = nullptr;
+  const char* sql =
+      "INSERT INTO sys_events(ts, kind, duration_ms, extra) VALUES(?1, ?2, ?3, ?4) "
+      "ON CONFLICT(ts, kind) DO UPDATE SET "
+      "duration_ms = CASE WHEN excluded.duration_ms > sys_events.duration_ms THEN excluded.duration_ms ELSE sys_events.duration_ms END, "
+      "extra = CASE WHEN excluded.extra != '' THEN excluded.extra ELSE sys_events.extra END";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+    last_error_ = sqlite3_errmsg(db_);
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  bool ok = true;
+  for (const auto& e : entries) {
+    sqlite3_bind_int64(st, 1, static_cast<sqlite3_int64>(e.ts));
+    sqlite3_bind_text(st, 2, e.kind.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 3, static_cast<sqlite3_int64>(e.duration_ms));
+    sqlite3_bind_text(st, 4, e.extra.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(st) != SQLITE_DONE) {
+      last_error_ = sqlite3_errmsg(db_);
+      ok = false;
+      break;
+    }
+    sqlite3_reset(st);
+  }
+  sqlite3_finalize(st);
+  if (!ok) {
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  return exec(db_, "COMMIT", &last_error_);
+}
+
+std::vector<SysEvent> SqliteStore::load_sys_events(long long from_ts, long long to_ts) {
+  std::vector<SysEvent> out;
+  std::lock_guard<std::mutex> lock(mtx_);
+  sqlite3_stmt* st = nullptr;
+  if (sqlite3_prepare_v2(db_, "SELECT ts, kind, duration_ms, extra FROM sys_events WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts", -1, &st, nullptr) != SQLITE_OK) {
+    return out;
+  }
+  sqlite3_bind_int64(st, 1, from_ts);
+  sqlite3_bind_int64(st, 2, to_ts);
+  while (sqlite3_step(st) == SQLITE_ROW) {
+    out.push_back({sqlite3_column_int64(st, 0), column_text(st, 1), sqlite3_column_int64(st, 2), column_text(st, 3)});
+  }
+  sqlite3_finalize(st);
+  return out;
 }
 
 bool SqliteStore::set_names(const std::vector<AppMeta>& names) {
@@ -426,6 +527,7 @@ bool SqliteStore::add_browser_usage(const std::string& day, const std::string& b
 
 bool SqliteStore::add_browser_usage(const std::string& day, int slot, const std::string& browser, const std::string& domain, const std::string& title, const std::string& url, long long ms) {
   if (ms <= 0 || browser.empty() || domain.empty()) return false;
+  std::string clean_t = is_bad_browser_title(title, domain) ? std::string() : title;
   std::lock_guard<std::mutex> lock(mtx_);
   if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
   const char* sql =
@@ -443,7 +545,7 @@ bool SqliteStore::add_browser_usage(const std::string& day, int slot, const std:
   sqlite3_bind_text(st, 2, browser.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 3, domain.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_int64(st, 4, static_cast<sqlite3_int64>(ms));
-  sqlite3_bind_text(st, 5, title.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 5, clean_t.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(st, 6, url.c_str(), -1, SQLITE_TRANSIENT);
   bool ok = sqlite3_step(st) == SQLITE_DONE;
   if (!ok) last_error_ = sqlite3_errmsg(db_);
@@ -462,7 +564,7 @@ bool SqliteStore::add_browser_usage(const std::string& day, int slot, const std:
       sqlite3_bind_int(tst, 2, slot);
       sqlite3_bind_text(tst, 3, browser.c_str(), -1, SQLITE_TRANSIENT);
       sqlite3_bind_text(tst, 4, domain.c_str(), -1, SQLITE_TRANSIENT);
-      sqlite3_bind_text(tst, 5, title.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(tst, 5, clean_t.c_str(), -1, SQLITE_TRANSIENT);
       sqlite3_bind_int64(tst, 6, static_cast<sqlite3_int64>(ms));
       if (sqlite3_step(tst) != SQLITE_DONE) {
         last_error_ = sqlite3_errmsg(db_);

@@ -1,5 +1,6 @@
 package __PACKAGE__
 
+import android.app.ActivityManager
 import android.app.AppOpsManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -10,21 +11,31 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Process
+import android.os.StatFs
+import android.os.SystemClock
+import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
   override fun doWork(): Result {
     try {
       Sync.run(applicationContext)
+      Sync.syncPeersQuiet(applicationContext)
     } catch (ex: Exception) {
     }
     return Result.success()
@@ -68,8 +79,8 @@ object Sync {
       events.getNextEvent(e)
       val t = e.eventType
       val pkg = e.packageName ?: ""
-      if (t == 18) {
-        out.add(mapOf("pkg" to pkg, "type" to 18, "time" to e.timeStamp))
+      if (t == 15 || t == 17 || t == 18) {
+        out.add(mapOf("pkg" to pkg, "type" to t, "time" to e.timeStamp))
         continue
       }
       if (t == 12) {
@@ -78,7 +89,7 @@ object Sync {
         }
         continue
       }
-      if (t != 1 && t != 2 && t != 16 && t != 17 && t != 26) continue
+      if (t != 1 && t != 2 && t != 16 && t != 26) continue
       if (pkg == launcher || pkg == "com.android.systemui") {
         if (t == 1) out.add(mapOf("pkg" to pkg, "type" to 16, "time" to e.timeStamp))
         continue
@@ -280,6 +291,38 @@ object Sync {
         }
         day.add(Calendar.DAY_OF_MONTH, 1)
       }
+      val orderedEvents = events.sortedBy { it.ms }
+      var lockStart = 0L
+      var sleepStart = 0L
+      for (ev in orderedEvents) {
+        when (ev.type) {
+          17 -> if (lockStart == 0L) lockStart = ev.ms
+          18 -> if (lockStart > 0L) {
+            val dur = ev.ms - lockStart
+            if (dur in 1000L..7776000000L) {
+              db.execSQL(
+                "INSERT INTO sys_events(ts, kind, duration_ms, extra) VALUES(?, 'lock', ?, '') ON CONFLICT(ts, kind) DO UPDATE SET duration_ms = MAX(sys_events.duration_ms, excluded.duration_ms)",
+                arrayOf<Any>(lockStart / 1000L, dur)
+              )
+            }
+            lockStart = 0L
+          }
+          16 -> if (sleepStart == 0L) sleepStart = ev.ms
+          15 -> if (sleepStart > 0L) {
+            val dur = ev.ms - sleepStart
+            if (dur in 60000L..7776000000L) {
+              db.execSQL(
+                "INSERT INTO sys_events(ts, kind, duration_ms, extra) VALUES(?, 'sleep', ?, '') ON CONFLICT(ts, kind) DO UPDATE SET duration_ms = MAX(sys_events.duration_ms, excluded.duration_ms)",
+                arrayOf<Any>(sleepStart / 1000L, dur)
+              )
+            }
+            sleepStart = 0L
+          }
+          26 -> {
+            db.execSQL("INSERT OR IGNORE INTO sys_events(ts, kind, duration_ms, extra) VALUES(?, 'shutdown', 0, '')", arrayOf<Any>(ev.ms / 1000L))
+          }
+        }
+      }
       db.setTransactionSuccessful()
     } finally {
       db.endTransaction()
@@ -293,6 +336,8 @@ object Sync {
   private const val SCHEMA_APPS = "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID"
   private const val SCHEMA_DAY_STATS = "CREATE TABLE IF NOT EXISTS day_stats(day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind)) WITHOUT ROWID"
   private const val SCHEMA_APP_STATS = "CREATE TABLE IF NOT EXISTS app_stats(day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, app, kind)) WITHOUT ROWID"
+  private const val SCHEMA_SYS_EVENTS = "CREATE TABLE IF NOT EXISTS sys_events(ts INTEGER NOT NULL, kind TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, extra TEXT NOT NULL DEFAULT '', PRIMARY KEY(ts, kind)) WITHOUT ROWID"
+  private const val SCHEMA_SYSMON = "CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID"
 
   @Synchronized
   fun run(ctx: Context) {
@@ -320,7 +365,33 @@ object Sync {
       db.execSQL(SCHEMA_APPCAT)
       db.execSQL(SCHEMA_DAY_STATS)
       db.execSQL(SCHEMA_APP_STATS)
+      db.execSQL(SCHEMA_SYS_EVENTS)
+      db.execSQL(SCHEMA_SYSMON)
       store(db, spans, events, firstDay, lastDay)
+      try {
+        val nowSec = now / 1000L
+        val bootSec = nowSec - (SystemClock.elapsedRealtime() / 1000L)
+        val bootFile = File(dir, "boot_id")
+        val prevBoot = if (bootFile.exists()) bootFile.readText().trim().toLongOrNull() else null
+        if (prevBoot != null && kotlin.math.abs(bootSec - prevBoot) > 60L) {
+          db.execSQL("INSERT OR IGNORE INTO sys_events(ts, kind, duration_ms, extra) VALUES(?, 'reboot', 0, '')", arrayOf<Any>(bootSec))
+        }
+        bootFile.writeText(bootSec.toString())
+        val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        if (am != null) {
+          val mi = ActivityManager.MemoryInfo()
+          am.getMemoryInfo(mi)
+          if (mi.totalMem > 0) {
+            db.execSQL("INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?, 'ram', ?, ?)", arrayOf<Any>(nowSec, mi.totalMem / 1024L, mi.availMem / 1024L))
+          }
+        }
+        val sf = StatFs(ctx.filesDir.absolutePath)
+        val totalKb = sf.totalBytes / 1024L
+        val freeKb = sf.availableBytes / 1024L
+        if (totalKb > 0) {
+          db.execSQL("INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?, 'disk:/data', ?, ?)", arrayOf<Any>(nowSec, totalKb, freeKb))
+        }
+      } catch (_: Exception) {}
       val known = HashSet<String>()
       val c = db.rawQuery("SELECT app, path FROM apps WHERE path != ''", null)
       while (c.moveToNext()) {
@@ -344,6 +415,53 @@ object Sync {
     try {
       checkLimits(ctx)
     } catch (ex: Exception) {
+    }
+  }
+
+  fun syncPeersQuiet(ctx: Context) {
+    val dir = dir(ctx)
+    if (!File(dir, "consent").exists()) return
+    val peersFile = File(dir, "peers.json")
+    if (!peersFile.exists()) return
+    val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    if (cm != null && Build.VERSION.SDK_INT >= 23) {
+      val net = cm.activeNetwork ?: return
+      val caps = cm.getNetworkCapabilities(net) ?: return
+      if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return
+    }
+    val arr = try {
+      JSONArray(peersFile.readText())
+    } catch (_: Exception) {
+      return
+    }
+    if (arr.length() == 0) return
+    val payload = P2pService.exportSnapshotForContext(ctx)
+    for (i in 0 until arr.length()) {
+      val p = arr.optJSONObject(i) ?: continue
+      val peerId = p.optString("id", "")
+      val host = p.optString("host", "")
+      val port = p.optInt("port", P2pService.PORT)
+      val token = p.optString("token", "")
+      if (peerId.isEmpty() || host.isEmpty() || token.isEmpty()) continue
+      var conn: HttpURLConnection? = null
+      try {
+        conn = (URL("http://$host:$port/p2p/sync").openConnection() as HttpURLConnection).apply {
+          requestMethod = "POST"
+          connectTimeout = 5000
+          readTimeout = 8000
+          doOutput = true
+          setRequestProperty("Content-Type", "application/json; charset=utf-8")
+          setRequestProperty("Authorization", "Bearer $token")
+        }
+        conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+        if (conn.responseCode == 200) {
+          val text = conn.inputStream.bufferedReader().readText()
+          P2pService.importSnapshotForContext(ctx, peerId, p, JSONObject(text), host)
+        }
+      } catch (_: Exception) {
+      } finally {
+        conn?.disconnect()
+      }
     }
   }
 

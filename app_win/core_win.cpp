@@ -34,6 +34,7 @@ struct Orphan {
 };
 
 Orphan* g_orphan = nullptr;
+tw::Engine* g_engine = nullptr;
 
 NOTIFYICONDATAW orphan_nid() {
   NOTIFYICONDATAW nid{};
@@ -89,6 +90,14 @@ void revive_guard() {
 }
 
 LRESULT CALLBACK orphan_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  if (msg == WM_QUERYENDSESSION) return TRUE;
+  if (msg == WM_ENDSESSION) {
+    if (wp && g_engine) {
+      g_engine->record_sys_event({static_cast<long long>(std::time(nullptr)), "shutdown", 0, ""});
+      g_engine->finish();
+    }
+    return 0;
+  }
   if (msg == kOrphanMsg && g_orphan) {
     UINT ev = LOWORD(lp);
     if (ev == NIN_BALLOONUSERCLICK || ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK) revive_guard();
@@ -240,7 +249,19 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     std::string err;
     auto store = tw::SqliteStore::open(path, &err);
     if (store) engine.set_store(std::shared_ptr<tw::IStore>(std::move(store)), tw::Duration(180000));
+    long long now_sec = static_cast<long long>(std::time(nullptr));
+    long long boot_sec = now_sec - static_cast<long long>(GetTickCount64() / 1000ULL);
+    std::wstring boot_file = app::userdata(L"boot_id");
+    std::ifstream bi{std::filesystem::path(boot_file)};
+    long long prev_boot = 0;
+    if (bi >> prev_boot) {
+      if (std::abs(boot_sec - prev_boot) > 60) {
+        engine.record_sys_event({boot_sec, "reboot", 0, ""});
+      }
+    }
+    write_text(boot_file, std::to_string(boot_sec));
   }
+  g_engine = &engine;
   app::LocalApi api;
   tw::PresenceQueue presence;
   app::DiscordProxy proxy(presence);
@@ -255,6 +276,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 
   Orphan orphan;
   g_orphan = &orphan;
+  {
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = orphan_proc;
+    wc.hInstance = inst;
+    wc.lpszClassName = kOrphanClass;
+    RegisterClassW(&wc);
+    orphan.hwnd = CreateWindowExW(0, kOrphanClass, L"Wolium", 0, 0, 0, 0, 0, nullptr, nullptr, inst, nullptr);
+  }
   attach_guard(orphan);
   bool allowed = true;
   bool is_paused = false;

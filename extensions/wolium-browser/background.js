@@ -124,9 +124,14 @@ function cleanUrl(rawUrl) {
 function isPlaceholderTitle(title, domain, url) {
   const t = title.trim().toLowerCase();
   if (!t) return true;
-  if (t.startsWith("http://") || t.startsWith("https://")) return true;
+  if (/^(https?|file|about|chrome|chrome-extension|edge|opera|brave|vivaldi|moz-extension):/i.test(t)) return true;
   const d = (domain || "").toLowerCase();
-  if (d && (t === d || t === `www.${d}`)) return true;
+  const bare = d.startsWith("www.") ? d.slice(4) : d;
+  if (d && (t === d || t === `www.${d}` || t === bare)) return true;
+  if (d && (t.startsWith(`${d}/`) || t.startsWith(`www.${d}/`) || t.startsWith(`${bare}/`) || t.startsWith(`${d}:`) || t.startsWith(`www.${d}:`))) {
+    return true;
+  }
+  if (!t.includes(" ") && /^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?(\/.*)?$/i.test(t)) return true;
   if (url) {
     const stripped = url.replace(/^https?:\/\//i, "").replace(/\/+$/, "").toLowerCase();
     const cleaned = t.replace(/\/+$/, "");
@@ -239,12 +244,9 @@ api.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
       if (dom && dom === state.activeDomain) {
         const nextTitle = cleanTitle(changeInfo.title, dom, url);
         if (nextTitle && nextTitle !== state.activeTitle) {
-          const hadTitle = Boolean(state.activeTitle);
           state.activeTitle = nextTitle;
           state.activeUrl = url;
-          if (!hadTitle) {
-            await postUsage(dom, nextTitle, url, 1);
-          }
+          await postUsage(dom, nextTitle, url, 1);
           await persistState();
         }
       } else {

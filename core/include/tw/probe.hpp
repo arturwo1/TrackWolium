@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include "tw/procstat.hpp"
+#include "tw/store.hpp"
 #include "tw/types.hpp"
 
 namespace tw {
@@ -18,6 +19,7 @@ public:
   virtual std::vector<ProcSnap> proc_snapshot() { return {}; }
   virtual SysStat sys_stat() { return {}; }
   virtual long long idle_ms() { return -1; }
+  virtual std::vector<SysEvent> take_sys_events() { return {}; }
 };
 
 class PushProbe : public IProbe {

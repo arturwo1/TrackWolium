@@ -31,7 +31,7 @@ class MainActivity : FlutterActivity() {
     super.onCreate(savedInstanceState)
     action = intent?.getStringExtra("action")
     try {
-      val request = PeriodicWorkRequestBuilder<SyncWorker>(3, TimeUnit.HOURS).build()
+      val request = PeriodicWorkRequestBuilder<SyncWorker>(1, TimeUnit.HOURS).build()
       WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.UPDATE, request)
       val builder = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.UNMETERED)
@@ -63,13 +63,6 @@ class MainActivity : FlutterActivity() {
 
   override fun onStop() {
     super.onStop()
-    try {
-      val dir = Sync.dir(applicationContext)
-      if (File(dir, "consent").exists() && (File(dir, "p2p").exists() || File(dir, "peers.json").exists())) {
-        P2pService.apply(applicationContext, true)
-      }
-    } catch (_: Exception) {
-    }
   }
 
   override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -115,6 +108,20 @@ class MainActivity : FlutterActivity() {
         "hasAccess" -> result.success(Sync.hasAccess(this))
         "openSettings" -> {
           startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          result.success(null)
+        }
+        "hasBrowserAccess" -> {
+          val on = try {
+            val enabled = Settings.Secure.getInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0) == 1
+            val list = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+            enabled && (list.contains("$packageName/${BrowserService::class.java.name}") || list.contains("$packageName/.BrowserService"))
+          } catch (_: Exception) {
+            false
+          }
+          result.success(on)
+        }
+        "openAccessibility" -> {
+          startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
           result.success(null)
         }
         "events" -> {

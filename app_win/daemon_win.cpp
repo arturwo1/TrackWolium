@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <atomic>
 #include <cstdint>
+#include <ctime>
 #include <memory>
 #include <string>
 #include <thread>
@@ -222,7 +223,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_QUERYENDSESSION:
       return TRUE;
     case WM_ENDSESSION:
-      if (wp && app) stop_worker(*app);
+      if (wp && app) {
+        if (app->engine) app->engine->record_sys_event({static_cast<long long>(std::time(nullptr)), "shutdown", 0, ""});
+        stop_worker(*app);
+      }
       return 0;
     case WM_DESTROY:
       PostQuitMessage(0);

@@ -24,6 +24,8 @@ public:
   bool add_resources(const std::string& day, const std::vector<ResEntry>& entries) override;
   bool add_afk(const std::string& day, const std::vector<SlotEntry>& entries) override;
   bool add_system(const std::vector<SysEntry>& entries) override;
+  bool add_sys_events(const std::vector<SysEvent>& entries) override;
+  std::vector<SysEvent> load_sys_events(long long from_ts, long long to_ts);
   bool add_sessions(const std::vector<SessionRec>& sessions) override;
   std::vector<SessionRec> load_sessions(long long from, long long to);
   bool add_presence(std::int64_t ts, const std::vector<Presence>& items);

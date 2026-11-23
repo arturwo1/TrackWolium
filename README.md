@@ -22,11 +22,11 @@
 
 | | |
 |---|---|
-| **See where the time goes** | Interactive graph and per-app table: focused, open, minimized, background |
+| **See where the time goes** | Interactive graph, per-app table (focused, open, minimized, background), and global totals/hardware table |
 | **Zero background load** | No periodic disk writes, a quiet native core and a separate UI process |
-| **Resources, if you want them** | CPU, RAM and disk I/O per app on the same graph, off by default |
-| **Everywhere** | Windows, Linux, macOS and Android, English and Russian |
-| **Yours to use** | CSV export, local API with an OBS widget, Discord activity cards |
+| **System & resource telemetry** | CPU, RAM, disk capacity/I/O, plus sleep, hibernate, lock, reboot, and shutdown tracking |
+| **Everywhere & LAN sync** | Windows, Linux, macOS and Android (EN/RU), with optional PIN-paired LAN P2P sync across devices |
+| **Browsers & tools** | Clean website titles on desktop & Android, CSV export, local API with OBS widget, Discord activity cards |
 
 ## Install
 
@@ -73,8 +73,10 @@
 
 | | Windows | Linux | macOS | Android |
 |---|---|---|---|---|
-| Four activity states | yes | yes | yes | focused only |
-| Resource metrics | yes | yes | yes | no |
+| Four activity states | yes | yes | yes | focused only (unlocks remote states via LAN sync) |
+| Resource metrics & global hardware | yes | yes | yes | remote desktops via LAN sync |
+| Power states (sleep/hibernate/lock/reboot/shutdown) | yes | yes | yes | sleep / lock / shutdown |
+| Browser website titles | extension | extension | extension | optional Accessibility Service |
 | Local API | yes | yes | yes | yes |
 | Discord activity | yes | yes | yes | no |
 

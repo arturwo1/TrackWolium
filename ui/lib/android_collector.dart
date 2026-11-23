@@ -8,7 +8,9 @@ import 'data.dart';
 const evResumed = 1;
 const evPaused = 2;
 const evNotif = 12;
+const evScreenOn = 15;
 const evScreenOff = 16;
+const evKeyguard = 17;
 const evUnlock = 18;
 const evShutdown = 26;
 
@@ -49,8 +51,11 @@ List<SessionSpan> buildSessions(List<UsageEvent> events, int nowMs) {
       case evPaused:
         if (app == e.pkg) close(e.ms);
       case evScreenOff:
+      case evKeyguard:
       case evShutdown:
         close(e.ms);
+      case evScreenOn:
+        break;
     }
   }
   close(nowMs);
@@ -113,6 +118,14 @@ CREATE TABLE IF NOT EXISTS slot_stats(day TEXT NOT NULL, slot INTEGER NOT NULL, 
 CREATE TABLE IF NOT EXISTS remote_day_stats(device TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, kind)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS remote_app_stats(device TEXT NOT NULL, day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, app, kind)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS remote_slot_stats(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(device, day, slot, app, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS res(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, cpu INTEGER NOT NULL DEFAULT 0, ram INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 0, peak INTEGER NOT NULL DEFAULT 0, ior INTEGER NOT NULL DEFAULT 0, iow INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS remote_res(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, cpu INTEGER NOT NULL DEFAULT 0, ram INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 0, peak INTEGER NOT NULL DEFAULT 0, ior INTEGER NOT NULL DEFAULT 0, iow INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(device, day, slot, app)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS remote_sysmon(device TEXT NOT NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(device, ts, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS afk(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS remote_afk(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(device, day, slot, app)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sys_events(ts INTEGER NOT NULL, kind TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, extra TEXT NOT NULL DEFAULT '', PRIMARY KEY(ts, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS remote_sys_events(device TEXT NOT NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, extra TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, ts, kind)) WITHOUT ROWID;
 ''';
 
 int _maxSpan = -1;
@@ -140,6 +153,8 @@ void storeSessions(Database db, List<SessionSpan> sessions, DateTime firstDay, D
 CREATE TABLE IF NOT EXISTS day_stats(day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS app_stats(day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, app, kind)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS slot_stats(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, slot, app, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sys_events(ts INTEGER NOT NULL, kind TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, extra TEXT NOT NULL DEFAULT '', PRIMARY KEY(ts, kind)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID;
 ''');
   db.execute('BEGIN');
   try {
@@ -225,6 +240,40 @@ CREATE TABLE IF NOT EXISTS slot_stats(day TEXT NOT NULL, slot INTEGER NOT NULL, 
       }
       day = dayNext;
     }
+    if (events.isNotEmpty) {
+      final sortedEv = [...events]..sort((a, b) => a.ms.compareTo(b.ms));
+      final putSysEv = db.prepare('INSERT OR REPLACE INTO sys_events(ts, kind, duration_ms, extra) VALUES(?, ?, ?, ?)');
+      int? offMs;
+      int? lockMs;
+      for (final ev in sortedEv) {
+        if (ev.type == evScreenOff) {
+          offMs ??= ev.ms;
+        } else if (ev.type == evScreenOn) {
+          if (offMs != null) {
+            final dur = ev.ms - offMs;
+            if (dur >= 60000) {
+              putSysEv.execute([offMs ~/ 1000, 'sleep', dur, '']);
+            }
+            offMs = null;
+          }
+        } else if (ev.type == evKeyguard) {
+          lockMs ??= ev.ms;
+        } else if (ev.type == evUnlock) {
+          if (lockMs != null) {
+            final dur = ev.ms - lockMs;
+            if (dur >= 1000) {
+              putSysEv.execute([lockMs ~/ 1000, 'lock', dur, '']);
+            }
+            lockMs = null;
+          }
+        } else if (ev.type == evShutdown) {
+          putSysEv.execute([ev.ms ~/ 1000, 'shutdown', 0, '']);
+          offMs = null;
+          lockMs = null;
+        }
+      }
+      putSysEv.dispose();
+    }
     putUsage.dispose();
     putSlot.dispose();
     putDayStat.dispose();
@@ -243,6 +292,10 @@ class UsageBridge {
   Future<bool> hasAccess() async => (await _channel.invokeMethod<bool>('hasAccess')) ?? false;
 
   Future<void> openSettings() async => _channel.invokeMethod('openSettings');
+
+  Future<bool> hasBrowserAccess() async => (await _channel.invokeMethod<bool>('hasBrowserAccess')) ?? false;
+
+  Future<void> openAccessibility() async => _channel.invokeMethod('openAccessibility');
 
   Future<List<UsageEvent>> events(int fromMs, int toMs) async {
     final raw = await _channel.invokeMethod<List<dynamic>>('events', {'from': fromMs, 'to': toMs}) ?? const [];

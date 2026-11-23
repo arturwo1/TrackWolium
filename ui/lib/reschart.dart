@@ -16,7 +16,16 @@ const seriesColors = [
   Color(0xFF9AA5B1),
 ];
 
-const statMetricIds = ['opens', 'notifs', 'unlocks'];
+const statMetricIds = [
+  'opens',
+  'notifs',
+  'unlocks',
+  'power_sleep',
+  'power_hibernate',
+  'power_lock',
+  'power_reboot',
+  'power_shutdown',
+];
 
 const _idColor = {
   'cpu': 0,
@@ -29,6 +38,11 @@ const _idColor = {
   'opens': 1,
   'notifs': 2,
   'unlocks': 3,
+  'power_sleep': 4,
+  'power_hibernate': 5,
+  'power_lock': 6,
+  'power_reboot': 7,
+  'power_shutdown': 0,
 };
 
 Color metricColor(String id) => seriesColors[_idColor[id] ?? 0];
@@ -63,6 +77,16 @@ String metricName(String id) {
       return tr('notifs');
     case 'unlocks':
       return tr('unlocksLabel');
+    case 'power_sleep':
+      return tr('powerSleep');
+    case 'power_hibernate':
+      return tr('powerHibernate');
+    case 'power_lock':
+      return tr('powerLock');
+    case 'power_reboot':
+      return tr('powerReboot');
+    case 'power_shutdown':
+      return tr('powerShutdown');
     default:
       return id;
   }
@@ -79,7 +103,7 @@ class ResSeries {
   final List<Map<String, double>> apps;
 
   bool get isPeak => id == 'peak';
-  bool get isSum => id == 'opens' || id == 'notifs' || id == 'unlocks';
+  bool get isSum => id == 'opens' || id == 'notifs' || id == 'unlocks' || id.startsWith('power_');
 
   double maxIn(double a, double b) {
     var m = 0.0;
@@ -143,25 +167,37 @@ String _size(double v) => formatKb(v.round());
 
 String _countText(double v) => '${v.round()}';
 
-List<ResSeries> buildSeries({required Set<String> ids, required List<ResPoint> pts, required List<SysPoint> sys, String? only, required bool Function(String) skip}) {
+List<ResSeries> buildSeries({
+  required Set<String> ids,
+  required List<ResPoint> pts,
+  required List<SysPoint> sys,
+  String? only,
+  required bool Function(String) skip,
+  int bucketSec = 0,
+  Map<String, String> deviceNames = const {},
+}) {
   final out = <ResSeries>[];
+  final step = bucketSec > 0 ? math.max(300, bucketSec) : 0;
   final bins = <int, Map<String, List<num>>>{};
   final spans = <int, int>{};
   for (final p in pts) {
-    final perApp = bins.putIfAbsent(p.start, () => {});
-    spans[p.start] = p.end - p.start;
+    final bStart = step > 0 ? (p.start ~/ step) * step : p.start;
+    final bSpan = step > 0 ? step : (p.end - p.start);
+    final perApp = bins.putIfAbsent(bStart, () => {});
+    spans[bStart] = bSpan;
     if (skip(p.app) || (only != null && p.app != only)) continue;
-    final b = perApp.putIfAbsent(p.app, () => [0, 0, 0, 0, 0]);
+    final b = perApp.putIfAbsent(p.app, () => [0, 0, 0, 0, 0, 0]);
     b[0] += p.cpuMs;
     b[1] += p.ramKb;
-    b[2] += p.peakKb;
+    b[2] = math.max(b[2], p.peakKb);
     b[3] += p.ior;
     b[4] += p.iow;
-    spans[p.start] = p.end - p.start;
+    b[5] += 1;
+    spans[bStart] = bSpan;
   }
   final cores = logicalCores();
   final starts = bins.keys.toList()..sort();
-  ResSeries make(String id, int k, String Function(double) fmt, double Function(num v, int span) f, {bool clampTotal = false}) {
+  ResSeries make(String id, int k, String Function(double) fmt, double Function(num v, int span, int cnt) f, {bool clampTotal = false}) {
     final points = <Offset>[];
     final apps = <Map<String, double>>[];
     for (final st in starts) {
@@ -169,7 +205,8 @@ List<ResSeries> buildSeries({required Set<String> ids, required List<ResPoint> p
       final per = <String, double>{};
       var total = 0.0;
       for (final e in bins[st]!.entries) {
-        final v = f(e.value[k], span);
+        final cnt = e.value[5].toInt();
+        final v = f(e.value[k], span, cnt <= 0 ? 1 : cnt);
         per[e.key] = v;
         total += v;
       }
@@ -180,22 +217,43 @@ List<ResSeries> buildSeries({required Set<String> ids, required List<ResPoint> p
     return ResSeries(id, metricName(id), seriesColors[_idColor[id]!], fmt, points, apps);
   }
 
-  if (ids.contains('cpu')) out.add(make('cpu', 0, _cpuText, (v, s) => v / (s * 1000) / cores * 100, clampTotal: true));
-  if (ids.contains('ram')) out.add(make('ram', 1, _size, (v, s) => v.toDouble()));
-  if (ids.contains('peak')) out.add(make('peak', 2, _size, (v, s) => v.toDouble()));
-  if (ids.contains('ior')) out.add(make('ior', 3, _rate, (v, s) => v / s));
-  if (ids.contains('iow')) out.add(make('iow', 4, _rate, (v, s) => v / s));
+  if (ids.contains('cpu')) out.add(make('cpu', 0, _cpuText, (v, s, _) => v / (s * 1000) / cores * 100, clampTotal: true));
+  if (ids.contains('ram')) out.add(make('ram', 1, _size, (v, _, c) => v / c));
+  if (ids.contains('peak')) out.add(make('peak', 2, _size, (v, _, __) => v.toDouble()));
+  if (ids.contains('ior')) out.add(make('ior', 3, _rate, (v, s, _) => v / s));
+  if (ids.contains('iow')) out.add(make('iow', 4, _rate, (v, s, _) => v / s));
+  final sysDevs = <String>[];
+  for (final p in sys) {
+    if (!sysDevs.contains(p.device)) sysDevs.add(p.device);
+  }
+  final multiDev = sysDevs.length > 1;
   if (ids.contains('sysram')) {
-    out.add(ResSeries('sysram', metricName('sysram'), seriesColors[_idColor['sysram']!], _size, [for (final p in sys) if (p.kind == 'ram') Offset(p.t.toDouble(), (p.total - p.free).toDouble())]));
+    if (!multiDev) {
+      out.add(ResSeries('sysram', metricName('sysram'), seriesColors[_idColor['sysram']!], _size, [for (final p in sys) if (p.kind == 'ram') Offset(p.t.toDouble(), (p.total - p.free).toDouble())]));
+    } else {
+      for (var i = 0; i < sysDevs.length; i++) {
+        final dev = sysDevs[i];
+        final ptsDev = [for (final p in sys) if (p.device == dev && p.kind == 'ram') Offset(p.t.toDouble(), (p.total - p.free).toDouble())];
+        if (ptsDev.isEmpty) continue;
+        final dLabel = deviceNames[dev] ?? dev;
+        out.add(ResSeries('sysram:$dev', '${metricName('sysram')} ($dLabel)', seriesColors[(5 + i) % seriesColors.length], _size, ptsDev));
+      }
+    }
   }
   if (ids.contains('sysdisk')) {
-    final kinds = <String>[];
+    final keys = <({String device, String kind})>[];
     for (final p in sys) {
-      if (p.kind.startsWith('disk:') && !kinds.contains(p.kind)) kinds.add(p.kind);
+      if (p.kind.startsWith('disk:') && !keys.any((e) => e.device == p.device && e.kind == p.kind)) {
+        keys.add((device: p.device, kind: p.kind));
+      }
     }
-    for (var i = 0; i < kinds.length; i++) {
-      final k = kinds[i];
-      out.add(ResSeries('sysdisk:$k', '${metricName('sysdisk')} ${k.substring(5)}', seriesColors[(6 + i) % seriesColors.length], _size, [for (final p in sys) if (p.kind == k) Offset(p.t.toDouble(), (p.total - p.free).toDouble())]));
+    for (var i = 0; i < keys.length; i++) {
+      final k = keys[i];
+      final dLabel = deviceNames[k.device] ?? k.device;
+      final mount = k.kind.substring(5);
+      final label = multiDev ? '${metricName('sysdisk')} $mount ($dLabel)' : '${metricName('sysdisk')} $mount';
+      final id = multiDev ? 'sysdisk:${k.device}:${k.kind}' : 'sysdisk:${k.kind}';
+      out.add(ResSeries(id, label, seriesColors[(6 + i) % seriesColors.length], _size, [for (final p in sys) if (p.device == k.device && p.kind == k.kind) Offset(p.t.toDouble(), (p.total - p.free).toDouble())]));
     }
   }
   return out;
@@ -207,22 +265,31 @@ List<ResSeries> buildStatSeries({
   required int w0,
   required int w1,
   required int bin,
+  int bucketSec = 0,
+  int minSec = 0,
+  int maxSec = 0,
   String? only,
   required bool Function(String) skip,
 }) {
   final active = [for (final id in statMetricIds) if (ids.contains(id)) id];
   if (active.isEmpty || w1 <= w0) return const [];
-  final step = math.max(300, bin * 300);
+  final step = bucketSec > 0 ? math.max(300, bucketSec) : math.max(300, bin >= 300 ? bin : bin * 300);
   final gridStart = (w0 ~/ step) * step;
   final out = <ResSeries>[];
   for (final kind in active) {
+    final isSys = kind == 'unlocks' || kind.startsWith('power_');
+    final isDuration = kind == 'power_sleep' || kind == 'power_hibernate' || kind == 'power_lock';
     final byStart = <int, Map<String, double>>{};
-    final unlockTotals = <int, double>{};
+    final sysTotals = <int, double>{};
     for (final p in pts) {
       if (p.kind != kind || p.count <= 0) continue;
+      if (isDuration) {
+        if (minSec > 0 && p.count < minSec * 1000) continue;
+        if (maxSec > 0 && p.count > maxSec * 1000) continue;
+      }
       final st = (p.start ~/ step) * step;
-      if (kind == 'unlocks') {
-        unlockTotals[st] = (unlockTotals[st] ?? 0) + p.count;
+      if (isSys) {
+        sysTotals[st] = (sysTotals[st] ?? 0) + p.count;
       } else {
         if (p.app.isEmpty || skip(p.app) || (only != null && p.app != only)) continue;
         final map = byStart.putIfAbsent(st, () => {});
@@ -232,8 +299,8 @@ List<ResSeries> buildStatSeries({
     final points = <Offset>[];
     final apps = <Map<String, double>>[];
     for (var st = gridStart; st < w1; st += step) {
-      if (kind == 'unlocks') {
-        points.add(Offset(st + step / 2, unlockTotals[st] ?? 0.0));
+      if (isSys) {
+        points.add(Offset(st + step / 2, sysTotals[st] ?? 0.0));
         apps.add(const <String, double>{});
       } else {
         final per = byStart[st] ?? const <String, double>{};
@@ -245,7 +312,8 @@ List<ResSeries> buildStatSeries({
         apps.add(per);
       }
     }
-    out.add(ResSeries(kind, metricName(kind), metricColor(kind), _countText, points, apps));
+    final fmt = isDuration ? (double v) => formatMs(v.round()) : _countText;
+    out.add(ResSeries(kind, metricName(kind), metricColor(kind), fmt, points, apps));
   }
   return out;
 }

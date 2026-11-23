@@ -356,9 +356,21 @@ ApiReply route_api(const std::string& method, const std::string& target, const s
     url = clean_url(url, 512);
     {
       std::string lt = lower(title);
-      if (lt == domain || lt == "www." + domain || lt.rfind("http://", 0) == 0 || lt.rfind("https://", 0) == 0) {
-        title.clear();
+      std::string ld = lower(domain);
+      std::string bare_d = ld.rfind("www.", 0) == 0 ? ld.substr(4) : ld;
+      auto starts = [&](const std::string& p) { return lt.rfind(p, 0) == 0; };
+      bool bad = lt.empty() || lt == ld || lt == "www." + ld || lt == bare_d ||
+                 starts("http://") || starts("https://") || starts("file://") ||
+                 starts("about:") || starts("chrome:") || starts("chrome-extension:") ||
+                 starts("edge:") || starts("opera:") || starts("brave:") ||
+                 starts("vivaldi:") || starts("moz-extension:") ||
+                 starts(ld + "/") || starts("www." + ld + "/") || starts(bare_d + "/") ||
+                 starts(ld + ":") || starts("www." + ld + ":");
+      if (!bad && lt.find(' ') == std::string::npos) {
+        std::size_t sl = lt.find('/');
+        if (sl != std::string::npos && lt.find('.') < sl) bad = true;
       }
+      if (bad) title.clear();
     }
     if (browser.empty() || domain.empty() || ms <= 0 || ms > 3600000) {
       return {400, kJson, "{\"error\":\"bad payload\"}"};

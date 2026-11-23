@@ -47,11 +47,12 @@ Totals for the period: `from`, `to`, `days`, `apps_count`, `focused_ms`, `open_m
 
 ### `POST /v1/browser`
 
-Accepts JSON `{"browser": "chrome", "domain": "github.com", "ms": 10000}` and accumulates active domain time for the current day.
+Accepts JSON `{"browser": "chrome", "domain": "github.com", "ms": 10000, "title": "...", "url": "https://..."}` and accumulates active domain time and sanitized page titles for the current day and 5-minute timeline slots. URLs or `domain/...` placeholders are stripped before persisting titles.
 
 ### `GET /v1/browser/top?days=1&limit=10`
 
-`{"from", "to", "days", "domains": [{"browser", "domain", "ms"}]}`. Top domains recorded by the companion browser extension.
+`{"from", "to", "days", "domains": [{"browser", "domain", "ms", "title", "url"}]}`. Top domains and latest clean page titles recorded by the companion browser extension or Android browser tracker.
+
 
 ## Rules
 
