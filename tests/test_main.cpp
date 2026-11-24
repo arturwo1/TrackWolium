@@ -980,6 +980,84 @@ void test_sys_events() {
   CHECK(got2.size() == 1 && got2[0].kind == "shutdown" && got2[0].ts == 2000);
 }
 
+struct BatteryProbe : MetricsProbe {
+  tw::BatteryStat bat;
+  int bat_calls = 0;
+  tw::BatteryStat battery_stat() override {
+    ++bat_calls;
+    return bat;
+  }
+};
+
+struct BatteryStore : ResStore {
+  std::map<std::pair<std::string, std::string>, long long> app_stats;
+  std::map<std::tuple<int, std::string, std::string>, long long> slot_stats;
+  bool add_app_stats(const std::string&, const std::vector<tw::AppStatEntry>& v) override {
+    for (const auto& e : v) app_stats[{e.app, e.kind}] += e.n;
+    return true;
+  }
+  bool add_slot_stats(const std::string&, const std::vector<tw::SlotStatEntry>& v) override {
+    for (const auto& e : v) slot_stats[{e.slot, e.app, e.kind}] += e.n;
+    return true;
+  }
+};
+
+void test_engine_battery_telemetry() {
+  auto probe = std::make_shared<BatteryProbe>();
+  auto store = std::make_shared<BatteryStore>();
+  int slot = 10;
+  long long wall = 1000;
+  tw::Engine e(probe, Duration(60000));
+  e.set_day_source([] { return std::string("2026-01-01"); });
+  e.set_slot_source([&] { return slot; });
+  e.set_wall_source([&] { return wall; });
+  e.set_store(store, Duration(1000000));
+  e.set_metrics_intervals(Duration(10000), Duration(100000));
+  probe->bat = {80, 0, true};
+  probe->push({{"a", State::Focused}});
+  e.step(at(0));
+  CHECK(probe->bat_calls == 1 && probe->sys_calls == 0);
+  probe->push({{"b", State::Open}});
+  e.step(at(10000));
+  CHECK(probe->bat_calls == 1 && probe->sys_calls == 0);
+  probe->push({});
+  e.step(at(20000));
+  e.step(at(30000));
+  CHECK(probe->bat_calls == 1 && probe->sys_calls == 0);
+  wall = 1060;
+  probe->bat = {76, 0, true};
+  probe->push({{"c", State::Focused}});
+  e.step(at(60000));
+  CHECK(probe->bat_calls == 2 && probe->sys_calls == 0);
+  wall = 1120;
+  probe->bat = {78, 1, true};
+  probe->push({});
+  e.step(at(120000));
+  CHECK(probe->bat_calls == 3 && probe->sys_calls == 0);
+  tw::MetricsConfig cfg;
+  cfg.sys_ram = true;
+  e.set_metrics(cfg);
+  wall = 1220;
+  probe->sys.valid = true;
+  probe->sys.ram_total_kb = 8000;
+  probe->sys.ram_avail_kb = 4000;
+  probe->sys.battery_pct = 79;
+  probe->sys.battery_charging = 1;
+  e.step(at(220000));
+  CHECK(probe->sys_calls == 1 && probe->bat_calls == 3);
+  e.finish();
+  CHECK((store->app_stats[{"a", "battery"}] == 30));
+  CHECK((store->app_stats[{"b", "battery"}] == 10));
+  CHECK((store->app_stats.count({"c", "battery"}) == 0));
+  CHECK((store->slot_stats[{10, "a", "battery"}] == 30));
+  CHECK((store->slot_stats[{10, "b", "battery"}] == 10));
+  int bat_rows = 0;
+  for (const auto& r : store->sysrows) {
+    if (r.kind == "battery") ++bat_rows;
+  }
+  CHECK(bat_rows == 4);
+}
+
 int main() {
   test_accumulates_per_state();
   test_gap_is_ignored();
@@ -1025,6 +1103,7 @@ int main() {
   test_native_metrics_smoke();
   test_browser_api();
   test_sys_events();
+  test_engine_battery_telemetry();
 #ifdef _WIN32
   test_ipc_roundtrip();
 #endif

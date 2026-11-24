@@ -255,19 +255,26 @@ void Engine::sample_battery(TimePoint now, const SysStat* cached_sys) {
   if (!cached_sys && bat_started_ && now - last_bat_ < Duration(60000)) return;
   bat_started_ = true;
   last_bat_ = now;
-  SysStat st = cached_sys ? *cached_sys : probe_->sys_stat();
-  if (!st.valid || st.battery_pct < 0 || st.battery_pct > 100) return;
+  BatteryStat st;
+  if (cached_sys) {
+    st.pct = cached_sys->battery_pct;
+    st.charging = cached_sys->battery_charging;
+    st.valid = cached_sys->valid && st.pct >= 0 && st.pct <= 100;
+  } else {
+    st = probe_->battery_stat();
+  }
+  if (!st.valid || st.pct < 0 || st.pct > 100) return;
 
   long long ts = wall_fn_();
-  bool changed = last_bat_pct_ < 0 || st.battery_pct != last_bat_pct_ || st.battery_charging != last_bat_charging_;
+  bool changed = last_bat_pct_ < 0 || st.pct != last_bat_pct_ || st.charging != last_bat_charging_;
   if (changed || ts - last_bat_sys_ts_ >= 300) {
-    pending_sys_.push_back({ts, "battery", st.battery_pct, st.battery_charging});
+    pending_sys_.push_back({ts, "battery", st.pct, st.charging});
     last_bat_sys_ts_ = ts;
   }
 
-  if (last_bat_pct_ >= 0 && last_bat_charging_ == 0 && st.battery_charging == 0 &&
-      st.battery_pct < last_bat_pct_ && last_bat_wall_ > 0 && ts - last_bat_wall_ <= 600) {
-    long long drop_tenths = static_cast<long long>(last_bat_pct_ - st.battery_pct) * 10LL;
+  if (last_bat_pct_ >= 0 && last_bat_charging_ == 0 && st.charging == 0 &&
+      st.pct < last_bat_pct_ && last_bat_wall_ > 0 && ts - last_bat_wall_ <= 600) {
+    long long drop_tenths = static_cast<long long>(last_bat_pct_ - st.pct) * 10LL;
     auto distribute_apps = [&](long long drop) {
       long long total_w = 0;
       for (const auto& kv : bat_app_ms_) total_w += kv.second;
@@ -322,14 +329,14 @@ void Engine::sample_battery(TimePoint now, const SysStat* cached_sys) {
     distribute_slots(drop_tenths);
     bat_app_ms_.clear();
     bat_slot_ms_.clear();
-  } else if (st.battery_charging != 0 || last_bat_pct_ < 0 || st.battery_pct > last_bat_pct_ ||
+  } else if (st.charging != 0 || last_bat_pct_ < 0 || st.pct > last_bat_pct_ ||
              (last_bat_wall_ > 0 && ts - last_bat_wall_ > 600)) {
     bat_app_ms_.clear();
     bat_slot_ms_.clear();
   }
 
-  last_bat_pct_ = st.battery_pct;
-  last_bat_charging_ = st.battery_charging;
+  last_bat_pct_ = st.pct;
+  last_bat_charging_ = st.charging;
   last_bat_wall_ = ts;
 }
 

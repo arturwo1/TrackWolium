@@ -1084,7 +1084,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         if (updating) Text(tr('updating'), style: const TextStyle(color: cMuted)),
         if (updateFailed)
           Text(updateNote == 'permission' ? tr('updatePermission') : (updateNote.isEmpty ? tr('updateFailed') : '${tr('updateFailed')} ($updateNote)'), style: const TextStyle(color: cDanger)),
-        if (!Platform.isAndroid && prefs.flag('localapi'))
+        if (!Platform.isAndroid && settings.flag('localapi'))
           Text(tr('updateExtNotice'), style: const TextStyle(color: cMuted, fontSize: 12)),
       ]),
     );

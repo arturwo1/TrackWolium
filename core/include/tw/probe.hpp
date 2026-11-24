@@ -18,6 +18,7 @@ public:
   virtual bool supports_metrics() const { return false; }
   virtual std::vector<ProcSnap> proc_snapshot() { return {}; }
   virtual SysStat sys_stat() { return {}; }
+  virtual BatteryStat battery_stat() { return {}; }
   virtual long long idle_ms() { return -1; }
   virtual std::vector<SysEvent> take_sys_events() { return {}; }
 };

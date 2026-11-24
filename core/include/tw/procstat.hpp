@@ -40,6 +40,12 @@ struct SysStat {
   bool valid = false;
 };
 
+struct BatteryStat {
+  int pct = -1;
+  int charging = 0;
+  bool valid = false;
+};
+
 struct MetricsConfig {
   bool cpu = false;
   bool ram = false;

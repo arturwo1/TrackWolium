@@ -294,6 +294,17 @@ public:
       d.free_kb = static_cast<long long>(vfs.f_bavail) * static_cast<long long>(vfs.f_frsize) / 1024;
       st.disks.push_back(std::move(d));
     }
+    BatteryStat bat = battery_stat();
+    if (bat.valid) {
+      st.battery_pct = bat.pct;
+      st.battery_charging = bat.charging;
+      st.valid = true;
+    }
+    return st;
+  }
+
+  BatteryStat battery_stat() override {
+    BatteryStat bat;
     std::error_code bec;
     int bat_sum = 0;
     int bat_cnt = 0;
@@ -314,11 +325,11 @@ public:
       }
     }
     if (bat_cnt > 0) {
-      st.battery_pct = std::min(100, std::max(0, bat_sum / bat_cnt));
-      st.battery_charging = bat_chg ? 1 : 0;
-      st.valid = true;
+      bat.pct = std::min(100, std::max(0, bat_sum / bat_cnt));
+      bat.charging = bat_chg ? 1 : 0;
+      bat.valid = true;
     }
-    return st;
+    return bat;
   }
 
 private:
