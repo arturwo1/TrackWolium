@@ -330,6 +330,109 @@ std::string clean_url(std::string s, std::size_t max_bytes) {
   return utf8_truncate(s, max_bytes);
 }
 
+std::string url_decode(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '+') {
+      out.push_back(' ');
+    } else if (s[i] == '%' && i + 2 < s.size()) {
+      int hi = hex_val(s[i + 1]);
+      int lo = hex_val(s[i + 2]);
+      if (hi >= 0 && lo >= 0) {
+        out.push_back(static_cast<char>((hi << 4) | lo));
+        i += 2;
+      } else {
+        out.push_back(s[i]);
+      }
+    } else {
+      out.push_back(s[i]);
+    }
+  }
+  return out;
+}
+
+std::string html_escape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (unsigned char c : s) {
+    if (c == '&') out += "&amp;";
+    else if (c == '<') out += "&lt;";
+    else if (c == '>') out += "&gt;";
+    else if (c == '"') out += "&quot;";
+    else if (c == '\'') out += "&#39;";
+    else if (c >= 0x20 || c == '\t' || c == '\n') out.push_back(static_cast<char>(c));
+  }
+  return out;
+}
+
+std::string js_string_escape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (unsigned char c : s) {
+    if (c == '\\') out += "\\\\";
+    else if (c == '"') out += "\\\"";
+    else if (c == '\'') out += "\\'";
+    else if (c == '<') out += "\\u003c";
+    else if (c == '>') out += "\\u003e";
+    else if (c == '&') out += "\\u0026";
+    else if (c < 0x20) out.push_back(' ');
+    else out.push_back(static_cast<char>(c));
+  }
+  return out;
+}
+
+std::string ext_setup_html(const std::string& query) {
+  std::string ext_url = utf8_truncate(url_decode(query_value(query, "url")), 256);
+  std::string browser = utf8_truncate(url_decode(query_value(query, "browser")), 80);
+  std::string dir = utf8_truncate(url_decode(query_value(query, "dir")), 512);
+  std::string lang = lower(url_decode(query_value(query, "lang")));
+  if (ext_url.empty()) ext_url = "chrome://extensions";
+  bool ru = lang.rfind("ru", 0) == 0;
+  std::string title = ru ? "Wolium — установка расширения браузера" : "Wolium — Browser extension setup";
+  std::string heading = ru ? "Установка расширения Wolium" : "Wolium browser extension setup";
+  std::string lead = ru
+      ? "Браузеры из соображений безопасности не позволяют другим программам открывать служебные вкладки (chrome://, opera://, edge://) напрямую. Нужный адрес уже скопирован в буфер обмена."
+      : "For security, browsers block external apps from opening internal pages (chrome://, opera://, edge://) directly. The exact address has already been copied to your clipboard.";
+  std::string step1 = ru ? "1. Откройте страницу расширений в этой вкладке" : "1. Open the extensions page in this tab";
+  std::string step1Hint = ru ? "Нажмите адресную строку (Ctrl+L), вставьте адрес (Ctrl+V) и нажмите Enter:" : "Focus the address bar (Ctrl+L), paste the address (Ctrl+V) and press Enter:";
+  std::string step2 = ru ? "2. Включите режим разработчика и загрузите папку расширения" : "2. Enable Developer mode and load the extension folder";
+  std::string step2Hint = ru ? "Включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и выберите папку:" : "Enable \"Developer mode\", click \"Load unpacked\" and select this folder:";
+  std::string step3 = ru ? "3. Закрепите иконку Wolium и обновляйте при апдейтах" : "3. Pin the Wolium icon & reload after updates";
+  std::string step3Hint = ru ? "Закрепите значок Wolium на панели браузера (иконка пазла → булавка) — по клику на него на любом сайте видно статус подключения и кнопку паузы. После обновления Wolium нажимайте кнопку обновления (↻) у расширения." : "Pin Wolium to the browser toolbar (puzzle icon → pin) — clicking it on any website shows tracking status and a quick pause switch. After updating Wolium, click Reload (↻) on the extension.";
+  std::string copyBtn = ru ? "Копировать" : "Copy";
+  std::string copiedBtn = ru ? "Скопировано!" : "Copied!";
+
+  std::ostringstream o;
+  o << "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    << "<title>" << html_escape(title) << "</title>"
+    << "<style>:root{--bg:#0b1017;--card:#131b26;--soft:#1c2736;--line:#263447;--fg:#f1f5f9;--dim:#94a3b8;--accent:#4aa3ff;--ok:#3ba55d}"
+    << "*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px}"
+    << ".wrap{max-width:680px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.45)}"
+    << ".badge{display:inline-block;padding:4px 10px;border-radius:999px;background:rgba(74,163,255,.14);color:var(--accent);font-size:12px;font-weight:700;margin-bottom:10px}"
+    << "h1{margin:0 0 8px;font-size:24px;font-weight:800}p.lead{margin:0 0 22px;color:var(--dim);font-size:14px;line-height:1.5}"
+    << ".step{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}"
+    << ".step h2{margin:0 0 6px;font-size:15px;font-weight:800}.step p{margin:0 0 10px;color:var(--dim);font-size:13px;line-height:1.45}"
+    << ".row{display:flex;gap:8px;align-items:center}.code{flex:1;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;color:var(--fg);overflow-x:auto;white-space:nowrap;user-select:all}"
+    << "button{background:var(--accent);color:#06121f;border:none;border-radius:8px;padding:10px 16px;font-weight:800;font-size:13px;cursor:pointer;white-space:nowrap}button.ok{background:var(--ok);color:#fff}"
+    << ".keys{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.kbd{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;font-weight:700;color:var(--dim)}</style></head>"
+    << "<body><div class=\"wrap\"><div class=\"badge\">Wolium" << (browser.empty() ? "" : " · " + html_escape(browser)) << "</div>"
+    << "<h1>" << html_escape(heading) << "</h1><p class=\"lead\">" << html_escape(lead) << "</p>"
+    << "<div class=\"step\"><h2>" << html_escape(step1) << "</h2><p>" << html_escape(step1Hint) << "</p>"
+    << "<div class=\"row\"><div class=\"code\" id=\"u\">" << html_escape(ext_url) << "</div>"
+    << "<button onclick=\"cp(this,'" << js_string_escape(ext_url) << "')\">" << html_escape(copyBtn) << "</button></div>"
+    << "<div class=\"keys\"><span class=\"kbd\">Ctrl / Cmd + L</span><span class=\"kbd\">Ctrl / Cmd + V</span><span class=\"kbd\">Enter</span></div></div>";
+  if (!dir.empty()) {
+    o << "<div class=\"step\"><h2>" << html_escape(step2) << "</h2><p>" << html_escape(step2Hint) << "</p>"
+      << "<div class=\"row\"><div class=\"code\" id=\"d\">" << html_escape(dir) << "</div>"
+      << "<button onclick=\"cp(this,'" << js_string_escape(dir) << "')\">" << html_escape(copyBtn) << "</button></div></div>";
+  }
+  o << "<div class=\"step\"><h2>" << html_escape(step3) << "</h2><p style=\"margin-bottom:0\">" << html_escape(step3Hint) << "</p></div>"
+    << "</div><script>function cp(btn,val){navigator.clipboard.writeText(val).then(function(){var t=btn.textContent;btn.textContent='" << js_string_escape(copiedBtn)
+    << "';btn.classList.add('ok');setTimeout(function(){btn.textContent=t;btn.classList.remove('ok');},1600);});}</script></body></html>";
+  return o.str();
+}
+
 }
 
 ApiReply route_api(const std::string& target, const std::string& current, ApiData* data, long long now) {
@@ -379,6 +482,7 @@ ApiReply route_api(const std::string& method, const std::string& target, const s
     return {200, kJson, "{\"ok\":true}"};
   }
   if (path == "/widget") return {200, "text/html; charset=utf-8", widget_html()};
+  if (path == "/ext-setup") return {200, "text/html; charset=utf-8", ext_setup_html(query)};
   if (path == "/v1/current") return {200, kJson, current.empty() ? "{\"apps\":[]}" : current};
   if (path == "/v1/browser/top") {
     int days = static_cast<int>(query_int(query, "days", 1, 1, 90));

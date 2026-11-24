@@ -158,6 +158,22 @@ class MainActivity : FlutterActivity() {
             false
           })
         }
+        "openOwnAppInfo" -> {
+          result.success(try {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+          } catch (ex: Exception) {
+            false
+          })
+        }
+        "sampleBattery" -> {
+          Thread {
+            try {
+              Sync.sampleBatteryNow(applicationContext)
+            } catch (_: Exception) {}
+          }.start()
+          result.success(true)
+        }
         "icon" -> result.success(Sync.icon(this, call.argument<String>("pkg") ?: ""))
         "saveFile" -> {
           pendingBytes = call.argument<ByteArray>("bytes")

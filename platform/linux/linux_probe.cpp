@@ -294,6 +294,30 @@ public:
       d.free_kb = static_cast<long long>(vfs.f_bavail) * static_cast<long long>(vfs.f_frsize) / 1024;
       st.disks.push_back(std::move(d));
     }
+    std::error_code bec;
+    int bat_sum = 0;
+    int bat_cnt = 0;
+    bool bat_chg = false;
+    for (fs::directory_iterator bit("/sys/class/power_supply", bec), bend; !bec && bit != bend; bit.increment(bec)) {
+      std::string name = bit->path().filename().string();
+      if (name.rfind("BAT", 0) != 0) continue;
+      std::string cap_s, st_s;
+      if (!read_file(bit->path() / "capacity", cap_s)) continue;
+      int cap = std::atoi(cap_s.c_str());
+      if (cap < 0 || cap > 100) continue;
+      bat_sum += cap;
+      ++bat_cnt;
+      if (read_file(bit->path() / "status", st_s)) {
+        std::string lo = lower(st_s);
+        if (lo.find("charging") != std::string::npos && lo.find("discharging") == std::string::npos) bat_chg = true;
+        else if (lo.find("full") != std::string::npos) bat_chg = true;
+      }
+    }
+    if (bat_cnt > 0) {
+      st.battery_pct = std::min(100, std::max(0, bat_sum / bat_cnt));
+      st.battery_charging = bat_chg ? 1 : 0;
+      st.valid = true;
+    }
     return st;
   }
 

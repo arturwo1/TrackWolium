@@ -186,6 +186,8 @@ void applyWindowBox(WindowBox b) {
   try {
     p[0] = 44;
     if (_getPlacement!(h, p) == 0) return;
+    p[1] = 0;
+    p[2] = b.maximized ? 3 : 1;
     p[7] = b.left;
     p[8] = b.top;
     p[9] = b.right;

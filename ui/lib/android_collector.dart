@@ -306,6 +306,13 @@ class UsageBridge {
 
   Future<bool> appInfo(String pkg) async => (await _channel.invokeMethod<bool>('appInfo', {'pkg': pkg})) ?? false;
 
+  Future<bool> openOwnAppInfo() async => (await _channel.invokeMethod<bool>('openOwnAppInfo')) ?? false;
+
+  Future<void> sampleBattery() async {
+    try {
+      await _channel.invokeMethod('sampleBattery');
+    } catch (_) {}
+  }
 
   Future<String> label(String pkg) async => (await _channel.invokeMethod<String>('label', {'pkg': pkg})) ?? pkg;
 
@@ -448,9 +455,16 @@ class AndroidCollector {
         db.dispose();
       }
       _marker.writeAsStringSync('${now.millisecondsSinceEpoch}');
+      final batTs = now.millisecondsSinceEpoch ~/ 1000;
+      if (batTs - _lastBatterySample >= 60) {
+        _lastBatterySample = batTs;
+        await bridge.sampleBattery();
+      }
     } catch (_) {
     } finally {
       _busy = false;
     }
   }
+
+  int _lastBatterySample = 0;
 }

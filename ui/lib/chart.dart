@@ -55,8 +55,10 @@ const _detailWidth = 250.0;
 double? seriesValueAt(ResSeries s, double sec) {
   final p = s.points;
   if (p.isEmpty) return null;
-  if (sec <= p.first.dx) return (p.first.dx - sec) <= 600 ? p.first.dy : null;
-  if (sec >= p.last.dx) return (sec - p.last.dx) <= 600 ? p.last.dy : null;
+  if (p.length == 1) return (sec - p.first.dx).abs() <= 600 ? p.first.dy : null;
+  if (sec < p.first.dx - 1e-3 || sec > p.last.dx + 1e-3) return null;
+  if (sec <= p.first.dx) return p.first.dy;
+  if (sec >= p.last.dx) return p.last.dy;
   for (var i = 0; i < p.length - 1; i++) {
     if (sec >= p[i].dx && sec <= p[i + 1].dx) {
       final w = p[i + 1].dx - p[i].dx;
@@ -68,6 +70,7 @@ double? seriesValueAt(ResSeries s, double sec) {
 }
 
 double seriesScaleTop(ResSeries s, double a, double b) {
+  if (s.id == 'battery' || s.id.startsWith('battery:')) return 100.0;
   final pad = (b - a) * 0.2;
   final m = s.maxIn(a - pad, b + pad);
   if (s.isSum) return math.max(2.0, m * 1.18);
@@ -1465,6 +1468,19 @@ class _ChartPainter extends CustomPainter {
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(_left, 0, plotW, _top + plotH + 1));
     final ordered = [for (final s in series) if (s.id != focus?.id) s, if (focus != null) focus!];
+    final hoverSec = hover == null ? null : (hover! + 0.5) * bucket;
+    final targetX = hoverSec == null ? null : xOf(hoverSec);
+    if (targetX != null && (!showTime || focus != null)) {
+      final guideColor = (focus?.color ?? series.first.color).withValues(alpha: 0.35);
+      canvas.drawLine(
+        Offset(targetX, _top),
+        Offset(targetX, _top + plotH),
+        Paint()
+          ..color = guideColor
+          ..strokeWidth = 1,
+      );
+    }
+    final dots = <({Offset c, Color color, double r, double stroke})>[];
     for (final s in ordered) {
       final isFocus = focus != null && s.id == focus!.id;
       final top = seriesScaleTop(s, vx0, vx1);
@@ -1472,8 +1488,8 @@ class _ChartPainter extends CustomPainter {
       final pad = span * 0.2;
       final pts = [for (final p in s.points) if (p.dx >= vx0 - pad && p.dx <= vx1 + pad) Offset(xOf(p.dx), yOf(p.dy))];
       if (pts.isEmpty) continue;
-      final alpha = focus == null ? 0.95 : (isFocus ? 1.0 : 0.22);
-      final width = focus == null ? 2.0 : (isFocus ? 3.4 : 1.4);
+      final alpha = focus == null ? 0.95 : (isFocus ? 1.0 : 0.28);
+      final width = focus == null ? 2.0 : (isFocus ? 3.4 : 1.5);
       final color = s.color.withValues(alpha: alpha);
       if (pts.length == 1) {
         canvas.drawCircle(pts.first, width + 1, Paint()..color = color);
@@ -1492,49 +1508,50 @@ class _ChartPainter extends CustomPainter {
             ..color = color,
         );
       }
-      final shouldDrawDot = (isFocus || (focus == null && series.length == 1)) && hover != null;
-      if (shouldDrawDot && pts.isNotEmpty) {
-        final targetX = xOf((hover! + 0.5) * bucket);
-        double dotY;
-        if (pts.length == 1 || targetX <= pts.first.dx) {
-          dotY = pts.first.dy;
-        } else if (targetX >= pts.last.dx) {
-          dotY = pts.last.dy;
-        } else {
-          var yFound = pts.first.dy;
-          for (var i = 0; i < pts.length - 1; i++) {
-            final p0 = pts[i];
-            final p1 = pts[i + 1];
-            if ((p0.dx <= targetX && targetX <= p1.dx) || (p1.dx <= targetX && targetX <= p0.dx)) {
-              final dx = p1.dx - p0.dx;
-              if (dx.abs() < 1e-4) {
-                yFound = p0.dy;
-              } else {
-                final frac = ((targetX - p0.dx) / dx).clamp(0.0, 1.0);
-                yFound = p0.dy + frac * (p1.dy - p0.dy);
-              }
-              break;
-            }
-          }
-          dotY = yFound;
+      if (hoverSec != null && targetX != null) {
+        final v = seriesValueAt(s, hoverSec);
+        if (v != null && (s.points.length > 1 || (hoverSec - s.points.first.dx).abs() <= math.max(bucket * 0.6, 600))) {
+          final c = Offset(targetX, yOf(v));
+          final primary = isFocus || (focus == null && series.length == 1 && !showTime);
+          dots.add((
+            c: c,
+            color: s.color.withValues(alpha: focus == null ? 1.0 : (isFocus ? 1.0 : 0.55)),
+            r: primary ? 5.0 : 3.5,
+            stroke: primary ? 2.2 : 1.8,
+          ));
         }
-        final c = Offset(targetX, dotY);
-        canvas.drawLine(Offset(c.dx, _top), Offset(c.dx, _top + plotH), Paint()
-          ..color = s.color.withValues(alpha: 0.35)
-          ..strokeWidth = 1);
-        canvas.drawCircle(c, 5, Paint()..color = cBg);
-        canvas.drawCircle(
-            c,
-            5,
-            Paint()
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 2.2
-              ..color = s.color);
       }
+    }
+    for (final d in dots) {
+      canvas.drawCircle(d.c, d.r, Paint()..color = cBg);
+      canvas.drawCircle(
+        d.c,
+        d.r,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = d.stroke
+          ..color = d.color,
+      );
     }
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(covariant _ChartPainter old) => true;
+  bool shouldRepaint(covariant _ChartPainter old) {
+    return !identical(series, old.series) ||
+        focus?.id != old.focus?.id ||
+        showTime != old.showTime ||
+        !identical(buckets, old.buckets) ||
+        cLo != old.cLo ||
+        bucket != old.bucket ||
+        first != old.first ||
+        total != old.total ||
+        vx0 != old.vx0 ||
+        vx1 != old.vx1 ||
+        yBottom != old.yBottom ||
+        ySpan != old.ySpan ||
+        hover != old.hover ||
+        !identical(prev, old.prev) ||
+        avg != old.avg;
+  }
 }

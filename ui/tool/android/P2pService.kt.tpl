@@ -102,7 +102,7 @@ class P2pService : Service() {
 
   private fun handle(c: Socket) {
     try {
-      c.soTimeout = 10000
+      c.soTimeout = 60000
       val input = c.getInputStream()
       val buf = ByteArray(8192)
       val raw = java.io.ByteArrayOutputStream()
@@ -131,7 +131,7 @@ class P2pService : Service() {
         val k = l.substring(0, i).trim().lowercase(Locale.ROOT)
         val v = l.substring(i + 1).trim()
         if (k == "authorization") auth = v
-        else if (k == "content-length") contentLen = (v.toIntOrNull() ?: 0).coerceIn(0, 8 * 1024 * 1024)
+        else if (k == "content-length") contentLen = (v.toIntOrNull() ?: 0).coerceIn(0, 64 * 1024 * 1024)
       }
       val bodyStart = hdrEnd + 4
       val bodyOut = java.io.ByteArrayOutputStream()
@@ -621,9 +621,6 @@ class P2pService : Service() {
     }
 
     fun exportSnapshotForContext(ctx: Context): String {
-      val sinceMs = System.currentTimeMillis() - 30L * 86400000L
-      val fromDay = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(sinceMs))
-      val sinceTs = sinceMs / 1000L
       val usage = JSONArray()
       val timeline = JSONArray()
       val apps = JSONArray()
@@ -641,12 +638,12 @@ class P2pService : Service() {
         val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
         try {
           try {
-            db.rawQuery("SELECT day, app, state, ms FROM usage WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, app, state, ms FROM usage", null).use { c ->
               while (c.moveToNext()) usage.put(JSONObject().put("day", c.getString(0)).put("app", c.getString(1)).put("state", c.getInt(2)).put("ms", c.getLong(3)))
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT day, slot, app, state, ms FROM timeline WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, slot, app, state, ms FROM timeline", null).use { c ->
               while (c.moveToNext()) timeline.put(JSONObject().put("day", c.getString(0)).put("slot", c.getInt(1)).put("app", c.getString(2)).put("state", c.getInt(3)).put("ms", c.getLong(4)))
             }
           } catch (_: Exception) {}
@@ -673,49 +670,49 @@ class P2pService : Service() {
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT day, browser, domain, ms, title, url FROM browser_usage WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, browser, domain, ms, title, url FROM browser_usage", null).use { c ->
               while (c.moveToNext()) browser.put(JSONObject().put("day", c.getString(0)).put("browser", c.getString(1)).put("domain", c.getString(2)).put("ms", c.getLong(3)).put("title", c.getString(4) ?: "").put("url", c.getString(5) ?: ""))
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT day, slot, browser, domain, title, ms FROM browser_timeline WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, slot, browser, domain, title, ms FROM browser_timeline", null).use { c ->
               while (c.moveToNext()) browserTimeline.put(JSONObject().put("day", c.getString(0)).put("slot", c.getInt(1)).put("browser", c.getString(2)).put("domain", c.getString(3)).put("title", c.getString(4) ?: "").put("ms", c.getLong(5)))
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT day, kind, n FROM day_stats WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, kind, n FROM day_stats", null).use { c ->
               while (c.moveToNext()) dayStats.put(JSONObject().put("day", c.getString(0)).put("kind", c.getString(1)).put("n", c.getLong(2)))
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT day, app, kind, n FROM app_stats WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, app, kind, n FROM app_stats", null).use { c ->
               while (c.moveToNext()) appStats.put(JSONObject().put("day", c.getString(0)).put("app", c.getString(1)).put("kind", c.getString(2)).put("n", c.getLong(3)))
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT day, slot, app, kind, n FROM slot_stats WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, slot, app, kind, n FROM slot_stats", null).use { c ->
               while (c.moveToNext()) slotStats.put(JSONObject().put("day", c.getString(0)).put("slot", c.getInt(1)).put("app", c.getString(2)).put("kind", c.getString(3)).put("n", c.getLong(4)))
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT day, slot, app, cpu, ram, n, peak, ior, iow FROM res WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, slot, app, cpu, ram, n, peak, ior, iow FROM res", null).use { c ->
               while (c.moveToNext()) {
                 res.put(JSONObject().put("day", c.getString(0)).put("slot", c.getInt(1)).put("app", c.getString(2)).put("cpu", c.getLong(3)).put("ram", c.getLong(4)).put("n", c.getLong(5)).put("peak", c.getLong(6)).put("ior", c.getLong(7)).put("iow", c.getLong(8)))
               }
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT ts, kind, a, b FROM sysmon WHERE ts >= ?", arrayOf(sinceTs.toString())).use { c ->
+            db.rawQuery("SELECT ts, kind, a, b FROM sysmon", null).use { c ->
               while (c.moveToNext()) sysmon.put(JSONObject().put("ts", c.getLong(0)).put("kind", c.getString(1)).put("a", c.getLong(2)).put("b", c.getLong(3)))
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT day, slot, app, ms FROM afk WHERE day >= ?", arrayOf(fromDay)).use { c ->
+            db.rawQuery("SELECT day, slot, app, ms FROM afk", null).use { c ->
               while (c.moveToNext()) afk.put(JSONObject().put("day", c.getString(0)).put("slot", c.getInt(1)).put("app", c.getString(2)).put("ms", c.getLong(3)))
             }
           } catch (_: Exception) {}
           try {
-            db.rawQuery("SELECT ts, kind, duration_ms, extra FROM sys_events WHERE ts >= ?", arrayOf(sinceTs.toString())).use { c ->
+            db.rawQuery("SELECT ts, kind, duration_ms, extra FROM sys_events", null).use { c ->
               while (c.moveToNext()) sysEvents.put(JSONObject().put("ts", c.getLong(0)).put("kind", c.getString(1)).put("duration_ms", c.getLong(2)).put("extra", c.getString(3) ?: ""))
             }
           } catch (_: Exception) {}

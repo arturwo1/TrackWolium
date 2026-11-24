@@ -32,13 +32,19 @@
   - **Android**: screen off / keyguard / shutdown usage events recorded into `sys_events`.
 - Selectable individually as chart lines (`power_sleep`, `power_hibernate`, `power_lock`, `power_reboot`, `power_shutdown`).
 
+## Battery & power telemetry
+
+- **System battery charge (`battery`)**: sampled on Android (via WorkManager / active bridge) and laptops/UPS systems on Windows, Linux, and macOS (`sysmon` `kind = 'battery'`, storing percentage and charging flag), rendered on a 0–100% chart scale and shown in the Global summary.
+- **Per-app battery drain (`appbattery`)**: attributed from Android active screen/foreground battery discharge (`app_stats` / `slot_stats` `kind = 'battery'`, stored in tenths of %), available as a chart line, sortable table column, Global summary total, and CSV export column across paired devices.
+
 ## Global system values & multi-device LAN sync
 
-- Below the apps table, the **Global system values** card summarizes selected devices:
-  - Latest **RAM** (total, used, free) and per-mount **Disk** capacity (total, used, free).
+- Below the chart, segmented tabs (**Applications** / **Global system values**, also swipeable horizontally on narrow screens) switch between the apps view and the system summary:
+  - Latest **RAM** (total, used, free), **Battery** (current charge/charging state and estimated app battery drain), and per-mount **Disk** capacity (total, used, free).
   - Period **Activity totals** (focused, visible, total, AFK, opens, notifications, unlocks).
   - **Power states** table with counts and total durations for sleep, hibernate, lock, reboot, and shutdown.
-- When paired remote desktop devices are toggled on from Android or desktop, their full columns (`focused`, `realcol`, `open`, `minimized`, `background`, `cpu`, `ram`, `peak`, `ior`, `iow`), chart lines, sorting options, and CSV export columns unlock dynamically.
+- Peer-to-peer LAN synchronization transfers the **entire recorded database history** (without artificial day caps), and automatically refreshes stale peers (older than 60 minutes) on app launch, foreground resume, and periodic background `SyncWorker` runs.
+- When paired remote devices are toggled on, their full columns (`focused`, `realcol`, `open`, `minimized`, `background`, `appbattery`, `cpu`, `ram`, `peak`, `ior`, `iow`), chart lines, sorting options, and CSV export columns unlock dynamically.
 
 ## Hotkeys (Windows)
 

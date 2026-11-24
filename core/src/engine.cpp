@@ -149,6 +149,18 @@ void Engine::flush_pending() {
     for (const auto& kv : pending_afk_) rows.push_back({kv.first.first, kv.first.second, 0, kv.second});
     if (store_->add_afk(day_, rows)) pending_afk_.clear();
   }
+  if (!pending_app_stats_.empty()) {
+    std::vector<AppStatEntry> rows;
+    rows.reserve(pending_app_stats_.size());
+    for (const auto& kv : pending_app_stats_) rows.push_back({kv.first.first, kv.first.second, kv.second});
+    if (store_->add_app_stats(day_, rows)) pending_app_stats_.clear();
+  }
+  if (!pending_slot_stats_.empty()) {
+    std::vector<SlotStatEntry> rows;
+    rows.reserve(pending_slot_stats_.size());
+    for (const auto& kv : pending_slot_stats_) rows.push_back({std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first), kv.second});
+    if (store_->add_slot_stats(day_, rows)) pending_slot_stats_.clear();
+  }
   if (!pending_sessions_.empty()) {
     std::vector<SessionRec> recs;
     recs.reserve(pending_sessions_.size());
@@ -220,18 +232,105 @@ void Engine::sample_metrics(TimePoint now, const std::vector<AppSample>& samples
       if (metrics_.io_write) a.io_write += r.io_write;
     }
   }
+  SysStat cached_sys;
+  bool have_sys = false;
   if (metrics_.any_sys() && probe_->supports_metrics() && (!sys_started_ || now - last_sys_ >= sys_every_)) {
     sys_started_ = true;
     last_sys_ = now;
-    SysStat st = probe_->sys_stat();
+    cached_sys = probe_->sys_stat();
+    have_sys = true;
     long long ts = wall_fn_();
-    if (st.valid) {
-      if (metrics_.sys_ram) pending_sys_.push_back({ts, "ram", st.ram_total_kb, st.ram_avail_kb});
+    if (cached_sys.valid) {
+      if (metrics_.sys_ram && cached_sys.ram_total_kb > 0) pending_sys_.push_back({ts, "ram", cached_sys.ram_total_kb, cached_sys.ram_avail_kb});
       if (metrics_.sys_disk) {
-        for (const auto& d : st.disks) pending_sys_.push_back({ts, "disk:" + d.mount, d.total_kb, d.free_kb});
+        for (const auto& d : cached_sys.disks) pending_sys_.push_back({ts, "disk:" + d.mount, d.total_kb, d.free_kb});
       }
     }
   }
+  sample_battery(now, have_sys ? &cached_sys : nullptr);
+}
+
+void Engine::sample_battery(TimePoint now, const SysStat* cached_sys) {
+  if (metrics_.no_time || !probe_->supports_metrics()) return;
+  if (!cached_sys && bat_started_ && now - last_bat_ < Duration(60000)) return;
+  bat_started_ = true;
+  last_bat_ = now;
+  SysStat st = cached_sys ? *cached_sys : probe_->sys_stat();
+  if (!st.valid || st.battery_pct < 0 || st.battery_pct > 100) return;
+
+  long long ts = wall_fn_();
+  bool changed = last_bat_pct_ < 0 || st.battery_pct != last_bat_pct_ || st.battery_charging != last_bat_charging_;
+  if (changed || ts - last_bat_sys_ts_ >= 300) {
+    pending_sys_.push_back({ts, "battery", st.battery_pct, st.battery_charging});
+    last_bat_sys_ts_ = ts;
+  }
+
+  if (last_bat_pct_ >= 0 && last_bat_charging_ == 0 && st.battery_charging == 0 &&
+      st.battery_pct < last_bat_pct_ && last_bat_wall_ > 0 && ts - last_bat_wall_ <= 600) {
+    long long drop_tenths = static_cast<long long>(last_bat_pct_ - st.battery_pct) * 10LL;
+    auto distribute_apps = [&](long long drop) {
+      long long total_w = 0;
+      for (const auto& kv : bat_app_ms_) total_w += kv.second;
+      if (total_w <= 0 || drop <= 0) return;
+      struct Share { std::string app; long long whole; long long rem; };
+      std::vector<Share> shares;
+      long long allocated = 0;
+      for (const auto& kv : bat_app_ms_) {
+        long long num = drop * kv.second;
+        long long w = num / total_w;
+        shares.push_back({kv.first, w, num % total_w});
+        allocated += w;
+      }
+      std::sort(shares.begin(), shares.end(), [](const Share& a, const Share& b) {
+        return a.rem != b.rem ? a.rem > b.rem : a.app < b.app;
+      });
+      for (std::size_t i = 0; i < shares.size() && allocated < drop; ++i) {
+        ++shares[i].whole;
+        ++allocated;
+      }
+      for (const auto& s : shares) {
+        if (s.whole > 0) pending_app_stats_[{s.app, "battery"}] += s.whole;
+      }
+    };
+    auto distribute_slots = [&](long long drop) {
+      long long total_w = 0;
+      for (const auto& kv : bat_slot_ms_) total_w += kv.second;
+      if (total_w <= 0 || drop <= 0) return;
+      struct Share { int slot; std::string app; long long whole; long long rem; };
+      std::vector<Share> shares;
+      long long allocated = 0;
+      for (const auto& kv : bat_slot_ms_) {
+        long long num = drop * kv.second;
+        long long w = num / total_w;
+        shares.push_back({kv.first.first, kv.first.second, w, num % total_w});
+        allocated += w;
+      }
+      std::sort(shares.begin(), shares.end(), [](const Share& a, const Share& b) {
+        if (a.rem != b.rem) return a.rem > b.rem;
+        if (a.slot != b.slot) return a.slot < b.slot;
+        return a.app < b.app;
+      });
+      for (std::size_t i = 0; i < shares.size() && allocated < drop; ++i) {
+        ++shares[i].whole;
+        ++allocated;
+      }
+      for (const auto& s : shares) {
+        if (s.whole > 0) pending_slot_stats_[{s.slot, s.app, "battery"}] += s.whole;
+      }
+    };
+    distribute_apps(drop_tenths);
+    distribute_slots(drop_tenths);
+    bat_app_ms_.clear();
+    bat_slot_ms_.clear();
+  } else if (st.battery_charging != 0 || last_bat_pct_ < 0 || st.battery_pct > last_bat_pct_ ||
+             (last_bat_wall_ > 0 && ts - last_bat_wall_ > 600)) {
+    bat_app_ms_.clear();
+    bat_slot_ms_.clear();
+  }
+
+  last_bat_pct_ = st.battery_pct;
+  last_bat_charging_ = st.battery_charging;
+  last_bat_wall_ = ts;
 }
 
 void Engine::step(TimePoint now) {
@@ -270,6 +369,11 @@ void Engine::step(TimePoint now) {
       pending_[{iv.app, static_cast<int>(iv.state)}] += iv.ms;
       if (iv.state != State::Background) note_session(iv);
       if (iv.state != State::Background) pending_slots_[{slot_fn_(), iv.app, static_cast<int>(iv.state)}] += iv.ms.count();
+      if (iv.state == State::Focused || iv.state == State::Open) {
+        long long w = iv.ms.count() * (iv.state == State::Focused ? 3LL : 1LL);
+        bat_app_ms_[iv.app] += w;
+        bat_slot_ms_[{slot_fn_(), iv.app}] += w;
+      }
     }
     if (afk_threshold_.count() > 0 && !metrics_.no_time && !intervals.empty()) {
       long long idle = probe_->idle_ms();
@@ -280,6 +384,7 @@ void Engine::step(TimePoint now) {
       }
     }
     if (metrics_.any()) sample_metrics(now, samples);
+    else sample_battery(now, nullptr);
     auto sevs = probe_->take_sys_events();
     if (!sevs.empty()) {
       pending_sys_events_.insert(pending_sys_events_.end(), sevs.begin(), sevs.end());

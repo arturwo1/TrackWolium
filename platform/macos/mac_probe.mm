@@ -1,6 +1,8 @@
 #include "tw/platform.hpp"
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <IOKit/ps/IOPSKeys.h>
+#import <IOKit/ps/IOPowerSources.h>
 #include <libproc.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
@@ -252,6 +254,33 @@ public:
       bool dup = false;
       for (const auto& e : st.disks) dup = dup || (e.total_kb == d.total_kb && e.free_kb == d.free_kb);
       if (!dup && d.total_kb > 0) st.disks.push_back(std::move(d));
+    }
+    CFTypeRef ps_info = IOPSCopyPowerSourcesInfo();
+    if (ps_info) {
+      CFArrayRef ps_list = IOPSCopyPowerSourcesList(ps_info);
+      if (ps_list) {
+        CFIndex count = CFArrayGetCount(ps_list);
+        for (CFIndex i = 0; i < count; ++i) {
+          CFDictionaryRef desc = IOPSGetPowerSourceDescription(ps_info, CFArrayGetValueAtIndex(ps_list, i));
+          if (!desc) continue;
+          NSDictionary* d = (__bridge NSDictionary*)desc;
+          NSNumber* cur = d[@kIOPSCurrentCapacityKey];
+          NSNumber* mx = d[@kIOPSMaxCapacityKey];
+          if (!cur || !mx || [mx intValue] <= 0) continue;
+          NSString* type = d[@kIOPSTypeKey];
+          if (type && ![type isEqualToString:@kIOPSInternalBatteryType]) continue;
+          int pct = static_cast<int>(std::min(100, std::max(0, ([cur intValue] * 100) / [mx intValue])));
+          NSNumber* chg = d[@kIOPSIsChargingKey];
+          NSString* src = d[@kIOPSPowerSourceStateKey];
+          bool on_ac = src && [src isEqualToString:@kIOPSACPowerValue];
+          st.battery_pct = pct;
+          st.battery_charging = ((chg && [chg boolValue]) || on_ac) ? 1 : 0;
+          st.valid = true;
+          break;
+        }
+        CFRelease(ps_list);
+      }
+      CFRelease(ps_info);
     }
     return st;
   }

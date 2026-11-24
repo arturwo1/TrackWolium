@@ -9,10 +9,12 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Process
 import android.os.StatFs
@@ -336,8 +338,155 @@ object Sync {
   private const val SCHEMA_APPS = "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID"
   private const val SCHEMA_DAY_STATS = "CREATE TABLE IF NOT EXISTS day_stats(day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind)) WITHOUT ROWID"
   private const val SCHEMA_APP_STATS = "CREATE TABLE IF NOT EXISTS app_stats(day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, app, kind)) WITHOUT ROWID"
+  private const val SCHEMA_SLOT_STATS = "CREATE TABLE IF NOT EXISTS slot_stats(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, slot, app, kind)) WITHOUT ROWID"
   private const val SCHEMA_SYS_EVENTS = "CREATE TABLE IF NOT EXISTS sys_events(ts INTEGER NOT NULL, kind TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, extra TEXT NOT NULL DEFAULT '', PRIMARY KEY(ts, kind)) WITHOUT ROWID"
   private const val SCHEMA_SYSMON = "CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID"
+
+  @Synchronized
+  fun sampleBatteryNow(ctx: Context) {
+    val dir = dir(ctx)
+    if (!File(dir, "consent").exists() || File(dir, "paused").exists()) return
+    val file = File(dir, "usage.db")
+    if (!file.exists()) return
+    val db = SQLiteDatabase.openOrCreateDatabase(file, null)
+    try {
+      db.enableWriteAheadLogging()
+      db.execSQL(SCHEMA_APP_STATS)
+      db.execSQL(SCHEMA_SLOT_STATS)
+      db.execSQL(SCHEMA_SYSMON)
+      sampleBattery(ctx, db, System.currentTimeMillis() / 1000L)
+      db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).close()
+    } catch (_: Exception) {
+    } finally {
+      db.close()
+    }
+  }
+
+  private fun sampleBattery(ctx: Context, db: SQLiteDatabase, nowSec: Long) {
+    try {
+      val sticky = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+      var pct = -1
+      var charging = 0
+      if (sticky != null) {
+        val level = sticky.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = sticky.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level >= 0 && scale > 0) pct = ((level * 100f) / scale).toInt().coerceIn(0, 100)
+        val status = sticky.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        val plugged = sticky.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+        charging = if (plugged != 0 || status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL) 1 else 0
+      }
+      if (pct < 0) {
+        val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+        val cap = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        if (cap in 0..100) pct = cap
+        if (charging == 0 && bm != null && bm.isCharging) charging = 1
+      }
+      if (pct !in 0..100) return
+
+      val stateFile = File(dir(ctx), "battery_state")
+      var prevTs = 0L
+      var prevPct = -1
+      var prevCharging = 0
+      if (stateFile.exists()) {
+        val parts = stateFile.readText().trim().split(' ')
+        if (parts.size >= 3) {
+          prevTs = parts[0].toLongOrNull() ?: 0L
+          prevPct = parts[1].toIntOrNull() ?: -1
+          prevCharging = parts[2].toIntOrNull() ?: 0
+        }
+      }
+
+      if (prevPct != pct || prevCharging != charging || nowSec - prevTs >= 300L) {
+        db.execSQL("INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?, 'battery', ?, ?)", arrayOf<Any>(nowSec, pct, charging))
+      }
+
+      if (prevPct >= 0 && prevCharging == 0 && charging == 0 && pct < prevPct && prevTs > 0L && (nowSec - prevTs) in 30L..21600L) {
+        val dropTenths = (prevPct - pct).toLong() * 10L
+        val appMs = HashMap<String, Long>()
+        val slotMs = HashMap<String, Long>()
+        val cal = Calendar.getInstance()
+        val c = db.rawQuery(
+          "SELECT app, start, stop FROM sessions WHERE state = 0 AND stop > ? AND start < ?",
+          arrayOf(prevTs.toString(), nowSec.toString())
+        )
+        try {
+          while (c.moveToNext()) {
+            val app = c.getString(0)
+            var cur = maxOf(prevTs, c.getLong(1))
+            val end = minOf(nowSec, c.getLong(2))
+            while (cur < end) {
+              cal.timeInMillis = cur * 1000L
+              val dayStr = String.format(Locale.US, "%04d-%02d-%02d", cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH))
+              cal.set(Calendar.HOUR_OF_DAY, 0)
+              cal.set(Calendar.MINUTE, 0)
+              cal.set(Calendar.SECOND, 0)
+              cal.set(Calendar.MILLISECOND, 0)
+              val dayStart = cal.timeInMillis / 1000L
+              val nextDay = dayStart + 86400L
+              val slot = (((cur - dayStart) / 300L).toInt()).coerceIn(0, 287)
+              val chunkEnd = minOf(end, minOf(nextDay, dayStart + (slot + 1L) * 300L))
+              val secDur = maxOf(1L, chunkEnd - cur)
+              val ak = "$dayStr\u0000$app"
+              appMs[ak] = (appMs[ak] ?: 0L) + secDur
+              val sk = "$dayStr\u0000$slot\u0000$app"
+              slotMs[sk] = (slotMs[sk] ?: 0L) + secDur
+              cur = chunkEnd
+            }
+          }
+        } finally {
+          c.close()
+        }
+        val totalApp = appMs.values.sum()
+        if (totalApp > 0L && dropTenths > 0L) {
+          val shares = appMs.entries.map {
+            val num = dropTenths * it.value
+            Triple(it.key, num / totalApp, num % totalApp)
+          }.toMutableList()
+          var alloc = shares.sumOf { it.second }
+          shares.sortByDescending { it.third }
+          for (idx in shares.indices) {
+            if (alloc >= dropTenths) break
+            shares[idx] = Triple(shares[idx].first, shares[idx].second + 1L, shares[idx].third)
+            alloc++
+          }
+          for (s in shares) {
+            if (s.second <= 0L) continue
+            val i = s.first.indexOf('\u0000')
+            db.execSQL(
+              "INSERT INTO app_stats(day, app, kind, n) VALUES(?, ?, 'battery', ?) ON CONFLICT(day, app, kind) DO UPDATE SET n = n + excluded.n",
+              arrayOf<Any>(s.first.substring(0, i), s.first.substring(i + 1), s.second)
+            )
+          }
+        }
+        val totalSlot = slotMs.values.sum()
+        if (totalSlot > 0L && dropTenths > 0L) {
+          val shares = slotMs.entries.map {
+            val num = dropTenths * it.value
+            Triple(it.key, num / totalSlot, num % totalSlot)
+          }.toMutableList()
+          var alloc = shares.sumOf { it.second }
+          shares.sortByDescending { it.third }
+          for (idx in shares.indices) {
+            if (alloc >= dropTenths) break
+            shares[idx] = Triple(shares[idx].first, shares[idx].second + 1L, shares[idx].third)
+            alloc++
+          }
+          for (s in shares) {
+            if (s.second <= 0L) continue
+            val parts = s.first.split('\u0000')
+            if (parts.size == 3) {
+              db.execSQL(
+                "INSERT INTO slot_stats(day, slot, app, kind, n) VALUES(?, ?, ?, 'battery', ?) ON CONFLICT(day, slot, app, kind) DO UPDATE SET n = n + excluded.n",
+                arrayOf<Any>(parts[0], parts[1].toInt(), parts[2], s.second)
+              )
+            }
+          }
+        }
+      }
+      stateFile.writeText("$nowSec $pct $charging\n")
+    } catch (_: Exception) {
+    }
+  }
 
   @Synchronized
   fun run(ctx: Context) {
@@ -365,6 +514,7 @@ object Sync {
       db.execSQL(SCHEMA_APPCAT)
       db.execSQL(SCHEMA_DAY_STATS)
       db.execSQL(SCHEMA_APP_STATS)
+      db.execSQL(SCHEMA_SLOT_STATS)
       db.execSQL(SCHEMA_SYS_EVENTS)
       db.execSQL(SCHEMA_SYSMON)
       store(db, spans, events, firstDay, lastDay)
@@ -391,6 +541,7 @@ object Sync {
         if (totalKb > 0) {
           db.execSQL("INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?, 'disk:/data', ?, ?)", arrayOf<Any>(nowSec, totalKb, freeKb))
         }
+        sampleBattery(ctx, db, nowSec)
       } catch (_: Exception) {}
       val known = HashSet<String>()
       val c = db.rawQuery("SELECT app, path FROM apps WHERE path != ''", null)
@@ -448,7 +599,7 @@ object Sync {
         conn = (URL("http://$host:$port/p2p/sync").openConnection() as HttpURLConnection).apply {
           requestMethod = "POST"
           connectTimeout = 5000
-          readTimeout = 8000
+          readTimeout = 45000
           doOutput = true
           setRequestProperty("Content-Type", "application/json; charset=utf-8")
           setRequestProperty("Authorization", "Bearer $token")

@@ -51,6 +51,19 @@ struct SysEvent {
   std::string extra;
 };
 
+struct AppStatEntry {
+  std::string app;
+  std::string kind;
+  long long n = 0;
+};
+
+struct SlotStatEntry {
+  int slot = 0;
+  std::string app;
+  std::string kind;
+  long long n = 0;
+};
+
 class IStore {
 public:
   virtual ~IStore() = default;
@@ -64,6 +77,8 @@ public:
   virtual bool add_system(const std::vector<SysEntry>&) { return true; }
   virtual bool add_sys_events(const std::vector<SysEvent>&) { return true; }
   virtual bool add_afk(const std::string&, const std::vector<SlotEntry>&) { return true; }
+  virtual bool add_app_stats(const std::string&, const std::vector<AppStatEntry>&) { return true; }
+  virtual bool add_slot_stats(const std::string&, const std::vector<SlotStatEntry>&) { return true; }
 };
 
 }

@@ -35,6 +35,8 @@ struct SysStat {
   long long ram_total_kb = 0;
   long long ram_avail_kb = 0;
   std::vector<DiskStat> disks;
+  int battery_pct = -1;
+  int battery_charging = 0;
   bool valid = false;
 };
 

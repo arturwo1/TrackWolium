@@ -45,6 +45,7 @@ private:
   void note_session(const Interval& iv);
   void check_limits(TimePoint now);
   void sample_metrics(TimePoint now, const std::vector<AppSample>& samples);
+  void sample_battery(TimePoint now, const SysStat* cached_sys);
 
   std::shared_ptr<IProbe> probe_;
   std::vector<std::shared_ptr<ISink>> sinks_;
@@ -89,6 +90,16 @@ private:
   std::map<std::pair<int, std::string>, ResAgg> pending_res_;
   std::vector<SysEntry> pending_sys_;
   std::vector<SysEvent> pending_sys_events_;
+  std::map<std::pair<std::string, std::string>, long long> pending_app_stats_;
+  std::map<std::tuple<int, std::string, std::string>, long long> pending_slot_stats_;
+  std::map<std::string, long long> bat_app_ms_;
+  std::map<std::pair<int, std::string>, long long> bat_slot_ms_;
+  int last_bat_pct_ = -1;
+  int last_bat_charging_ = 0;
+  long long last_bat_wall_ = 0;
+  long long last_bat_sys_ts_ = 0;
+  TimePoint last_bat_{};
+  bool bat_started_ = false;
   Duration proc_every_{10000};
   Duration sys_every_{600000};
   TimePoint last_proc_{};

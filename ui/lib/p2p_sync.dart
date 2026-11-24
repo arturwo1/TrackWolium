@@ -269,7 +269,10 @@ class P2pSync {
 
   Future<void> startIfEnabled() async {
     loadPeers();
-    if (enabled || peers.value.isNotEmpty) await start();
+    if (enabled || peers.value.isNotEmpty) {
+      await start();
+      if (peers.value.isNotEmpty) unawaited(syncIfStale());
+    }
   }
 
   static const _androidChannel = MethodChannel('wolium/usage');
@@ -336,6 +339,7 @@ class P2pSync {
     } catch (_) {}
     if (enabled || peers.value.isNotEmpty) {
       await start();
+      if (peers.value.isNotEmpty) unawaited(syncIfStale());
     }
   }
 
@@ -455,7 +459,9 @@ class P2pSync {
     final ep = parseEndpoint(host, defaultPort: port);
     final cleanPin = pin.trim();
     if (ep == null || cleanPin.length != 6) return tr('errInvalidPin');
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 12)
+      ..idleTimeout = const Duration(seconds: 45);
     try {
       final req = await client.post(ep.host, ep.port, '/p2p/pair');
       req.headers.contentType = ContentType.json;
@@ -466,8 +472,8 @@ class P2pSync {
         'platform': platformName,
         'port': kP2pPort,
       }));
-      final res = await req.close();
-      final text = await utf8.decoder.bind(res).join();
+      final res = await req.close().timeout(const Duration(seconds: 60));
+      final text = await utf8.decoder.bind(res).join().timeout(const Duration(seconds: 60));
       final data = jsonDecode(text) as Map<String, dynamic>;
       if (res.statusCode != 200 || data['ok'] != true) {
         final code = data['error'] as String? ?? '';
@@ -505,15 +511,17 @@ class P2pSync {
   Future<bool> syncPeer(PeerDevice peer) async {
     final ep = parseEndpoint(peer.host, defaultPort: peer.port);
     if (ep == null) return false;
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 12)
+      ..idleTimeout = const Duration(seconds: 45);
     try {
       final req = await client.post(ep.host, ep.port, '/p2p/sync');
       req.headers.contentType = ContentType.json;
       req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${peer.token}');
       req.write(jsonEncode(_exportSnapshot()));
-      final res = await req.close();
+      final res = await req.close().timeout(const Duration(seconds: 60));
       if (res.statusCode != 200) return false;
-      final text = await utf8.decoder.bind(res).join();
+      final text = await utf8.decoder.bind(res).join().timeout(const Duration(seconds: 60));
       final data = jsonDecode(text) as Map<String, dynamic>;
       _importSnapshot(peer.id, data, ep.host, ep.port);
       return true;
@@ -530,6 +538,26 @@ class P2pSync {
       if (await syncPeer(p)) ok++;
     }
     return ok;
+  }
+
+  bool _staleSyncing = false;
+
+  Future<int> syncIfStale({Duration maxAge = const Duration(minutes: 60)}) async {
+    if (_staleSyncing || peers.value.isEmpty) return 0;
+    _staleSyncing = true;
+    try {
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final threshold = maxAge.inSeconds;
+      var ok = 0;
+      for (final p in List<PeerDevice>.of(peers.value)) {
+        if (p.lastSync <= 0 || nowSec - p.lastSync >= threshold) {
+          if (await syncPeer(p)) ok++;
+        }
+      }
+      return ok;
+    } finally {
+      _staleSyncing = false;
+    }
   }
 
   void unpair(String id) {
@@ -585,10 +613,6 @@ class P2pSync {
   }
 
   Map<String, dynamic> _exportSnapshot() {
-    final since = DateTime.now().subtract(const Duration(days: 30));
-    final sinceUnix = DateTime(since.year, since.month, since.day).millisecondsSinceEpoch ~/ 1000;
-    final fromDay =
-        '${since.year.toString().padLeft(4, '0')}-${since.month.toString().padLeft(2, '0')}-${since.day.toString().padLeft(2, '0')}';
     final usage = <Map<String, dynamic>>[];
     final timeline = <Map<String, dynamic>>[];
     final apps = <Map<String, dynamic>>[];
@@ -604,11 +628,11 @@ class P2pSync {
     if (File(dbPath()).existsSync()) {
       final db = sqlite3.open(dbPath(), mode: OpenMode.readOnly);
       try {
-        for (final r in db.select('SELECT day, app, state, ms FROM usage WHERE day >= ?', [fromDay])) {
+        for (final r in db.select('SELECT day, app, state, ms FROM usage')) {
           usage.add({'day': r['day'], 'app': r['app'], 'state': r['state'], 'ms': r['ms']});
         }
         try {
-          for (final r in db.select('SELECT day, slot, app, state, ms FROM timeline WHERE day >= ?', [fromDay])) {
+          for (final r in db.select('SELECT day, slot, app, state, ms FROM timeline')) {
             timeline.add({'day': r['day'], 'slot': r['slot'], 'app': r['app'], 'state': r['state'], 'ms': r['ms']});
           }
         } catch (_) {}
@@ -645,46 +669,45 @@ class P2pSync {
           } catch (_) {}
         }
         try {
-          for (final r in db.select('SELECT day, browser, domain, ms, title, url FROM browser_usage WHERE day >= ?', [fromDay])) {
+          for (final r in db.select('SELECT day, browser, domain, ms, title, url FROM browser_usage')) {
             browser.add({'day': r['day'], 'browser': r['browser'], 'domain': r['domain'], 'ms': r['ms'], 'title': r['title'], 'url': r['url']});
           }
         } catch (_) {
           try {
-            for (final r in db.select('SELECT day, browser, domain, ms FROM browser_usage WHERE day >= ?', [fromDay])) {
+            for (final r in db.select('SELECT day, browser, domain, ms FROM browser_usage')) {
               browser.add({'day': r['day'], 'browser': r['browser'], 'domain': r['domain'], 'ms': r['ms']});
             }
           } catch (_) {}
         }
         try {
-          for (final r in db.select('SELECT day, slot, browser, domain, title, ms FROM browser_timeline WHERE day >= ?', [fromDay])) {
+          for (final r in db.select('SELECT day, slot, browser, domain, title, ms FROM browser_timeline')) {
             browserTimeline.add({'day': r['day'], 'slot': r['slot'], 'browser': r['browser'], 'domain': r['domain'], 'title': r['title'], 'ms': r['ms']});
           }
         } catch (_) {}
         try {
-          for (final r in db.select('SELECT day, kind, n FROM day_stats WHERE day >= ?', [fromDay])) {
+          for (final r in db.select('SELECT day, kind, n FROM day_stats')) {
             dayStats.add({'day': r['day'], 'kind': r['kind'], 'n': r['n']});
           }
         } catch (_) {}
         var hasOpens = false;
         try {
-          for (final r in db.select('SELECT day, app, kind, n FROM app_stats WHERE day >= ?', [fromDay])) {
+          for (final r in db.select('SELECT day, app, kind, n FROM app_stats')) {
             if (r['kind'] == 'opens') hasOpens = true;
             appStats.add({'day': r['day'], 'app': r['app'], 'kind': r['kind'], 'n': r['n']});
           }
         } catch (_) {}
         var hasSlotOpens = false;
         try {
-          for (final r in db.select('SELECT day, slot, app, kind, n FROM slot_stats WHERE day >= ?', [fromDay])) {
+          for (final r in db.select('SELECT day, slot, app, kind, n FROM slot_stats')) {
             if (r['kind'] == 'opens') hasSlotOpens = true;
             slotStats.add({'day': r['day'], 'slot': r['slot'], 'app': r['app'], 'kind': r['kind'], 'n': r['n']});
           }
         } catch (_) {}
         if (!hasOpens || !hasSlotOpens) {
           try {
-            final sinceUnix = DateTime(since.year, since.month, since.day).millisecondsSinceEpoch ~/ 1000;
             final sessOpens = <String, int>{};
             final sessSlotOpens = <String, int>{};
-            for (final r in db.select('SELECT app, start FROM sessions WHERE state = 0 AND start >= ?', [sinceUnix])) {
+            for (final r in db.select('SELECT app, start FROM sessions WHERE state = 0')) {
               final st = r['start'] as int;
               final dt = DateTime.fromMillisecondsSinceEpoch(st * 1000);
               final dk = '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
@@ -717,7 +740,7 @@ class P2pSync {
           } catch (_) {}
         }
         try {
-          for (final r in db.select('SELECT day, slot, app, cpu, ram, n, peak, ior, iow FROM res WHERE day >= ?', [fromDay])) {
+          for (final r in db.select('SELECT day, slot, app, cpu, ram, n, peak, ior, iow FROM res')) {
             res.add({
               'day': r['day'],
               'slot': r['slot'],
@@ -732,17 +755,17 @@ class P2pSync {
           }
         } catch (_) {}
         try {
-          for (final r in db.select('SELECT ts, kind, a, b FROM sysmon WHERE ts >= ?', [sinceUnix])) {
+          for (final r in db.select('SELECT ts, kind, a, b FROM sysmon')) {
             sysmon.add({'ts': r['ts'], 'kind': r['kind'], 'a': r['a'], 'b': r['b']});
           }
         } catch (_) {}
         try {
-          for (final r in db.select('SELECT day, slot, app, ms FROM afk WHERE day >= ?', [fromDay])) {
+          for (final r in db.select('SELECT day, slot, app, ms FROM afk')) {
             afk.add({'day': r['day'], 'slot': r['slot'], 'app': r['app'], 'ms': r['ms']});
           }
         } catch (_) {}
         try {
-          for (final r in db.select('SELECT ts, kind, duration_ms, extra FROM sys_events WHERE ts >= ?', [sinceUnix])) {
+          for (final r in db.select('SELECT ts, kind, duration_ms, extra FROM sys_events')) {
             sysEvents.add({'ts': r['ts'], 'kind': r['kind'], 'duration_ms': r['duration_ms'], 'extra': r['extra']});
           }
         } catch (_) {}

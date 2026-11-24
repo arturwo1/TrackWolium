@@ -20,6 +20,7 @@ const statMetricIds = [
   'opens',
   'notifs',
   'unlocks',
+  'appbattery',
   'power_sleep',
   'power_hibernate',
   'power_lock',
@@ -35,9 +36,11 @@ const _idColor = {
   'iow': 4,
   'sysram': 5,
   'sysdisk': 6,
+  'battery': 1,
   'opens': 1,
   'notifs': 2,
   'unlocks': 3,
+  'appbattery': 6,
   'power_sleep': 4,
   'power_hibernate': 5,
   'power_lock': 6,
@@ -71,12 +74,16 @@ String metricName(String id) {
       return tr('mSysRam');
     case 'sysdisk':
       return tr('mSysDisk');
+    case 'battery':
+      return tr('mBattery');
     case 'opens':
       return tr('opens');
     case 'notifs':
       return tr('notifs');
     case 'unlocks':
       return tr('unlocksLabel');
+    case 'appbattery':
+      return tr('mAppBattery');
     case 'power_sleep':
       return tr('powerSleep');
     case 'power_hibernate':
@@ -103,7 +110,7 @@ class ResSeries {
   final List<Map<String, double>> apps;
 
   bool get isPeak => id == 'peak';
-  bool get isSum => id == 'opens' || id == 'notifs' || id == 'unlocks' || id.startsWith('power_');
+  bool get isSum => id == 'opens' || id == 'notifs' || id == 'unlocks' || id == 'appbattery' || id.startsWith('power_');
 
   double maxIn(double a, double b) {
     var m = 0.0;
@@ -166,6 +173,10 @@ String _rate(double v) => '${formatBytes(v.round())}/${tr('unitS')}';
 String _size(double v) => formatKb(v.round());
 
 String _countText(double v) => '${v.round()}';
+
+String _pctText(double v) => '${v.round()}%';
+
+String _pct1Text(double v) => '${v.toStringAsFixed(1)}%';
 
 List<ResSeries> buildSeries({
   required Set<String> ids,
@@ -256,6 +267,26 @@ List<ResSeries> buildSeries({
       out.add(ResSeries(id, label, seriesColors[(6 + i) % seriesColors.length], _size, [for (final p in sys) if (p.device == k.device && p.kind == k.kind) Offset(p.t.toDouble(), (p.total - p.free).toDouble())]));
     }
   }
+  if (ids.contains('battery')) {
+    final batDevs = <String>[];
+    for (final p in sys) {
+      if (p.kind == 'battery' && !batDevs.contains(p.device)) batDevs.add(p.device);
+    }
+    if (batDevs.length <= 1) {
+      final ptsBat = [for (final p in sys) if (p.kind == 'battery') Offset(p.t.toDouble(), p.total.clamp(0, 100).toDouble())];
+      if (ptsBat.isNotEmpty) {
+        out.add(ResSeries('battery', metricName('battery'), seriesColors[_idColor['battery']!], _pctText, ptsBat));
+      }
+    } else {
+      for (var i = 0; i < batDevs.length; i++) {
+        final dev = batDevs[i];
+        final ptsBat = [for (final p in sys) if (p.device == dev && p.kind == 'battery') Offset(p.t.toDouble(), p.total.clamp(0, 100).toDouble())];
+        if (ptsBat.isEmpty) continue;
+        final dLabel = deviceNames[dev] ?? dev;
+        out.add(ResSeries('battery:$dev', '${metricName('battery')} ($dLabel)', seriesColors[(1 + i) % seriesColors.length], _pctText, ptsBat));
+      }
+    }
+  }
   return out;
 }
 
@@ -279,10 +310,12 @@ List<ResSeries> buildStatSeries({
   for (final kind in active) {
     final isSys = kind == 'unlocks' || kind.startsWith('power_');
     final isDuration = kind == 'power_sleep' || kind == 'power_hibernate' || kind == 'power_lock';
+    final isBattery = kind == 'appbattery';
+    final dbKind = isBattery ? 'battery' : kind;
     final byStart = <int, Map<String, double>>{};
     final sysTotals = <int, double>{};
     for (final p in pts) {
-      if (p.kind != kind || p.count <= 0) continue;
+      if (p.kind != dbKind || p.count <= 0) continue;
       if (isDuration) {
         if (minSec > 0 && p.count < minSec * 1000) continue;
         if (maxSec > 0 && p.count > maxSec * 1000) continue;
@@ -293,7 +326,7 @@ List<ResSeries> buildStatSeries({
       } else {
         if (p.app.isEmpty || skip(p.app) || (only != null && p.app != only)) continue;
         final map = byStart.putIfAbsent(st, () => {});
-        map[p.app] = (map[p.app] ?? 0) + p.count;
+        map[p.app] = (map[p.app] ?? 0) + (isBattery ? p.count / 10.0 : p.count.toDouble());
       }
     }
     final points = <Offset>[];
@@ -312,7 +345,7 @@ List<ResSeries> buildStatSeries({
         apps.add(per);
       }
     }
-    final fmt = isDuration ? (double v) => formatMs(v.round()) : _countText;
+    final fmt = isDuration ? (double v) => formatMs(v.round()) : (isBattery ? _pct1Text : _countText);
     out.add(ResSeries(kind, metricName(kind), metricColor(kind), fmt, points, apps));
   }
   return out;

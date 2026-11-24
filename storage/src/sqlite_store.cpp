@@ -84,6 +84,8 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::string& utf8_path, std
       "CREATE TABLE IF NOT EXISTS presence(ts INTEGER NOT NULL, client_id TEXT NOT NULL, name TEXT NOT NULL, details TEXT NOT NULL, state TEXT NOT NULL, started INTEGER NOT NULL, raw TEXT NOT NULL DEFAULT '');"
       "CREATE TABLE IF NOT EXISTS res(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, cpu INTEGER NOT NULL DEFAULT 0, ram INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 0, peak INTEGER NOT NULL DEFAULT 0, ior INTEGER NOT NULL DEFAULT 0, iow INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS afk(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app)) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS app_stats(day TEXT NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, app, kind)) WITHOUT ROWID;"
+      "CREATE TABLE IF NOT EXISTS slot_stats(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, slot, app, kind)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS sys_events(ts INTEGER NOT NULL, kind TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, extra TEXT NOT NULL DEFAULT '', PRIMARY KEY(ts, kind)) WITHOUT ROWID;"
       "CREATE TABLE IF NOT EXISTS apps(app TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '') WITHOUT ROWID;"
@@ -209,6 +211,63 @@ bool SqliteStore::add_afk(const std::string& day, const std::vector<SlotEntry>& 
     sqlite3_bind_int(st, 2, e.slot);
     sqlite3_bind_text(st, 3, e.app.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(st, 4, static_cast<sqlite3_int64>(e.ms));
+    if (sqlite3_step(st) != SQLITE_DONE) {
+      last_error_ = sqlite3_errmsg(db_);
+      ok = false;
+      break;
+    }
+    sqlite3_reset(st);
+  }
+  sqlite3_finalize(st);
+  return exec(db_, ok ? "COMMIT" : "ROLLBACK", &last_error_) && ok;
+}
+
+bool SqliteStore::add_app_stats(const std::string& day, const std::vector<AppStatEntry>& entries) {
+  if (entries.empty()) return true;
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
+  sqlite3_stmt* st = nullptr;
+  const char* sql = "INSERT INTO app_stats(day, app, kind, n) VALUES(?1, ?2, ?3, ?4) ON CONFLICT(day, app, kind) DO UPDATE SET n = n + excluded.n";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+    last_error_ = sqlite3_errmsg(db_);
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  bool ok = true;
+  for (const auto& e : entries) {
+    sqlite3_bind_text(st, 1, day.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, e.app.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, e.kind.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 4, static_cast<sqlite3_int64>(e.n));
+    if (sqlite3_step(st) != SQLITE_DONE) {
+      last_error_ = sqlite3_errmsg(db_);
+      ok = false;
+      break;
+    }
+    sqlite3_reset(st);
+  }
+  sqlite3_finalize(st);
+  return exec(db_, ok ? "COMMIT" : "ROLLBACK", &last_error_) && ok;
+}
+
+bool SqliteStore::add_slot_stats(const std::string& day, const std::vector<SlotStatEntry>& entries) {
+  if (entries.empty()) return true;
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!exec(db_, "BEGIN IMMEDIATE", &last_error_)) return false;
+  sqlite3_stmt* st = nullptr;
+  const char* sql = "INSERT INTO slot_stats(day, slot, app, kind, n) VALUES(?1, ?2, ?3, ?4, ?5) ON CONFLICT(day, slot, app, kind) DO UPDATE SET n = n + excluded.n";
+  if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+    last_error_ = sqlite3_errmsg(db_);
+    exec(db_, "ROLLBACK", nullptr);
+    return false;
+  }
+  bool ok = true;
+  for (const auto& e : entries) {
+    sqlite3_bind_text(st, 1, day.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 2, e.slot);
+    sqlite3_bind_text(st, 3, e.app.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 4, e.kind.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 5, static_cast<sqlite3_int64>(e.n));
     if (sqlite3_step(st) != SQLITE_DONE) {
       last_error_ = sqlite3_errmsg(db_);
       ok = false;

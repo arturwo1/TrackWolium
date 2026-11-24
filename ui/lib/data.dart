@@ -210,6 +210,9 @@ class GlobalDeviceStats {
   int opens = 0;
   int notifs = 0;
   int unlocks = 0;
+  int batteryPct = -1;
+  int batteryCharging = 0;
+  int batteryDrainTenths = 0;
   final Map<String, GlobalPowerRow> power = {};
 }
 
@@ -281,11 +284,12 @@ class SessionRecord {
 }
 
 class ActivityStats {
-  const ActivityStats({this.unlocks = 0, this.opens = const {}, this.notifs = const {}});
+  const ActivityStats({this.unlocks = 0, this.opens = const {}, this.notifs = const {}, this.batteryTenths = const {}});
 
   final int unlocks;
   final Map<String, int> opens;
   final Map<String, int> notifs;
+  final Map<String, int> batteryTenths;
 }
 
 class StatPoint {
@@ -678,6 +682,7 @@ class Usage {
     var unlocks = 0;
     final opens = <String, int>{};
     final notifs = <String, int>{};
+    final batteryTenths = <String, int>{};
     final sliced = startEpoch != null && endEpoch != null && endEpoch > startEpoch;
     final hasLocal = _hasLocal(devices);
     final remotes = _remoteIds(devices);
@@ -692,6 +697,7 @@ class Usage {
     if (hasLocal) {
       var gotSlotUnlocks = false;
       var gotSlotNotifs = false;
+      var gotSlotBattery = false;
       if (sliced) {
         try {
           for (final r in db.select('SELECT day, slot, app, kind, n FROM slot_stats WHERE day BETWEEN ? AND ?', [from, to])) {
@@ -704,6 +710,12 @@ class Usage {
               if (slotInside(r['day'] as String, r['slot'] as int)) {
                 final app = r['app'] as String;
                 notifs[app] = (notifs[app] ?? 0) + (r['n'] as int);
+              }
+            } else if (k == 'battery') {
+              gotSlotBattery = true;
+              if (slotInside(r['day'] as String, r['slot'] as int)) {
+                final app = r['app'] as String;
+                batteryTenths[app] = (batteryTenths[app] ?? 0) + (r['n'] as int);
               }
             }
           }
@@ -720,6 +732,13 @@ class Usage {
         try {
           for (final r in db.select("SELECT app, SUM(n) AS n FROM app_stats WHERE kind = 'notifs' AND day BETWEEN ? AND ? GROUP BY app", [from, to])) {
             notifs[r['app'] as String] = (notifs[r['app'] as String] ?? 0) + (r['n'] as int);
+          }
+        } catch (_) {}
+      }
+      if (!gotSlotBattery) {
+        try {
+          for (final r in db.select("SELECT app, SUM(n) AS n FROM app_stats WHERE kind = 'battery' AND day BETWEEN ? AND ? GROUP BY app", [from, to])) {
+            batteryTenths[r['app'] as String] = (batteryTenths[r['app'] as String] ?? 0) + (r['n'] as int);
           }
         } catch (_) {}
       }
@@ -771,6 +790,9 @@ class Usage {
             } else if (k == 'opens') {
               final app = r['app'] as String;
               opens[app] = (opens[app] ?? 0) + n;
+            } else if (k == 'battery') {
+              final app = r['app'] as String;
+              batteryTenths[app] = (batteryTenths[app] ?? 0) + n;
             }
           }
         } catch (_) {}
@@ -789,12 +811,14 @@ class Usage {
               notifs[app] = (notifs[app] ?? 0) + n;
             } else if (r['kind'] == 'opens') {
               opens[app] = (opens[app] ?? 0) + n;
+            } else if (r['kind'] == 'battery') {
+              batteryTenths[app] = (batteryTenths[app] ?? 0) + n;
             }
           }
         } catch (_) {}
       }
     }
-    return ActivityStats(unlocks: unlocks, opens: opens, notifs: notifs);
+    return ActivityStats(unlocks: unlocks, opens: opens, notifs: notifs, batteryTenths: batteryTenths);
   }
 
   List<StatPoint> statPoints(DateTime first, int w0, int w1, int bin, {Set<String> devices = const {'local'}, int? startEpoch, int? endEpoch}) {
@@ -1307,6 +1331,9 @@ class Usage {
       for (final n in st.notifs.values) {
         gs.notifs += n;
       }
+      for (final n in st.batteryTenths.values) {
+        gs.batteryDrainTenths += n;
+      }
       try {
         for (final r in db.select('SELECT kind, duration_ms FROM sys_events WHERE ts >= ?1 AND ts < ?2', [epStart, epEnd])) {
           final k = r['kind'] as String;
@@ -1325,6 +1352,9 @@ class Usage {
           if (k == 'ram') {
             gs.ramTotalKb = a;
             gs.ramFreeKb = b;
+          } else if (k == 'battery') {
+            gs.batteryPct = a;
+            gs.batteryCharging = b;
           } else if (k.startsWith('disk:')) {
             gs.disks.add(GlobalDiskRow(k.substring(5), a, b));
           }
@@ -1356,6 +1386,9 @@ class Usage {
       for (final n in st.notifs.values) {
         gs.notifs += n;
       }
+      for (final n in st.batteryTenths.values) {
+        gs.batteryDrainTenths += n;
+      }
       try {
         for (final r in db.select('SELECT kind, duration_ms FROM remote_sys_events WHERE device = ? AND ts >= ? AND ts < ?', [id, epStart, epEnd])) {
           final k = r['kind'] as String;
@@ -1374,6 +1407,9 @@ class Usage {
           if (k == 'ram') {
             gs.ramTotalKb = a;
             gs.ramFreeKb = b;
+          } else if (k == 'battery') {
+            gs.batteryPct = a;
+            gs.batteryCharging = b;
           } else if (k.startsWith('disk:')) {
             gs.disks.add(GlobalDiskRow(k.substring(5), a, b));
           }

@@ -23,6 +23,8 @@ public:
   bool set_names(const std::vector<AppMeta>& names) override;
   bool add_resources(const std::string& day, const std::vector<ResEntry>& entries) override;
   bool add_afk(const std::string& day, const std::vector<SlotEntry>& entries) override;
+  bool add_app_stats(const std::string& day, const std::vector<AppStatEntry>& entries) override;
+  bool add_slot_stats(const std::string& day, const std::vector<SlotStatEntry>& entries) override;
   bool add_system(const std::vector<SysEntry>& entries) override;
   bool add_sys_events(const std::vector<SysEvent>& entries) override;
   std::vector<SysEvent> load_sys_events(long long from_ts, long long to_ts);

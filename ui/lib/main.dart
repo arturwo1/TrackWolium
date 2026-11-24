@@ -54,8 +54,6 @@ Future<void> main() async {
   await loadDefaultDeviceName();
   deviceId();
   await P2pSync.instance.startIfEnabled();
-  WidgetsFlutterBinding.ensureInitialized();
-  if (!Platform.isWindows && !Platform.isAndroid) posixTouchAlive();
   WindowState.instance.restore();
   if (Platform.isAndroid) collector = AndroidCollector(UsageBridge())..start();
   runApp(const WoliumApp());
@@ -280,10 +278,22 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   final Set<String> expandedBrowsers = {};
   ActivityStats activityStats = const ActivityStats();
   List<GlobalDeviceStats> globalStats = const [];
+  int dataTab = 0;
+  String _lastDbSig = '';
+  String _cachedSeriesKey = '';
+  List<ResSeries> _cachedSeries = const [];
 
   bool get isLocalOnly => selectedDevices.length == 1 && selectedDevices.contains('local');
   bool get includesLocal => selectedDevices.isEmpty || selectedDevices.contains('local');
   bool get showMultiState => !Platform.isAndroid || !isLocalOnly;
+
+  bool availableBattery() =>
+      sysPts.any((p) => p.kind == 'battery') ||
+      globalStats.any((g) => g.batteryPct >= 0 || g.batteryDrainTenths > 0) ||
+      statPts.any((p) => p.kind == 'battery') ||
+      activityStats.batteryTenths.isNotEmpty ||
+      Platform.isAndroid ||
+      peerDevices.any((d) => d.platform.toLowerCase() == 'android');
 
   Set<String> availableResourceIds() {
     final out = <String>{
@@ -296,6 +306,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     if (resMap.values.any((a) => a.iow > 0)) out.add('iow');
     if (sysPts.any((p) => p.kind == 'ram')) out.add('sysram');
     if (sysPts.any((p) => p.kind.startsWith('disk:'))) out.add('sysdisk');
+    if (sysPts.any((p) => p.kind == 'battery') || globalStats.any((g) => g.batteryPct >= 0) || Platform.isAndroid) {
+      out.add('battery');
+    }
     return out;
   }
   bool get hasCustomTime => preset == 'custom' && (fromTime.hour != 0 || fromTime.minute != 0 || toTime.hour != 23 || toTime.minute != 59);
@@ -337,10 +350,6 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     final idle = realFocusOn || (timeOn && ColumnPrefs.shown('realcol')) ? usage.afk(fk, tk, devices: selectedDevices) : <String, int>{};
     afkMs = idle;
     if (realFocusOn) {
-      for (final r in list) {
-        final v = idle[r.app];
-        if (v != null) r.ms[0] = math.max(0, r.ms[0] - v);
-      }
       list = list.where((r) => r.total > 0).toList();
     }
     if (ViewPrefs.minSec > 0) {
@@ -393,10 +402,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     presenceRows = includesLocal ? usage.presence(from, w0, w1) : [];
     final en = MetricPrefs.enabled.value;
     final wantProc = !isLocalOnly || (!Platform.isAndroid && en.any(procMetricIds.contains));
-    final wantSys = !isLocalOnly || (!Platform.isAndroid && en.any(sysMetricIds.contains));
+    final wantSys = !isLocalOnly || (!Platform.isAndroid && en.any(sysMetricIds.contains)) || resSel.contains('battery') || Platform.isAndroid;
     resPts = wantProc ? usage.resPoints(from, w0, w1, bin, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp) : [];
     sysPts = wantSys ? usage.sysPoints(from, w0, w1, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp) : [];
     statPts = resSel.any(statMetricIds.contains) ? usage.statPoints(from, w0, w1, bin, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp) : [];
+    _cachedSeriesKey = '';
     for (final r in presenceRows) {
       if (r.name.isEmpty && r.clientId.isNotEmpty) resolveRpcName(r.clientId);
     }
@@ -576,15 +586,16 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       'total',
       'opens',
       if (Platform.isAndroid || peerDevices.isNotEmpty || activityStats.notifs.isNotEmpty) 'notifs',
+      if (availableBattery()) 'appbattery',
       if (showMultiState) ...procMetricIds.where(availRes.contains),
     ];
   }
 
   List<String> activeColumns() => ColumnPrefs.sorted([for (final c in columnChoices()) if (ColumnPrefs.shown(c)) c]);
 
-  int realMs(AppUsage r) => realFocusOn ? r.ms[0] : math.max(0, r.ms[0] - (afkMs[r.app] ?? 0));
+  int realMs(AppUsage r) => math.max(0, r.ms[0] - (afkMs[r.app] ?? 0));
 
-  String columnLabel(String id) => procMetricIds.contains(id) ? metricName(id) : tr(id);
+  String columnLabel(String id) => (id == 'appbattery' || id == 'battery' || procMetricIds.contains(id)) ? metricName(id) : tr(id);
 
   RelativeRect menuPosition(Offset at) {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -890,6 +901,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       case 'notifs':
         final n = activityStats.notifs[r.app] ?? 0;
         return n == 0 ? '-' : '$n';
+      case 'appbattery':
+        final bt = activityStats.batteryTenths[r.app] ?? 0;
+        return bt == 0 ? '-' : '${(bt / 10).toStringAsFixed(1)}%';
       case 'cpu':
         return a == null || a.cpuMs == 0 ? '-' : formatCpuMs(a.cpuMs);
       case 'ram':
@@ -977,7 +991,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   void onMetricsChanged() {
     if (!mounted) return;
-    resSel.removeWhere((id) => !statMetricIds.contains(id) && !MetricPrefs.enabled.value.contains(id) && !availableResourceIds().contains(id));
+    resSel.removeWhere((id) => id != 'battery' && !statMetricIds.contains(id) && !MetricPrefs.enabled.value.contains(id) && !availableResourceIds().contains(id));
+    dirty = true;
     final fk = keyOf(from);
     final tk = keyOf(to);
     setState(() {
@@ -995,6 +1010,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   void onHiddenChanged() {
     if (!mounted) return;
     if (only != null && Hidden.has(only!)) only = null;
+    dirty = true;
     refresh();
     setState(() => loadChart(force: true));
   }
@@ -1068,6 +1084,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         if (updating) Text(tr('updating'), style: const TextStyle(color: cMuted)),
         if (updateFailed)
           Text(updateNote == 'permission' ? tr('updatePermission') : (updateNote.isEmpty ? tr('updateFailed') : '${tr('updateFailed')} ($updateNote)'), style: const TextStyle(color: cDanger)),
+        if (!Platform.isAndroid && prefs.flag('localapi'))
+          Text(tr('updateExtNotice'), style: const TextStyle(color: cMuted, fontSize: 12)),
       ]),
     );
   }
@@ -1088,6 +1106,18 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     toTime = const TimeOfDay(hour: 23, minute: 59);
   }
 
+  String _computeDbSig(String rk) {
+    String fileSig(String path) {
+      try {
+        final s = File(path).statSync();
+        return '${s.modified.microsecondsSinceEpoch}:${s.size}';
+      } catch (_) {
+        return '-';
+      }
+    }
+    return '$rk|${fileSig(dbPath())}|${fileSig('${dbPath()}-wal')}|${P2pSync.instance.version.value}|${ViewPrefs.rev.value}|${Hidden.apps.value.length}|${Categories.list.value.length}|${MetricPrefs.enabled.value.length}';
+  }
+
   void refresh() {
     if (preset != 'custom') applyPreset(preset);
     final today = dateOnly(DateTime.now());
@@ -1103,36 +1133,50 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     final up = b != null && b <= const Duration(seconds: staleSeconds);
     final l = isLocalOnly && up && !hasCustomTime && from == to && to == today ? usage.live() : null;
     final rk = '$fk|$tk|${sEp ?? ''}|${eEp ?? ''}|$deviceFilterKey';
+    final sig = _computeDbSig(rk);
+    final dbAvailable = usage.available;
+    final pausedNow = usage.paused;
+    final wasUp = beat != null && beat! <= const Duration(seconds: staleSeconds);
+    final changed = rangeKey != rk;
+    final dbModified = sig != _lastDbSig;
+    if (!changed && !dirty && !dbModified && l == null && dbAvailable == hasDb && up == wasUp && pausedNow == isPaused && latestPeers.length == peerDevices.length && !liveMode) {
+      beat = b;
+      return;
+    }
+
     final src = l ?? usage.range(fk, tk, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp);
-    final paths = {for (final r in src) if (r.visible > 0 || Platform.isAndroid || !isLocalOnly) r.app: r.path};
-    final titles = {for (final r in src) r.app: r.title};
-    if (rangeKey != rk || ticks % 30 == 0) {
-      final all = usage.names(devices: selectedDevices);
-      final real = Platform.isAndroid || !isLocalOnly ? all.keys.toSet() : usage.windowed();
-      for (final e in all.entries) {
-        if (real.contains(e.key)) paths.putIfAbsent(e.key, () => e.value.path);
-        titles.putIfAbsent(e.key, () => e.value.name);
+    if (changed || dirty || dbModified || l != null) {
+      final paths = {for (final r in src) if (r.visible > 0 || Platform.isAndroid || !isLocalOnly) r.app: r.path};
+      final titles = {for (final r in src) r.app: r.title};
+      if (changed || ticks % 30 == 0) {
+        final all = usage.names(devices: selectedDevices);
+        final real = Platform.isAndroid || !isLocalOnly ? all.keys.toSet() : usage.windowed();
+        for (final e in all.entries) {
+          if (real.contains(e.key)) paths.putIfAbsent(e.key, () => e.value.path);
+          titles.putIfAbsent(e.key, () => e.value.name);
+        }
+        Categories.autoAssign(paths, sys: Platform.isAndroid ? usage.appCats() : const {}, titles: titles, windowed: real);
+      } else {
+        Categories.autoAssign(paths, titles: titles);
       }
-      Categories.autoAssign(paths, sys: Platform.isAndroid ? usage.appCats() : const {}, titles: titles, windowed: real);
-    } else {
-      Categories.autoAssign(paths, titles: titles);
     }
     setState(() {
-      hasDb = usage.available;
-      days = usage.days();
+      hasDb = dbAvailable;
       peerDevices = latestPeers;
       beat = b;
-      isPaused = usage.paused;
+      isPaused = pausedNow;
       liveMode = l != null;
       final every = dayCount > 1 ? 30 : 5;
-      final changed = rangeKey != rk;
       if (changed) {
         viewFrom = customChartInitFrom ?? 0;
         viewTo = customChartInitTo ?? dayCount * 86400.0;
         viewBucket = bucketSecFor(viewTo - viewFrom, 600);
       }
-      if (changed || dirty || ticks % every == 0) {
+      final reloadHeavy = changed || dirty || (dbModified && (dayCount == 1 || ticks % every == 0)) || (l != null && ticks % every == 0);
+      if (reloadHeavy) {
         dirty = false;
+        _lastDbSig = sig;
+        days = usage.days();
         names = usage.names(devices: selectedDevices);
         sitesByBrowser = usage.browserSites(fk, tk, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp);
         activityStats = usage.activityStats(fk, tk, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp);
@@ -1388,9 +1432,13 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   List<String> exportChoicesFor(Set<String> expDevices) {
     final hasMulti = !Platform.isAndroid || expDevices.any((d) => d != 'local');
+    final hasBat = Platform.isAndroid ||
+        activityStats.batteryTenths.isNotEmpty ||
+        globalStats.any((g) => g.batteryPct >= 0 || g.batteryDrainTenths > 0) ||
+        expDevices.any((id) => peerDevices.any((d) => d.id == id && d.platform.toLowerCase() == 'android'));
     return hasMulti
-        ? ['focused', 'realcol', 'open', 'minimized', 'background', 'total', 'opens', if (Platform.isAndroid || peerDevices.isNotEmpty || activityStats.notifs.isNotEmpty) 'notifs', 'category', ...procMetricIds]
-        : ['total', 'opens', 'notifs', 'category'];
+        ? ['focused', 'realcol', 'open', 'minimized', 'background', 'total', 'opens', if (Platform.isAndroid || peerDevices.isNotEmpty || activityStats.notifs.isNotEmpty) 'notifs', if (hasBat) 'appbattery', 'category', ...procMetricIds]
+        : ['total', 'opens', 'notifs', if (hasBat) 'appbattery', 'category'];
   }
 
   Future<({Set<String> cols, String browserMode, Set<String> devices, String format})?> exportColumnsDialog() {
@@ -1601,12 +1649,13 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           ? {for (final id in expDevices) id: usage.resources(fk, tk, devices: {id})}
           : <String, Map<String, ResAgg>>{};
       final wbByDev = <String, ActivityStats>{
-        if (cols.contains('opens') || cols.contains('notifs'))
+        if (cols.contains('opens') || cols.contains('notifs') || cols.contains('appbattery'))
           for (final id in expDevices) id: usage.activityStats(fk, tk, devices: {id}, startEpoch: sEp, endEpoch: eEp),
       };
       final sitesByDev = browserMode == 'apps' ? const <String, Map<String, List<SiteUsage>>>{} : usage.browserSitesByDevice(fk, tk, devices: expDevices, startEpoch: sEp, endEpoch: eEp);
       String unit(String id) {
         if (id == 'category' || id == 'opens' || id == 'notifs') return '';
+        if (id == 'appbattery') return ' (%)';
         if (id == 'cpu') return ' (s)';
         if (id == 'ram' || id == 'peak') return ' (KB)';
         if (id == 'ior' || id == 'iow') return ' (B)';
@@ -1633,6 +1682,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             return '${wb?.opens[r.app] ?? 0}';
           case 'notifs':
             return '${wb?.notifs[r.app] ?? 0}';
+          case 'appbattery':
+            final bt = wb?.batteryTenths[r.app] ?? 0;
+            return bt == 0 ? '0' : (bt / 10).toStringAsFixed(1);
           case 'category':
             return q(Categories.of(r.app)?.name ?? '');
           case 'cpu':
@@ -1832,7 +1884,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   Widget iconOf(String app, double size) => AppIcon(title: titleOf(app), path: names[app]?.path ?? '', size: size);
 
-  int metricValue(AppUsage r) => metricOf(r.ms, metric);
+  int metricValue(AppUsage r) => (metric == Metric.focused && realFocusOn) ? realMs(r) : metricOf(r.ms, metric);
 
   List<AppUsage> sortedRows() {
     final list = List<AppUsage>.from(rows);
@@ -1854,6 +1906,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           return activityStats.opens[r.app] ?? 0;
         case 'notifs':
           return activityStats.notifs[r.app] ?? 0;
+        case 'appbattery':
+          return activityStats.batteryTenths[r.app] ?? 0;
         case 'cpu':
           return resMap[r.app]?.cpuMs ?? 0;
         case 'ram':
@@ -1944,6 +1998,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     final avail = availableResourceIds();
     final ids = [
       for (final id in statMetricIds) if (resSel.contains(id)) id,
+      if (!showMultiState && resSel.contains('battery') && avail.contains('battery')) 'battery',
       if (showMultiState)
         for (final id in allMetricIds) if (resSel.contains(id) && avail.contains(id)) id,
     ];
@@ -2138,7 +2193,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   Future<void> linesPopover(BuildContext ctx) {
     return popover(ctx, (set) {
       final avail = availableResourceIds();
-      final ids = showMultiState ? allMetricIds.where(avail.contains).toList() : const <String>[];
+      final showBat = availableBattery();
+      final statIds = [for (final id in statMetricIds) if (id != 'appbattery' || showBat) id];
+      final ids = showMultiState
+          ? allMetricIds.where(avail.contains).toList()
+          : [if (avail.contains('battery')) 'battery'];
       void toggleSeries(String id) {
         setState(() {
           if (resSel.contains(id)) {
@@ -2146,6 +2205,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           } else {
             resSel.add(id);
           }
+          _cachedSeriesKey = '';
           loadChart(force: true);
         });
         set(() {});
@@ -2157,7 +2217,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           setState(() => showTime = !showTime);
           set(() {});
         }, dot: cPrimary),
-        for (final id in statMetricIds)
+        for (final id in statIds)
           popRow(
             metricName(id),
             resSel.contains(id),
@@ -2166,7 +2226,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             enter: () => seriesFocus.value = id,
             leave: () => seriesFocus.value = null,
           ),
-        if (showMultiState && (ids.isNotEmpty || !Platform.isAndroid)) ...[
+        if (ids.isNotEmpty || (showMultiState && !Platform.isAndroid)) ...[
           const Divider(height: 8),
           for (final id in ids)
             popRow(
@@ -2309,40 +2369,47 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   Widget chartPanelBody(bool narrow) {
     final avail = availableResourceIds();
     final activeStat = [for (final id in statMetricIds) if (resSel.contains(id)) id];
-    final activeRes = showMultiState ? [for (final id in allMetricIds) if (resSel.contains(id) && avail.contains(id)) id] : const <String>[];
+    final activeRes = showMultiState
+        ? [for (final id in allMetricIds) if (resSel.contains(id) && avail.contains(id)) id]
+        : [if (resSel.contains('battery') && avail.contains('battery')) 'battery'];
     final lineCount = (showTime ? 1 : 0) + activeStat.length + activeRes.length;
     final noLines = lineCount == 0;
     final devNames = {
       'local': deviceName(),
       for (final d in peerDevices) d.id: d.name,
     };
-    final seriesList = noLines
-        ? const <ResSeries>[]
-        : [
-            if (activeRes.isNotEmpty)
-              ...buildSeries(
-                ids: resSel,
-                pts: resPts,
-                sys: sysPts,
-                only: only,
-                skip: (a) => !appAllowed(a),
-                bucketSec: viewBucket,
-                deviceNames: devNames,
-              ),
-            if (activeStat.isNotEmpty)
-              ...buildStatSeries(
-                ids: resSel,
-                pts: statPts,
-                w0: loadW0 < 0 ? 0 : loadW0,
-                w1: loadW1 <= 0 ? dayCount * 86400 : loadW1,
-                bin: loadBin <= 0 ? 1 : loadBin,
-                bucketSec: viewBucket,
-                minSec: ViewPrefs.minSec,
-                maxSec: ViewPrefs.maxSec,
-                only: only,
-                skip: (a) => !appAllowed(a),
-              ),
-          ];
+    final sKey = '${noLines ? 0 : 1}|${activeStat.join(',')}|${activeRes.join(',')}|${resPts.length}|${sysPts.length}|${statPts.length}|${only ?? ''}|${catFilter ?? ''}|$viewBucket|$loadW0|$loadW1|${ViewPrefs.minSec}|${ViewPrefs.maxSec}|$_lastDbSig|$deviceFilterKey';
+    if (sKey != _cachedSeriesKey) {
+      _cachedSeriesKey = sKey;
+      _cachedSeries = noLines
+          ? const <ResSeries>[]
+          : [
+              if (activeRes.isNotEmpty)
+                ...buildSeries(
+                  ids: resSel,
+                  pts: resPts,
+                  sys: sysPts,
+                  only: only,
+                  skip: (a) => !appAllowed(a),
+                  bucketSec: viewBucket,
+                  deviceNames: devNames,
+                ),
+              if (activeStat.isNotEmpty)
+                ...buildStatSeries(
+                  ids: resSel,
+                  pts: statPts,
+                  w0: loadW0 < 0 ? 0 : loadW0,
+                  w1: loadW1 <= 0 ? dayCount * 86400 : loadW1,
+                  bin: loadBin <= 0 ? 1 : loadBin,
+                  bucketSec: viewBucket,
+                  minSec: ViewPrefs.minSec,
+                  maxSec: ViewPrefs.maxSec,
+                  only: only,
+                  skip: (a) => !appAllowed(a),
+                ),
+            ];
+    }
+    final seriesList = _cachedSeries;
     return Panel(
       padding: EdgeInsets.all(narrow ? 12 : 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2607,25 +2674,50 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   Widget compactList(TextStyle head) {
     final ids = activeColumns();
     final useButtons = !Platform.isAndroid || ViewPrefs.androidControls == 'buttons';
-    Widget stat(String label, String text) {
-      final w = Padding(
-        padding: const EdgeInsets.only(right: 14, top: 4),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label, style: const TextStyle(color: cMuted, fontSize: 12)),
-          Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
-        ]),
-      );
-      return useButtons ? selectableDialog(w) : w;
-    }
+    final sortChoices = <String>['app', ...ids];
+    final defaultSort = showMultiState
+        ? (metric == Metric.focused ? (realFocusOn ? 'realcol' : 'focused') : metric.name)
+        : 'total';
+    final effectiveSort = sortChoices.contains(sortKey)
+        ? sortKey!
+        : (sortChoices.contains(defaultSort) ? defaultSort : (sortChoices.contains('total') ? 'total' : sortChoices.first));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Expanded(
-          child: Wrap(children: [
-            sortHead(tr('app'), 'app', head),
-            for (final id in ids) sortHead(columnLabel(id), id, head),
-          ]),
+        Text('${tr('sortLabel')}: ', style: head.copyWith(fontSize: 12)),
+        Flexible(
+          child: SelectBox<String>(
+            value: effectiveSort,
+            items: [
+              for (final k in sortChoices)
+                DropdownMenuItem<String>(
+                  value: k,
+                  child: Text(k == 'app' ? tr('app') : columnLabel(k), overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              buzz(0);
+              setState(() {
+                sortKey = v;
+                sortAsc = v == 'app' || v == 'category';
+              });
+            },
+          ),
         ),
+        IconButton(
+          tooltip: tr('sortLabel'),
+          visualDensity: VisualDensity.compact,
+          icon: Icon(sortAsc ? Icons.arrow_upward : Icons.arrow_downward, size: 17, color: cPrimary),
+          onPressed: () {
+            buzz(0);
+            setState(() {
+              sortKey ??= effectiveSort;
+              sortAsc = !sortAsc;
+            });
+          },
+        ),
+        const Spacer(),
         IconButton(
           tooltip: tr('optColumns'),
           visualDensity: VisualDensity.compact,
@@ -2639,11 +2731,20 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           final sites = bId == null ? const <SiteUsage>[] : (sitesByBrowser[bId] ?? const <SiteUsage>[]);
           final expanded = sites.isNotEmpty && expandedBrowsers.contains(r.app);
           final titleWidget = EllipsisText(r.title, style: const TextStyle(fontWeight: FontWeight.w800));
+          final metricIds = <String>[for (final id in ids) if (id != 'total' && id != 'now') id];
+          final visibleMetrics = metricIds.length <= 4
+              ? metricIds
+              : [for (final id in metricIds) if (cellText(id, r) != '-') id];
+          final cardBg = menuApp == r.app
+              ? cSoft.withValues(alpha: 0.7)
+              : (hoverApp == r.app ? cSoft.withValues(alpha: 0.35) : (only == r.app ? cSoft.withValues(alpha: 0.25) : null));
+
           final cardBody = Container(
             width: double.infinity,
             margin: const EdgeInsets.only(top: 8),
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
+              color: cardBg,
               borderRadius: BorderRadius.circular(rMd),
               border: Border.all(color: only == r.app ? cPrimary : cBorder),
             ),
@@ -2676,10 +2777,36 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                   ),
                 if (useButtons) hideButton(r),
               ]),
-              Wrap(children: [
-                for (final id in ids)
-                  if (id != 'total' && id != 'now') stat(columnLabel(id), cellText(id, r)),
-              ]),
+              if (visibleMetrics.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                LayoutBuilder(
+                  builder: (context, area) {
+                    final cellW = math.max(110.0, (area.maxWidth - 8) / 2);
+                    return Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        for (final id in visibleMetrics)
+                          SizedBox(
+                            width: cellW,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: cSoft.withValues(alpha: 0.28),
+                                borderRadius: BorderRadius.circular(rSm),
+                              ),
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                EllipsisText(columnLabel(id), style: const TextStyle(color: cMuted, fontSize: 11)),
+                                const SizedBox(height: 1),
+                                EllipsisText(cellText(id, r), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                              ]),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ],
               if (expanded) ...[
                 const Divider(height: 14),
                 for (final s in sites.take(6))
@@ -2700,10 +2827,19 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               ],
             ]),
           );
-          return GestureDetector(
+          final wrappedCard = GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: () => toggleOnly(r.app),
+            onSecondaryTapUp: !Platform.isAndroid ? (d) => rowMenu(r, d.globalPosition) : null,
             onLongPress: Platform.isAndroid && !useButtons ? () => androidMenu(r) : null,
             child: useButtons ? cardBody : noSelect(cardBody),
+          );
+          if (Platform.isAndroid) return wrappedCard;
+          return MouseRegion(
+            cursor: SystemMouseCursors.click,
+            onEnter: (_) => setState(() => hoverApp = r.app),
+            onExit: (_) => setState(() => hoverApp = hoverApp == r.app ? null : hoverApp),
+            child: wrappedCard,
           );
         }(),
       ],
@@ -2715,7 +2851,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     AppUsage best = rows.first;
     final useFocus = rows.any((r) => r.ms[0] > 0);
     final useVisible = !useFocus && rows.any((r) => r.visible > 0);
-    int score(AppUsage r) => useFocus ? r.ms[0] : (useVisible ? r.visible : r.total);
+    int score(AppUsage r) => useFocus ? (realFocusOn ? realMs(r) : r.ms[0]) : (useVisible ? r.visible : r.total);
     for (final r in rows) {
       if (score(r) > score(best)) best = r;
     }
@@ -2901,6 +3037,15 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           ),
           const Divider(height: 16),
         ],
+        if (d.batteryPct >= 0 || d.batteryDrainTenths > 0) ...[
+          Text(tr('globalBattery'), style: head),
+          const SizedBox(height: 2),
+          if (d.batteryPct >= 0)
+            kvRow(tr('mBattery'), '${d.batteryPct}% (${tr(d.batteryCharging != 0 ? 'batteryCharging' : 'batteryDischarging')})'),
+          if (d.batteryDrainTenths > 0)
+            kvRow(tr('globalBatteryDrain'), '${(d.batteryDrainTenths / 10).toStringAsFixed(1)}%'),
+          const Divider(height: 16),
+        ],
         Text(tr('globalActivity'), style: head),
         const SizedBox(height: 2),
         if (d.focusedMs > 0 || isDesk) kvRow(tr('focused'), formatMs(d.focusedMs)),
@@ -2928,6 +3073,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         tot.opens += d.opens;
         tot.notifs += d.notifs;
         tot.unlocks += d.unlocks;
+        tot.batteryDrainTenths += d.batteryDrainTenths;
         for (final e in d.power.entries) {
           final p = tot.power.putIfAbsent(e.key, GlobalPowerRow.new);
           p.count += e.value.count;
@@ -2957,23 +3103,74 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   Widget activity(bool narrow) {
     const head = TextStyle(color: cMuted, fontWeight: FontWeight.w800);
+    final hasGlobal = globalStats.isNotEmpty;
+    final tabIdx = hasGlobal ? dataTab : 0;
+
+    Widget tabBtn(int idx, IconData icon, String label) {
+      final active = tabIdx == idx;
+      return InkWell(
+        borderRadius: BorderRadius.circular(rSm),
+        onTap: () {
+          if (tabIdx == idx) return;
+          buzz(0);
+          setState(() => dataTab = idx);
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: active ? cPrimary.withValues(alpha: 0.16) : cSoft.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(rSm),
+            border: Border.all(color: active ? cPrimary : cBorder),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 16, color: active ? cPrimary : cMuted),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: active ? cPrimary : cMuted)),
+          ]),
+        ),
+      );
+    }
+
+    final bodyCard = tabIdx == 1
+        ? globalSummaryCard(narrow)
+        : (rows.isEmpty
+            ? Panel(child: selectableDialog(Text(tr('noData'))))
+            : Panel(
+                padding: EdgeInsets.all(narrow ? 12 : 16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  narrow ? compactList(head) : wideTable(head),
+                ]),
+              ));
+
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       leaderCard(),
       chartPanel(narrow),
       const SizedBox(height: 12),
-      if (rows.isEmpty)
-        Panel(child: selectableDialog(Text(tr('noData'))))
-      else
-        Panel(
-          padding: EdgeInsets.all(narrow ? 12 : 16),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            narrow ? compactList(head) : wideTable(head),
-          ]),
-        ),
-      if (globalStats.isNotEmpty) ...[
-        const SizedBox(height: 12),
-        globalSummaryCard(narrow),
+      if (hasGlobal) ...[
+        Row(children: [
+          tabBtn(0, Icons.apps_outlined, tr('navAppsTab')),
+          const SizedBox(width: 8),
+          tabBtn(1, Icons.assessment_outlined, tr('globalSummary')),
+        ]),
+        const SizedBox(height: 8),
       ],
+      if (hasGlobal && narrow)
+        GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (d) {
+            final vx = d.primaryVelocity ?? 0;
+            if (vx < -280 && dataTab == 0) {
+              buzz(0);
+              setState(() => dataTab = 1);
+            } else if (vx > 280 && dataTab == 1) {
+              buzz(0);
+              setState(() => dataTab = 0);
+            }
+          },
+          child: bodyCard,
+        )
+      else
+        bodyCard,
     ]);
   }
 
@@ -3242,6 +3439,8 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
   List<LocalAddress> localIps = [];
   String? p2pStatusText;
   bool p2pStatusOk = true;
+  bool p2pSyncing = false;
+  String? p2pSyncingPeerId;
   late bool crashLogs = !prefs.flag('nocrashlogs');
   bool browserAccess = false;
 
@@ -3606,21 +3805,30 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
   }
 
   Future<bool> _openBrowserExtensionsTab(({String id, String name, String? exe, String url}) target) async {
+    Clipboard.setData(ClipboardData(text: target.url));
+    final setupUri = Uri.http('127.0.0.1:9095', '/ext-setup', {
+      'url': target.url,
+      'browser': target.name,
+      'dir': _extFolderPath(),
+      'lang': language.value,
+    }).toString();
     try {
       if (Platform.isWindows && target.exe != null && File(target.exe!).existsSync()) {
-        await Process.start(target.exe!, [target.url], mode: ProcessStartMode.detached);
+        await Process.start(target.exe!, [setupUri], mode: ProcessStartMode.detached);
         return true;
       }
       if (Platform.isMacOS && target.name.isNotEmpty) {
-        final res = await Process.run('open', ['-a', target.name, target.url]);
+        final res = await Process.run('open', ['-a', target.name, setupUri]);
         if (res.exitCode == 0) return true;
       }
       if (Platform.isLinux && target.exe != null && File(target.exe!).existsSync()) {
-        await Process.start(target.exe!, [target.url], mode: ProcessStartMode.detached);
+        await Process.start(target.exe!, [setupUri], mode: ProcessStartMode.detached);
+        return true;
+      }
+      if (await launchUrl(Uri.parse(setupUri), mode: LaunchMode.externalApplication)) {
         return true;
       }
     } catch (_) {}
-    Clipboard.setData(ClipboardData(text: target.url));
     return false;
   }
 
@@ -3676,7 +3884,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                           if (c.mounted) {
                             setDlg(() {
                               noticeOk = ok;
-                              notice = ok ? target.url : tr('extOpenFallback');
+                              notice = ok ? tr('extSetupOpened').replaceAll('{url}', target.url) : tr('extOpenFallback');
                             });
                           }
                         },
@@ -3859,6 +4067,8 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
       Text(tr('extTitle'), style: const TextStyle(fontWeight: FontWeight.w700)),
       const SizedBox(height: 2),
       Text(tr('extHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+      const SizedBox(height: 4),
+      Text(tr('updateExtNotice'), style: const TextStyle(color: cMuted, fontSize: 12)),
       if (!localApi) ...[
         const SizedBox(height: 6),
         Text(tr('extRequiresApi'), style: const TextStyle(color: cWarn, fontSize: 12, fontWeight: FontWeight.w700)),
@@ -3941,17 +4151,29 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
             ),
             if (peers.isNotEmpty)
               OutlinedButton.icon(
-                icon: const Icon(Icons.sync, size: 18),
-                label: Text(tr('p2pSyncNow')),
-                onPressed: () async {
-                  final n = await P2pSync.instance.syncAll();
-                  if (mounted) {
-                    setState(() {
-                      p2pStatusOk = n > 0;
-                      p2pStatusText = tr('p2pSynced').replaceAll('{n}', '$n');
-                    });
-                  }
-                },
+                icon: p2pSyncing && p2pSyncingPeerId == null
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.sync, size: 18),
+                label: Text(p2pSyncing ? tr('p2pSyncing') : tr('p2pSyncNow')),
+                onPressed: p2pSyncing
+                    ? null
+                    : () async {
+                        setState(() {
+                          p2pSyncing = true;
+                          p2pSyncingPeerId = null;
+                          p2pStatusOk = true;
+                          p2pStatusText = tr('p2pSyncing');
+                        });
+                        final n = await P2pSync.instance.syncAll();
+                        if (mounted) {
+                          setState(() {
+                            p2pSyncing = false;
+                            p2pSyncingPeerId = null;
+                            p2pStatusOk = n > 0;
+                            p2pStatusText = tr('p2pSynced').replaceAll('{n}', '$n');
+                          });
+                        }
+                      },
               ),
           ]),
           if (pin != null)
@@ -3974,7 +4196,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
           if (p2pStatusText != null)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text(p2pStatusText!, style: TextStyle(color: p2pStatusOk ? cOk : cDanger, fontSize: 12, fontWeight: FontWeight.w700)),
+              child: Text(p2pStatusText!, style: TextStyle(color: p2pStatusOk ? (p2pSyncing ? cPrimary : cOk) : cDanger, fontSize: 12, fontWeight: FontWeight.w700)),
             ),
           for (final d in peers)
             Padding(
@@ -3986,16 +4208,28 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   tooltip: tr('p2pSyncNow'),
-                  icon: const Icon(Icons.sync, size: 18),
-                  onPressed: () async {
-                    final ok = await P2pSync.instance.syncPeer(d);
-                    if (mounted) {
-                      setState(() {
-                        p2pStatusOk = ok;
-                        p2pStatusText = ok ? tr('p2pSynced').replaceAll('{n}', '1') : tr('p2pSyncErr');
-                      });
-                    }
-                  },
+                  icon: p2pSyncing && p2pSyncingPeerId == d.id
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.sync, size: 18),
+                  onPressed: p2pSyncing
+                      ? null
+                      : () async {
+                          setState(() {
+                            p2pSyncing = true;
+                            p2pSyncingPeerId = d.id;
+                            p2pStatusOk = true;
+                            p2pStatusText = tr('p2pSyncing');
+                          });
+                          final ok = await P2pSync.instance.syncPeer(d);
+                          if (mounted) {
+                            setState(() {
+                              p2pSyncing = false;
+                              p2pSyncingPeerId = null;
+                              p2pStatusOk = ok;
+                              p2pStatusText = ok ? tr('p2pSynced').replaceAll('{n}', '1') : tr('p2pSyncErr');
+                            });
+                          }
+                        },
                 ),
                 IconButton(
                   visualDensity: VisualDensity.compact,
@@ -4142,15 +4376,38 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
           const SizedBox(height: 2),
           Text(tr('browserTrackingDesc'), style: const TextStyle(color: cMuted, fontSize: 12)),
           const SizedBox(height: 8),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.accessibility_new, size: 18),
-            label: Text(tr('browserTrackingOpenSettings')),
-            onPressed: () async {
-              await collector?.bridge.openAccessibility();
-              final ok = await collector?.bridge.hasBrowserAccess() ?? false;
-              if (mounted) setState(() => browserAccess = ok);
-            },
-          ),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.accessibility_new, size: 18),
+              label: Text(tr('browserTrackingOpenSettings')),
+              onPressed: () async {
+                await collector?.bridge.openAccessibility();
+                final ok = await collector?.bridge.hasBrowserAccess() ?? false;
+                if (mounted) setState(() => browserAccess = ok);
+              },
+            ),
+            if (!browserAccess)
+              OutlinedButton.icon(
+                icon: const Icon(Icons.info_outline, size: 18),
+                label: Text(tr('browserTrackingOpenAppInfo')),
+                onPressed: () async {
+                  await collector?.bridge.openOwnAppInfo();
+                },
+              ),
+          ]),
+          if (!browserAccess) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: cWarn.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(rSm),
+                border: Border.all(color: cWarn.withValues(alpha: 0.3)),
+              ),
+              child: Text(tr('browserTrackingRestrictedHint'), style: const TextStyle(color: cMuted, fontSize: 12)),
+            ),
+          ],
         ],
         if (!Platform.isAndroid) ...[
           const Divider(height: 28),

@@ -12,29 +12,35 @@ const UI_LANG = (() => {
 
 const STR = UI_LANG === "ru"
   ? {
-      checking: "Проверка Wolium...",
+      checking: "Проверка...",
+      currentTab: "Текущая вкладка",
+      internalTab: "Системная вкладка браузера — откройте любой сайт для учёта",
       topSites: "Топ сайтов за сегодня",
       noSites: "Сайты ещё не записаны",
       enableApi: "Включите Локальный API в настройках Wolium",
-      paused: "Отслеживание на паузе",
-      connected: (b) => `Подключено (${b})`,
-      offline: "Локальный API Wolium не в сети (127.0.0.1:9095)",
+      paused: "На паузе",
+      connected: (b) => `Активно (${b})`,
+      offline: "Офлайн",
       pause: "Пауза",
       resume: "Продолжить",
+      tip: "Совет: закрепите иконку Wolium на панели браузера — мини-меню доступно на любом сайте для быстрой проверки и паузы.",
       unitS: "с",
       unitM: "м",
       unitH: "ч",
     }
   : {
-      checking: "Checking Wolium...",
+      checking: "Checking...",
+      currentTab: "Current tab",
+      internalTab: "Internal browser page — open any website to track",
       topSites: "Top sites today",
       noSites: "No sites recorded yet",
       enableApi: "Enable Local API in Wolium Settings",
-      paused: "Extension tracking paused",
+      paused: "Paused",
       connected: (b) => `Connected (${b})`,
-      offline: "Wolium Local API offline (127.0.0.1:9095)",
+      offline: "Offline",
       pause: "Pause",
       resume: "Resume",
+      tip: "Tip: pin the Wolium icon to your toolbar to open this mini menu from any website for quick stats and pause control.",
       unitS: "s",
       unitM: "m",
       unitH: "h",
@@ -112,26 +118,38 @@ async function refresh() {
   document.documentElement.lang = UI_LANG;
   const topTitle = document.getElementById("topTitle");
   if (topTitle) topTitle.textContent = STR.topSites;
-  const statusText = document.getElementById("statusText");
-  if (statusText && !statusText.dataset.init) {
-    statusText.textContent = STR.checking;
-    statusText.dataset.init = "1";
-  }
+  const tabLabel = document.getElementById("tabLabel");
+  if (tabLabel) tabLabel.textContent = STR.currentTab;
+  const tipEl = document.getElementById("tipText");
+  if (tipEl) tipEl.textContent = STR.tip;
 
   const st = await sendMsg({ type: "status" });
   const dot = document.getElementById("dot");
+  const badge = document.getElementById("statusBadge");
   const domainEl = document.getElementById("activeDomain");
+  const hostEl = document.getElementById("activeHost");
   const pauseBtn = document.getElementById("pauseBtn");
 
-  dot.className = st.connected ? "dot ok" : "dot";
+  dot.className = st.connected && !st.paused ? "dot ok" : "dot";
+  badge.className = st.connected && !st.paused ? "badge ok" : "badge";
   if (st.paused) {
-    statusText.textContent = STR.paused;
+    badge.textContent = STR.paused;
   } else if (st.connected) {
-    statusText.textContent = STR.connected(st.browser || "browser");
+    badge.textContent = STR.connected(st.browser || "browser");
   } else {
-    statusText.textContent = STR.offline;
+    badge.textContent = STR.offline;
   }
-  domainEl.textContent = st.domain ? cleanDisplay(st.title, st.domain) : "—";
+
+  if (st.domain) {
+    const label = cleanDisplay(st.title, st.domain);
+    domainEl.textContent = label;
+    domainEl.className = "domain";
+    hostEl.textContent = label !== st.domain ? st.domain : "";
+  } else {
+    domainEl.textContent = STR.internalTab;
+    domainEl.className = "muted";
+    hostEl.textContent = "";
+  }
   pauseBtn.textContent = st.paused ? STR.resume : STR.pause;
   await loadTop();
 }

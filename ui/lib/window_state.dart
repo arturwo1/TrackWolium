@@ -12,6 +12,7 @@ class WindowState with WidgetsBindingObserver {
   Timer? _timer;
   String _last = '';
   bool _wantMaximize = false;
+  DateTime? _suppressSaveUntil;
 
   File get _file => File('${dataDir()}${Platform.pathSeparator}window');
 
@@ -22,8 +23,11 @@ class WindowState with WidgetsBindingObserver {
       if (parts.length < 5) return;
       final box = WindowBox(parts[0], parts[1], parts[2], parts[3], parts[4] == 1);
       if (!boxVisible(box)) return;
-      applyWindowBox(box);
       _wantMaximize = box.maximized;
+      if (box.maximized) {
+        _suppressSaveUntil = DateTime.now().add(const Duration(seconds: 3));
+      }
+      applyWindowBox(box);
       _last = _encode(box);
     } catch (_) {}
   }
@@ -35,17 +39,24 @@ class WindowState with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_wantMaximize) maximizeMainWindow();
     });
+    if (_wantMaximize) {
+      Timer(const Duration(milliseconds: 250), () {
+        if (_wantMaximize) maximizeMainWindow();
+      });
+    }
   }
 
   String _encode(WindowBox b) => '${b.left} ${b.top} ${b.right} ${b.bottom} ${b.maximized ? 1 : 0}';
 
   @override
   void didChangeMetrics() {
+    if (_suppressSaveUntil != null && DateTime.now().isBefore(_suppressSaveUntil!)) return;
     _timer?.cancel();
     _timer = Timer(const Duration(milliseconds: 800), save);
   }
 
   void save() {
+    if (_suppressSaveUntil != null && DateTime.now().isBefore(_suppressSaveUntil!)) return;
     final box = readWindowBox();
     if (box == null) return;
     final text = _encode(box);

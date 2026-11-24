@@ -53,6 +53,10 @@ Accepts JSON `{"browser": "chrome", "domain": "github.com", "ms": 10000, "title"
 
 `{"from", "to", "days", "domains": [{"browser", "domain", "ms", "title", "url"}]}`. Top domains and latest clean page titles recorded by the companion browser extension or Android browser tracker.
 
+### `GET /ext-setup?url=...&browser=...&dir=...&lang=...`
+
+Interactive HTML setup helper opened when launching the browser extension onboarding wizard, providing one-click copy buttons for the browser's extensions page URL (`chrome://extensions`, etc.) and the local extension folder path.
+
 
 ## Rules
 

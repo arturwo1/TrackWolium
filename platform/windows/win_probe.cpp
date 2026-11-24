@@ -338,6 +338,12 @@ public:
       d.free_kb = static_cast<long long>(freeb.QuadPart / 1024ULL);
       st.disks.push_back(std::move(d));
     }
+    SYSTEM_POWER_STATUS sps{};
+    if (GetSystemPowerStatus(&sps) && sps.BatteryFlag != 128 && sps.BatteryFlag != 255 && sps.BatteryLifePercent <= 100) {
+      st.battery_pct = static_cast<int>(sps.BatteryLifePercent);
+      st.battery_charging = (sps.ACLineStatus == 1 || (sps.BatteryFlag & 8) != 0) ? 1 : 0;
+      st.valid = true;
+    }
     return st;
   }
 
