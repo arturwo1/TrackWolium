@@ -1382,10 +1382,10 @@ class _ChartPainter extends CustomPainter {
     Offset? lastP;
     void flush() {
       if (firstP == null) return;
-      out.add(firstP!);
-      if (minP != null && minP != firstP && minP != lastP) out.add(minP!);
-      if (maxP != null && maxP != firstP && maxP != minP && maxP != lastP) out.add(maxP!);
-      if (lastP != null && lastP != firstP) out.add(lastP!);
+      out.add(firstP);
+      if (minP != null && minP != firstP && minP != lastP) out.add(minP);
+      if (maxP != null && maxP != firstP && maxP != minP && maxP != lastP) out.add(maxP);
+      if (lastP != null && lastP != firstP) out.add(lastP);
     }
     for (final p in src) {
       final px = p.dx.floor();

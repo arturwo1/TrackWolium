@@ -63,7 +63,7 @@ class AppPicker extends StatelessWidget {
       barrierLabel: '',
       barrierColor: Colors.transparent,
       transitionDuration: const Duration(milliseconds: 120),
-      pageBuilder: (c, _, _) => _Popup(anchor: rect, items: items, value: value),
+      pageBuilder: (c, anim, _) => _Popup(anchor: rect, items: items, value: value),
     );
     if (picked != null) onChanged(picked.first);
   }

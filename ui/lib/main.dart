@@ -67,7 +67,7 @@ class WoliumApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: language,
-      builder: (context, _, _) => MaterialApp(
+      builder: (context, lang, _) => MaterialApp(
         title: appName,
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
@@ -166,7 +166,7 @@ class Brand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<String>(valueListenable: language, builder: (context, _, _) => brandRow());
+    return ValueListenableBuilder<String>(valueListenable: language, builder: (context, lang, _) => brandRow());
   }
 
   Widget brandRow() {
@@ -3347,7 +3347,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           alignment: Alignment.topCenter,
           children: [
             ...previousChildren,
-            ?currentChild,
+            if (currentChild != null) currentChild,
           ],
         ),
         transitionBuilder: (child, anim) {
@@ -3591,7 +3591,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               if (collector != null)
                 ValueListenableBuilder<bool>(
                   valueListenable: collector!.access,
-                  builder: (_, ok, _) => ok ? const SizedBox.shrink() : accessBanner(),
+                  builder: (ctx, ok, _) => ok ? const SizedBox.shrink() : accessBanner(),
                 ),
               Expanded(
                 child: NotificationListener<ScrollStartNotification>(

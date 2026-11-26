@@ -308,7 +308,7 @@ List<ResSeries> buildSeries({
 
   if (ids.contains('cpu')) out.add(make('cpu', 0, _cpuText, (v, s, _) => v / (s * 1000) / cores * 100, clampTotal: true));
   if (ids.contains('ram')) out.add(make('ram', 1, _size, (v, _, c) => v / c));
-  if (ids.contains('peak')) out.add(make('peak', 2, _size, (v, _, _) => v.toDouble()));
+  if (ids.contains('peak')) out.add(make('peak', 2, _size, (v, span, cnt) => v.toDouble()));
   if (ids.contains('ior')) out.add(make('ior', 3, _rate, (v, s, _) => v / s));
   if (ids.contains('iow')) out.add(make('iow', 4, _rate, (v, s, _) => v / s));
   final sysDevs = <String>[];
