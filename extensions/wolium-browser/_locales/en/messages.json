@@ -1,0 +1,8 @@
+{
+  "extName": {
+    "message": "Wolium Browser Companion"
+  },
+  "extDesc": {
+    "message": "Tracks active site domains locally and sends them to Wolium on this device."
+  }
+}

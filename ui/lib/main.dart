@@ -67,7 +67,7 @@ class WoliumApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: language,
-      builder: (context, _, __) => MaterialApp(
+      builder: (context, _, _) => MaterialApp(
         title: appName,
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
@@ -166,7 +166,7 @@ class Brand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<String>(valueListenable: language, builder: (context, _, __) => brandRow());
+    return ValueListenableBuilder<String>(valueListenable: language, builder: (context, _, _) => brandRow());
   }
 
   Widget brandRow() {
@@ -282,18 +282,26 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   String _lastDbSig = '';
   String _cachedSeriesKey = '';
   List<ResSeries> _cachedSeries = const [];
+  List<Contrib> realContribs = [];
+  List<Contrib> prevRealContribs = [];
+  List<ResPoint> prevResPts = [];
+  List<SysPoint> prevSysPts = [];
+  List<StatPoint> prevStatPts = [];
+  final Map<String, double> _colMinCache = {};
+  final ValueNotifier<Map<String, double>> _dragWidths = ValueNotifier<Map<String, double>>(const {});
 
   bool get isLocalOnly => selectedDevices.length == 1 && selectedDevices.contains('local');
   bool get includesLocal => selectedDevices.isEmpty || selectedDevices.contains('local');
   bool get showMultiState => !Platform.isAndroid || !isLocalOnly;
+  bool get realFocusAvailable => showMultiState && (!MetricPrefs.has('notime') || !isLocalOnly);
 
   bool availableBattery() =>
       sysPts.any((p) => p.kind == 'battery') ||
       globalStats.any((g) => g.batteryPct >= 0 || g.batteryDrainTenths > 0) ||
       statPts.any((p) => p.kind == 'battery') ||
       activityStats.batteryTenths.isNotEmpty ||
-      Platform.isAndroid ||
-      peerDevices.any((d) => d.platform.toLowerCase() == 'android');
+      (Platform.isAndroid && includesLocal) ||
+      peerDevices.any((d) => selectedDevices.contains(d.id) && d.platform.toLowerCase() == 'android');
 
   Set<String> availableResourceIds() {
     final out = <String>{
@@ -306,7 +314,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     if (resMap.values.any((a) => a.iow > 0)) out.add('iow');
     if (sysPts.any((p) => p.kind == 'ram')) out.add('sysram');
     if (sysPts.any((p) => p.kind.startsWith('disk:'))) out.add('sysdisk');
-    if (sysPts.any((p) => p.kind == 'battery') || globalStats.any((g) => g.batteryPct >= 0) || Platform.isAndroid) {
+    if (sysPts.any((p) => p.kind == 'battery') || globalStats.any((g) => g.batteryPct >= 0) || (Platform.isAndroid && includesLocal)) {
       out.add('battery');
     }
     return out;
@@ -333,8 +341,6 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     return list.join(',');
   }
 
-  bool get realFocusOn => ViewPrefs.realFocus && showMultiState && !MetricPrefs.has('notime');
-
   DateTime prevFrom() => DateTime(from.year, from.month, from.day - dayCount);
 
   bool appAllowed(String app) {
@@ -347,11 +353,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   List<AppUsage> prepareRows(List<AppUsage> src, String fk, String tk) {
     var list = src.where((r) => !Hidden.has(r.app)).toList();
     final timeOn = (!Platform.isAndroid && !MetricPrefs.has('notime')) || !isLocalOnly;
-    final idle = realFocusOn || (timeOn && ColumnPrefs.shown('realcol')) ? usage.afk(fk, tk, devices: selectedDevices) : <String, int>{};
+    final idle = (timeOn && (ColumnPrefs.shown('realcol') || resSel.contains('realfocus')))
+        ? usage.afk(fk, tk, devices: selectedDevices)
+        : <String, int>{};
     afkMs = idle;
-    if (realFocusOn) {
-      list = list.where((r) => r.total > 0).toList();
-    }
     if (ViewPrefs.minSec > 0) {
       list = list.where((r) => (r.visible > 0 ? r.visible : r.total) >= ViewPrefs.minSec * 1000).toList();
     }
@@ -396,8 +401,15 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     final w1 = math.min(total.toDouble(), viewTo + sp).ceil();
     final sEp = customStartEpoch;
     final eEp = customEndEpoch;
-    contribs = usage.contribs(from, w0, w1, bin, useSess, realFocus: realFocusOn, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp).where((c) => appAllowed(c.app)).toList();
-    previous = ViewPrefs.compare ? usage.contribs(prevFrom(), w0, w1, bin, false, realFocus: realFocusOn, devices: selectedDevices).where((c) => appAllowed(c.app)).toList() : [];
+    contribs = usage.contribs(from, w0, w1, bin, useSess, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp).where((c) => appAllowed(c.app)).toList();
+    previous = ViewPrefs.compare ? usage.contribs(prevFrom(), w0, w1, bin, false, devices: selectedDevices).where((c) => appAllowed(c.app)).toList() : [];
+    final wantRealFocus = resSel.contains('realfocus') && realFocusAvailable;
+    realContribs = wantRealFocus
+        ? usage.contribs(from, w0, w1, bin, false, realFocus: true, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp).where((c) => appAllowed(c.app)).toList()
+        : [];
+    prevRealContribs = (wantRealFocus && ViewPrefs.compare)
+        ? usage.contribs(prevFrom(), w0, w1, bin, false, realFocus: true, devices: selectedDevices).where((c) => appAllowed(c.app)).toList()
+        : [];
     siteContribs = usage.browserContribs(from, w0, w1, bin, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp);
     presenceRows = includesLocal ? usage.presence(from, w0, w1) : [];
     final en = MetricPrefs.enabled.value;
@@ -406,6 +418,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     resPts = wantProc ? usage.resPoints(from, w0, w1, bin, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp) : [];
     sysPts = wantSys ? usage.sysPoints(from, w0, w1, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp) : [];
     statPts = resSel.any(statMetricIds.contains) ? usage.statPoints(from, w0, w1, bin, devices: selectedDevices, startEpoch: sEp, endEpoch: eEp) : [];
+    prevResPts = (wantProc && ViewPrefs.compare) ? usage.resPoints(prevFrom(), w0, w1, bin, devices: selectedDevices) : [];
+    prevSysPts = (wantSys && ViewPrefs.compare) ? usage.sysPoints(prevFrom(), w0, w1, devices: selectedDevices) : [];
+    prevStatPts = (resSel.any(statMetricIds.contains) && ViewPrefs.compare) ? usage.statPoints(prevFrom(), w0, w1, bin, devices: selectedDevices) : [];
     _cachedSeriesKey = '';
     for (final r in presenceRows) {
       if (r.name.isEmpty && r.clientId.isNotEmpty) resolveRpcName(r.clientId);
@@ -554,15 +569,19 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                     },
                     onHorizontalDragUpdate: (d) {
                       final w = (resizeStartW + (d.globalPosition.dx - resizeStartX)).clamp(colMin(k, head), 700.0).toDouble();
-                      ColumnPrefs.setWidth(k, w, persist: false);
+                      _dragWidths.value = {..._dragWidths.value, k: w};
                     },
                     onHorizontalDragEnd: (_) {
                       resizing = false;
-                      ColumnPrefs.persistWidths();
+                      final w = _dragWidths.value[k];
+                      _dragWidths.value = const {};
+                      if (w != null) ColumnPrefs.setWidth(k, w, persist: true);
                     },
                     onHorizontalDragCancel: () {
                       resizing = false;
-                      ColumnPrefs.persistWidths();
+                      final w = _dragWidths.value[k];
+                      _dragWidths.value = const {};
+                      if (w != null) ColumnPrefs.setWidth(k, w, persist: true);
                     },
                     child: const Align(alignment: Alignment.centerRight, child: Padding(padding: EdgeInsets.only(right: 7), child: SizedBox(width: 2, child: ColoredBox(color: cBorder)))),
                   ),
@@ -614,18 +633,31 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       );
 
   Future<void> columnMenu(Offset at) async {
-    final ids = columnChoices();
-    final chosen = await darkMenu<String>(at, [
-      PopupMenuItem<String>(enabled: false, height: 32, child: Text(tr('colMenu'), style: const TextStyle(color: cMuted, fontWeight: FontWeight.w800))),
-      for (final id in ids)
-        CheckedPopupMenuItem<String>(
-          value: id,
-          checked: ColumnPrefs.shown(id),
-          child: Text(columnLabel(id), style: const TextStyle(color: cPrimary)),
+    await darkMenu<void>(at, [
+      PopupMenuItem<void>(
+        enabled: false,
+        padding: EdgeInsets.zero,
+        child: StatefulBuilder(
+          builder: (ctx, set) {
+            final ids = columnChoices();
+            return ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 210, maxWidth: 320, maxHeight: 420),
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  popHeader(tr('colMenu')),
+                  for (final id in ids)
+                    popRow(columnLabel(id), ColumnPrefs.shown(id), () {
+                      ColumnPrefs.set(id, !ColumnPrefs.shown(id));
+                      set(() {});
+                    }),
+                  const SizedBox(height: 6),
+                ]),
+              ),
+            );
+          },
         ),
+      ),
     ]);
-    if (chosen == null) return;
-    ColumnPrefs.set(chosen, !ColumnPrefs.shown(chosen));
   }
 
   void toast(String text) {
@@ -673,9 +705,14 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       }
     }
     final bId = (Usage.browserIdForApp(browserRow?.app ?? s.browser) ?? s.browser).toLowerCase();
-    for (final t in detectBrowserTargets(usage)) {
-      if (t.id == bId || t.name.toLowerCase().contains(bId)) {
-        return (exe: t.exe, macApp: t.name);
+    final targets = _browserTargetsCache;
+    if (targets == null) {
+      unawaited(detectBrowserTargetsAsync(usage));
+    } else {
+      for (final t in targets) {
+        if (t.id == bId || t.name.toLowerCase().contains(bId)) {
+          return (exe: t.exe, macApp: t.name);
+        }
       }
     }
     return (exe: null, macApp: null);
@@ -810,7 +847,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     final cats = Categories.list.value;
     final cur = Categories.of(r.app);
     String? v;
-    if (at != null) {
+    if (at != null && !Platform.isAndroid) {
       v = await darkMenu<String>(at, [
         for (final c in cats)
           PopupMenuItem<String>(value: c.id, child: Row(children: [c.iconWidget(18), const SizedBox(width: 10), Expanded(child: Text(c.name, style: const TextStyle(color: cPrimary))), if (cur?.id == c.id) const Icon(Icons.check, size: 16, color: cPrimary)])),
@@ -984,6 +1021,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     tableHScroll.dispose();
     vScroll.dispose();
     shellFocus.dispose();
+    _dragWidths.dispose();
     timer?.cancel();
     usage.close();
     super.dispose();
@@ -991,7 +1029,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   void onMetricsChanged() {
     if (!mounted) return;
-    resSel.removeWhere((id) => id != 'battery' && !statMetricIds.contains(id) && !MetricPrefs.enabled.value.contains(id) && !availableResourceIds().contains(id));
+    resSel.removeWhere((id) => id != 'battery' && id != 'realfocus' && !statMetricIds.contains(id) && !MetricPrefs.enabled.value.contains(id) && !availableResourceIds().contains(id));
+    if (MetricPrefs.has('notime') && isLocalOnly) resSel.remove('realfocus');
     dirty = true;
     final fk = keyOf(from);
     final tk = keyOf(to);
@@ -1441,7 +1480,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         : ['total', 'opens', 'notifs', if (hasBat) 'appbattery', 'category'];
   }
 
-  Future<({Set<String> cols, String browserMode, Set<String> devices, String format})?> exportColumnsDialog() {
+  Future<({Set<String> cols, String browserMode, Set<String> devices, String format, bool includeTitles})?> exportColumnsDialog() {
     final expDevices = Set<String>.of(selectedDevices);
     if (expDevices.isEmpty) expDevices.add('local');
     final initChoices = exportChoicesFor(expDevices);
@@ -1449,7 +1488,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     if (picked.isEmpty) picked.add('total');
     var browserMode = 'apps';
     var format = 'summary';
-    return showDialog<({Set<String> cols, String browserMode, Set<String> devices, String format})>(
+    var includeTitles = false;
+    return showDialog<({Set<String> cols, String browserMode, Set<String> devices, String format, bool includeTitles})>(
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, set) {
@@ -1569,6 +1609,14 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                         );
                       }),
                     ],
+                    if (browserMode != 'apps')
+                      CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        value: includeTitles,
+                        title: Text(tr('exportIncludeTitles'), style: const TextStyle(fontSize: 13)),
+                        onChanged: (v) => set(() => includeTitles = v == true),
+                      ),
                   ],
                 ]),
               ),
@@ -1579,7 +1627,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             TextButton(
               onPressed: (format == 'summary' && pickedValid.isEmpty)
                   ? null
-                  : () => Navigator.pop(c, (cols: Set<String>.of(pickedValid), browserMode: browserMode, devices: Set<String>.of(expDevices), format: format)),
+                  : () => Navigator.pop(c, (cols: Set<String>.of(pickedValid), browserMode: browserMode, devices: Set<String>.of(expDevices), format: format, includeTitles: includeTitles)),
               child: Text(tr('exportCsv')),
             ),
           ],
@@ -1601,6 +1649,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     if (resDlg == null) return null;
     final expDevices = resDlg.devices;
     final format = resDlg.format;
+    final includeTitles = resDlg.includeTitles;
     requestFlush();
     String q(String v) => '"${v.replaceAll('"', '""')}"';
     final peerMap = {for (final d in peerDevices) d.id: d.name};
@@ -1714,6 +1763,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       }
 
       String siteCsvLabel(SiteUsage s, {String prefix = '', String suffix = ''}) {
+        if (!includeTitles) return '$prefix${s.domain}$suffix';
         final t = s.displayTitle;
         final core = t == s.domain ? s.domain : '$t (${s.domain})';
         return '$prefix$core$suffix';
@@ -1884,7 +1934,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   Widget iconOf(String app, double size) => AppIcon(title: titleOf(app), path: names[app]?.path ?? '', size: size);
 
-  int metricValue(AppUsage r) => (metric == Metric.focused && realFocusOn) ? realMs(r) : metricOf(r.ms, metric);
+  int metricValue(AppUsage r) => metricOf(r.ms, metric);
 
   List<AppUsage> sortedRows() {
     final list = List<AppUsage>.from(rows);
@@ -1997,6 +2047,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     }
     final avail = availableResourceIds();
     final ids = [
+      if (resSel.contains('realfocus') && realFocusAvailable) 'realfocus',
       for (final id in statMetricIds) if (resSel.contains(id)) id,
       if (!showMultiState && resSel.contains('battery') && avail.contains('battery')) 'battery',
       if (showMultiState)
@@ -2036,6 +2087,25 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   }
 
   Future<void> popover(BuildContext ctx, Widget Function(StateSetter set) body) async {
+    if (Platform.isAndroid) {
+      buzz(1);
+      await showModalBottomSheet<void>(
+        context: ctx,
+        backgroundColor: cBg,
+        isScrollControlled: true,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        builder: (c) => SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(c).height * 0.78),
+            child: StatefulBuilder(
+              builder: (c, set) => SingleChildScrollView(child: body(set)),
+            ),
+          ),
+        ),
+      );
+      seriesFocus.value = null;
+      return;
+    }
     final box = ctx.findRenderObject() as RenderBox;
     final overlay = Overlay.of(ctx).context.findRenderObject() as RenderBox;
     final at = box.localToGlobal(Offset(0, box.size.height + 4), ancestor: overlay);
@@ -2190,14 +2260,22 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> linesPopover(BuildContext ctx) {
-    return popover(ctx, (set) {
+  Future<void> linesPopover(BuildContext ctx) async {
+    final searchCtl = TextEditingController();
+    await popover(ctx, (set) {
       final avail = availableResourceIds();
       final showBat = availableBattery();
       final statIds = [for (final id in statMetricIds) if (id != 'appbattery' || showBat) id];
       final ids = showMultiState
           ? allMetricIds.where(avail.contains).toList()
           : [if (avail.contains('battery')) 'battery'];
+      final q = searchCtl.text.trim().toLowerCase();
+      bool matchesLabel(String label) => q.isEmpty || label.toLowerCase().contains(q);
+      final showTimeMatch = matchesLabel(tr('lineTime'));
+      final showRealMatch = realFocusAvailable && matchesLabel(tr('lineRealFocus'));
+      final filteredStats = [for (final id in statIds) if (matchesLabel(metricName(id))) id];
+      final filteredIds = [for (final id in ids) if (matchesLabel(metricName(id))) id];
+
       void toggleSeries(String id) {
         setState(() {
           if (resSel.contains(id)) {
@@ -2213,11 +2291,44 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
       return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         popHeader(tr('linesBtn')),
-        popRow(tr('lineTime'), showTime, () {
-          setState(() => showTime = !showTime);
-          set(() {});
-        }, dot: cPrimary),
-        for (final id in statIds)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+          child: TextField(
+            controller: searchCtl,
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(
+              isDense: true,
+              prefixIcon: const Icon(Icons.search, size: 18, color: cMuted),
+              hintText: tr('searchLines'),
+              suffixIcon: q.isEmpty
+                  ? null
+                  : IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.close, size: 16, color: cMuted),
+                      onPressed: () {
+                        searchCtl.clear();
+                        set(() {});
+                      },
+                    ),
+            ),
+            onChanged: (_) => set(() {}),
+          ),
+        ),
+        if (showTimeMatch)
+          popRow(tr('lineTime'), showTime, () {
+            setState(() => showTime = !showTime);
+            set(() {});
+          }, dot: cPrimary),
+        if (showRealMatch)
+          popRow(
+            metricName('realfocus'),
+            resSel.contains('realfocus'),
+            () => toggleSeries('realfocus'),
+            dot: metricColor('realfocus'),
+            enter: () => seriesFocus.value = 'realfocus',
+            leave: () => seriesFocus.value = null,
+          ),
+        for (final id in filteredStats)
           popRow(
             metricName(id),
             resSel.contains(id),
@@ -2226,9 +2337,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             enter: () => seriesFocus.value = id,
             leave: () => seriesFocus.value = null,
           ),
-        if (ids.isNotEmpty || (showMultiState && !Platform.isAndroid)) ...[
+        if (filteredIds.isNotEmpty || (q.isEmpty && showMultiState && !Platform.isAndroid && ids.isEmpty)) ...[
           const Divider(height: 8),
-          for (final id in ids)
+          for (final id in filteredIds)
             popRow(
               metricName(id),
               resSel.contains(id),
@@ -2237,12 +2348,15 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               enter: () => seriesFocus.value = id,
               leave: () => seriesFocus.value = null,
             ),
-          if (!Platform.isAndroid && ids.isEmpty)
+          if (!Platform.isAndroid && ids.isEmpty && q.isEmpty)
             Padding(padding: const EdgeInsets.fromLTRB(14, 4, 14, 8), child: Text(tr('linesHint'), style: const TextStyle(color: cMuted, fontSize: 12))),
         ],
+        if (!showTimeMatch && !showRealMatch && filteredStats.isEmpty && filteredIds.isEmpty)
+          Padding(padding: const EdgeInsets.fromLTRB(14, 4, 14, 10), child: Text(tr('noData'), style: const TextStyle(color: cMuted, fontSize: 12))),
         const SizedBox(height: 6),
       ]);
     });
+    searchCtl.dispose();
   }
 
   Future<void> columnsSheet() async {
@@ -2284,11 +2398,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> optionsPopover(BuildContext ctx, bool narrow) {
+  Future<void> optionsPopover(BuildContext ctx, bool narrow) async {
     final minCtl = TextEditingController(text: ViewPrefs.minSec == 0 ? '' : durationText(ViewPrefs.minSec));
     final maxCtl = TextEditingController(text: ViewPrefs.maxSec == 0 ? '' : durationText(ViewPrefs.maxSec));
     var maxOpen = ViewPrefs.maxSec > 0;
-    return popover(ctx, (set) {
+    await popover(ctx, (set) {
       final cols = columnChoices();
       return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (showMultiState) ...[
@@ -2336,13 +2450,6 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           ViewPrefs.update(cmp: !ViewPrefs.compare);
           set(() {});
         }),
-        if (showMultiState) ...[
-          popRow(tr('realFocus'), realFocusOn, () {
-            ViewPrefs.update(real: !ViewPrefs.realFocus);
-            set(() {});
-          }, enabled: !MetricPrefs.has('notime')),
-          if (MetricPrefs.has('notime')) Padding(padding: const EdgeInsets.fromLTRB(14, 0, 14, 6), child: Text(tr('realFocusNeedsTime'), style: const TextStyle(color: cMuted, fontSize: 12))),
-        ],
         popHeader(tr('optMinSec')),
         Row(children: [
           Expanded(child: durationField(minCtl, (n) => ViewPrefs.update(sec: n), set, right: 4)),
@@ -2364,50 +2471,132 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         const SizedBox(height: 6),
       ]);
     });
+    minCtl.dispose();
+    maxCtl.dispose();
+  }
+
+  ResSeries _buildRealFocusSeries(int step, int w0, int w1) {
+    final gridStart = (w0 ~/ step) * step;
+    final byStart = <int, Map<String, double>>{};
+    final prevByStart = <int, double>{};
+    for (final c in realContribs) {
+      if (c.state != 0 || c.ms <= 0) continue;
+      final st = (c.start ~/ step) * step;
+      final map = byStart.putIfAbsent(st, () => {});
+      map[c.app] = (map[c.app] ?? 0) + c.ms.toDouble();
+    }
+    for (final c in prevRealContribs) {
+      if (c.state != 0 || c.ms <= 0) continue;
+      final st = (c.start ~/ step) * step;
+      prevByStart[st] = (prevByStart[st] ?? 0) + c.ms.toDouble();
+    }
+    final points = <Offset>[];
+    final apps = <Map<String, double>>[];
+    final prevPoints = <Offset>[];
+    for (var st = gridStart; st < w1; st += step) {
+      final per = byStart[st] ?? const <String, double>{};
+      var total = 0.0;
+      for (final v in per.values) {
+        total += v;
+      }
+      final mid = st + step / 2;
+      points.add(Offset(mid, total));
+      apps.add(per);
+      if (ViewPrefs.compare && prevRealContribs.isNotEmpty) {
+        prevPoints.add(Offset(mid, prevByStart[st] ?? 0.0));
+      }
+    }
+    return ResSeries('realfocus', metricName('realfocus'), metricColor('realfocus'), (v) => formatMs(v.round()), points, apps, prevPoints);
   }
 
   Widget chartPanelBody(bool narrow) {
     final avail = availableResourceIds();
+    final hasRealFocus = resSel.contains('realfocus') && realFocusAvailable;
     final activeStat = [for (final id in statMetricIds) if (resSel.contains(id)) id];
     final activeRes = showMultiState
         ? [for (final id in allMetricIds) if (resSel.contains(id) && avail.contains(id)) id]
         : [if (resSel.contains('battery') && avail.contains('battery')) 'battery'];
-    final lineCount = (showTime ? 1 : 0) + activeStat.length + activeRes.length;
+    final lineCount = (showTime ? 1 : 0) + (hasRealFocus ? 1 : 0) + activeStat.length + activeRes.length;
     final noLines = lineCount == 0;
     final devNames = {
       'local': deviceName(),
       for (final d in peerDevices) d.id: d.name,
     };
-    final sKey = '${noLines ? 0 : 1}|${activeStat.join(',')}|${activeRes.join(',')}|${resPts.length}|${sysPts.length}|${statPts.length}|${only ?? ''}|${catFilter ?? ''}|$viewBucket|$loadW0|$loadW1|${ViewPrefs.minSec}|${ViewPrefs.maxSec}|$_lastDbSig|$deviceFilterKey';
+    final sKey = '${noLines ? 0 : 1}|${hasRealFocus ? 1 : 0}|${ViewPrefs.compare ? 1 : 0}|${activeStat.join(',')}|${activeRes.join(',')}|${resPts.length}|${sysPts.length}|${statPts.length}|${realContribs.length}|${prevRealContribs.length}|${prevResPts.length}|${prevSysPts.length}|${prevStatPts.length}|${only ?? ''}|${catFilter ?? ''}|$viewBucket|$loadW0|$loadW1|${ViewPrefs.minSec}|${ViewPrefs.maxSec}|$_lastDbSig|$deviceFilterKey';
     if (sKey != _cachedSeriesKey) {
       _cachedSeriesKey = sKey;
-      _cachedSeries = noLines
-          ? const <ResSeries>[]
-          : [
-              if (activeRes.isNotEmpty)
-                ...buildSeries(
-                  ids: resSel,
-                  pts: resPts,
-                  sys: sysPts,
-                  only: only,
-                  skip: (a) => !appAllowed(a),
-                  bucketSec: viewBucket,
-                  deviceNames: devNames,
-                ),
-              if (activeStat.isNotEmpty)
-                ...buildStatSeries(
-                  ids: resSel,
-                  pts: statPts,
-                  w0: loadW0 < 0 ? 0 : loadW0,
-                  w1: loadW1 <= 0 ? dayCount * 86400 : loadW1,
-                  bin: loadBin <= 0 ? 1 : loadBin,
-                  bucketSec: viewBucket,
-                  minSec: ViewPrefs.minSec,
-                  maxSec: ViewPrefs.maxSec,
-                  only: only,
-                  skip: (a) => !appAllowed(a),
-                ),
-            ];
+      if (noLines) {
+        _cachedSeries = const <ResSeries>[];
+      } else {
+        final w0Eff = loadW0 < 0 ? 0 : loadW0;
+        final w1Eff = loadW1 <= 0 ? dayCount * 86400 : loadW1;
+        final binEff = loadBin <= 0 ? 1 : loadBin;
+        final prevMap = <String, List<Offset>>{};
+        if (ViewPrefs.compare) {
+          if (activeRes.isNotEmpty) {
+            for (final s in buildSeries(
+              ids: resSel,
+              pts: prevResPts,
+              sys: prevSysPts,
+              only: only,
+              skip: (a) => !appAllowed(a),
+              bucketSec: viewBucket,
+              deviceNames: devNames,
+            )) {
+              prevMap[s.id] = s.points;
+            }
+          }
+          if (activeStat.isNotEmpty) {
+            for (final s in buildStatSeries(
+              ids: resSel,
+              pts: prevStatPts,
+              w0: w0Eff,
+              w1: w1Eff,
+              bin: binEff,
+              bucketSec: viewBucket,
+              minSec: ViewPrefs.minSec,
+              maxSec: ViewPrefs.maxSec,
+              only: only,
+              skip: (a) => !appAllowed(a),
+            )) {
+              prevMap[s.id] = s.points;
+            }
+          }
+        }
+        ResSeries withPrev(ResSeries s) {
+          final p = prevMap[s.id];
+          return p == null || p.isEmpty ? s : ResSeries(s.id, s.label, s.color, s.format, s.points, s.apps, p);
+        }
+
+        _cachedSeries = <ResSeries>[
+          if (hasRealFocus) _buildRealFocusSeries(math.max(300, viewBucket), w0Eff, w1Eff),
+          if (activeRes.isNotEmpty)
+            for (final s in buildSeries(
+              ids: resSel,
+              pts: resPts,
+              sys: sysPts,
+              only: only,
+              skip: (a) => !appAllowed(a),
+              bucketSec: viewBucket,
+              deviceNames: devNames,
+            ))
+              withPrev(s),
+          if (activeStat.isNotEmpty)
+            for (final s in buildStatSeries(
+              ids: resSel,
+              pts: statPts,
+              w0: w0Eff,
+              w1: w1Eff,
+              bin: binEff,
+              bucketSec: viewBucket,
+              minSec: ViewPrefs.minSec,
+              maxSec: ViewPrefs.maxSec,
+              only: only,
+              skip: (a) => !appAllowed(a),
+            ))
+              withPrev(s),
+        ];
+      }
     }
     final seriesList = _cachedSeries;
     return Panel(
@@ -2544,16 +2733,20 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   Widget wideTableBody(TextStyle head, List<String> ids, int cols, double maxWidth, Widget Function(String?, Widget, {AppUsage? row}) hov, Widget Function(String, AppUsage, {TextStyle? style}) cell) {
     final w = ColumnPrefs.widths;
     final keys = ['app', ...ids];
-    final eff = <String, double>{for (final k in keys) k: math.max(colMin(k, head), w[k] ?? (k == 'app' ? 220.0 : 110.0))};
-    final base = eff.values.fold<double>(0, (a, b) => a + b) + 44;
-    if (w['app'] == null && base < maxWidth) eff['app'] = eff['app']! + (maxWidth - base);
-    final total = eff.values.fold<double>(0, (a, b) => a + b) + 44;
-    final table = Table(
-      columnWidths: <int, TableColumnWidth>{
-        for (var i = 0; i < keys.length; i++) i: FixedColumnWidth(eff[keys[i]]!),
-        cols: const FixedColumnWidth(44),
-      },
-      children: [
+    return ValueListenableBuilder<Map<String, double>>(
+      valueListenable: _dragWidths,
+      builder: (context, dragW, _) {
+        final eff = <String, double>{for (final k in keys) k: math.max(colMin(k, head), dragW[k] ?? w[k] ?? (k == 'app' ? 220.0 : 110.0))};
+        final base = eff.values.fold<double>(0, (a, b) => a + b) + 44;
+        if (w['app'] == null && dragW['app'] == null && base < maxWidth) eff['app'] = eff['app']! + (maxWidth - base);
+        final total = eff.values.fold<double>(0, (a, b) => a + b) + 44;
+        final table = RepaintBoundary(
+          child: Table(
+            columnWidths: <int, TableColumnWidth>{
+              for (var i = 0; i < keys.length; i++) i: FixedColumnWidth(eff[keys[i]]!),
+              cols: const FixedColumnWidth(44),
+            },
+            children: [
         TableRow(children: [
           sortHead(tr('app'), 'app', head, resize: true),
           for (final id in ids) sortHead(columnLabel(id), id, head, resize: true),
@@ -2647,37 +2840,42 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                 ],
               ),
         ],
-      ],
-    );
-    if (total <= maxWidth + 0.5) return table;
-    return Scrollbar(
-      controller: tableHScroll,
-      thumbVisibility: true,
-      trackVisibility: true,
-      interactive: true,
-      child: SingleChildScrollView(
-        controller: tableHScroll,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.only(bottom: 12),
-        child: SizedBox(width: total, child: table),
-      ),
+          ],
+        ),
+        );
+        if (total <= maxWidth + 0.5) return table;
+        return Scrollbar(
+          controller: tableHScroll,
+          thumbVisibility: true,
+          trackVisibility: true,
+          interactive: true,
+          child: SingleChildScrollView(
+            controller: tableHScroll,
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.only(bottom: 12),
+            child: SizedBox(width: total, child: table),
+          ),
+        );
+      },
     );
   }
 
   double colMin(String k, TextStyle head) {
-    final text = k == 'app' ? tr('app') : columnLabel(k);
-    final tp = TextPainter(text: TextSpan(text: text, style: head.copyWith(fontWeight: FontWeight.w800)), textDirection: TextDirection.ltr, maxLines: 1)..layout();
     if (k == 'app') return 120.0;
-    return (tp.width * 0.62 + 18).clamp(58.0, 96.0).toDouble();
+    final cacheKey = '${language.value}|$k|${head.fontSize ?? 0}';
+    final hit = _colMinCache[cacheKey];
+    if (hit != null) return hit;
+    final tp = TextPainter(text: TextSpan(text: columnLabel(k), style: head.copyWith(fontWeight: FontWeight.w800)), textDirection: TextDirection.ltr, maxLines: 1)..layout();
+    final v = (tp.width * 0.62 + 18).clamp(58.0, 96.0).toDouble();
+    _colMinCache[cacheKey] = v;
+    return v;
   }
 
   Widget compactList(TextStyle head) {
     final ids = activeColumns();
     final useButtons = !Platform.isAndroid || ViewPrefs.androidControls == 'buttons';
     final sortChoices = <String>['app', ...ids];
-    final defaultSort = showMultiState
-        ? (metric == Metric.focused ? (realFocusOn ? 'realcol' : 'focused') : metric.name)
-        : 'total';
+    final defaultSort = showMultiState ? metric.name : 'total';
     final effectiveSort = sortChoices.contains(sortKey)
         ? sortKey!
         : (sortChoices.contains(defaultSort) ? defaultSort : (sortChoices.contains('total') ? 'total' : sortChoices.first));
@@ -2685,8 +2883,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Text('${tr('sortLabel')}: ', style: head.copyWith(fontSize: 12)),
-        Flexible(
+        Expanded(
           child: SelectBox<String>(
+            isExpanded: true,
             value: effectiveSort,
             items: [
               for (final k in sortChoices)
@@ -2717,7 +2916,6 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             });
           },
         ),
-        const Spacer(),
         IconButton(
           tooltip: tr('optColumns'),
           visualDensity: VisualDensity.compact,
@@ -2758,7 +2956,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Flexible(child: useButtons ? selectableDialog(titleWidget) : titleWidget),
+                    Flexible(child: !Platform.isAndroid && useButtons ? selectableDialog(titleWidget) : titleWidget),
                     if (remoteDeviceBadge(r) case final b?) b,
                   ]),
                 ),
@@ -2851,7 +3049,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
     AppUsage best = rows.first;
     final useFocus = rows.any((r) => r.ms[0] > 0);
     final useVisible = !useFocus && rows.any((r) => r.visible > 0);
-    int score(AppUsage r) => useFocus ? (realFocusOn ? realMs(r) : r.ms[0]) : (useVisible ? r.visible : r.total);
+    int score(AppUsage r) => useFocus ? r.ms[0] : (useVisible ? r.visible : r.total);
     for (final r in rows) {
       if (score(r) > score(best)) best = r;
     }
@@ -3108,29 +3306,27 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
     Widget tabBtn(int idx, IconData icon, String label) {
       final active = tabIdx == idx;
-      return InkWell(
-        borderRadius: BorderRadius.circular(rSm),
-        onTap: () {
+      return OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(0, 38),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          backgroundColor: active ? cSoft : cPanel,
+          foregroundColor: active ? cPrimary : cMuted,
+          side: BorderSide(color: active ? cPrimary : cBorder),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(rMd)),
+          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+        ),
+        icon: Icon(icon, size: 17, color: active ? cPrimary : cMuted),
+        label: Text(label),
+        onPressed: () {
           if (tabIdx == idx) return;
           buzz(0);
           setState(() => dataTab = idx);
         },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-          decoration: BoxDecoration(
-            color: active ? cPrimary.withValues(alpha: 0.16) : cSoft.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(rSm),
-            border: Border.all(color: active ? cPrimary : cBorder),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 16, color: active ? cPrimary : cMuted),
-            const SizedBox(width: 6),
-            Text(label, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: active ? cPrimary : cMuted)),
-          ]),
-        ),
       );
     }
 
+    final useCompact = Platform.isAndroid && narrow;
     final bodyCard = tabIdx == 1
         ? globalSummaryCard(narrow)
         : (rows.isEmpty
@@ -3138,20 +3334,46 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             : Panel(
                 padding: EdgeInsets.all(narrow ? 12 : 16),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  narrow ? compactList(head) : wideTable(head),
+                  useCompact ? compactList(head) : wideTable(head),
                 ]),
               ));
+
+    final animatedBody = ClipRect(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 240),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        layoutBuilder: (currentChild, previousChildren) => Stack(
+          alignment: Alignment.topCenter,
+          children: [
+            ...previousChildren,
+            ?currentChild,
+          ],
+        ),
+        transitionBuilder: (child, anim) {
+          final isNew = child.key == ValueKey<int>(tabIdx);
+          final offset = isNew ? Offset(tabIdx == 1 ? 1.0 : -1.0, 0) : Offset(tabIdx == 1 ? -1.0 : 1.0, 0);
+          return SlideTransition(
+            position: Tween<Offset>(begin: offset, end: Offset.zero).animate(anim),
+            child: FadeTransition(opacity: anim, child: child),
+          );
+        },
+        child: KeyedSubtree(key: ValueKey<int>(tabIdx), child: bodyCard),
+      ),
+    );
+
+    final tabRow = Row(children: [
+      tabBtn(0, Icons.apps_outlined, tr('navAppsTab')),
+      const SizedBox(width: 8),
+      tabBtn(1, Icons.assessment_outlined, tr('navSysTabShort')),
+    ]);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       leaderCard(),
       chartPanel(narrow),
       const SizedBox(height: 12),
-      if (hasGlobal) ...[
-        Row(children: [
-          tabBtn(0, Icons.apps_outlined, tr('navAppsTab')),
-          const SizedBox(width: 8),
-          tabBtn(1, Icons.assessment_outlined, tr('globalSummary')),
-        ]),
+      if (hasGlobal && !narrow) ...[
+        tabRow,
         const SizedBox(height: 8),
       ],
       if (hasGlobal && narrow)
@@ -3167,10 +3389,14 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               setState(() => dataTab = 0);
             }
           },
-          child: bodyCard,
+          child: animatedBody,
         )
       else
-        bodyCard,
+        animatedBody,
+      if (hasGlobal && narrow) ...[
+        const SizedBox(height: 10),
+        tabRow,
+      ],
     ]);
   }
 
@@ -3345,27 +3571,11 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               onPointerCancel: (_) {
                 if (autoScrollOrigin != null) _stopAutoScroll();
               },
-              child: Stack(children: [
-                list,
-                if (autoScrollOrigin != null)
-                  Positioned(
-                    left: autoScrollOrigin!.dx - 16,
-                    top: autoScrollOrigin!.dy - 16,
-                    child: IgnorePointer(
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: cBg.withValues(alpha: 0.92),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: cPrimary, width: 1.5),
-                          boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 8)],
-                        ),
-                        child: const Icon(Icons.open_with, size: 17, color: cPrimary),
-                      ),
-                    ),
-                  ),
-              ]),
+              child: MouseRegion(
+                cursor: autoScrollOrigin != null ? SystemMouseCursors.allScroll : MouseCursor.defer,
+                onHover: autoScrollOrigin == null ? null : (e) => autoScrollCursor = e.localPosition,
+                child: list,
+              ),
             ),
           );
 
@@ -3381,7 +3591,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               if (collector != null)
                 ValueListenableBuilder<bool>(
                   valueListenable: collector!.access,
-                  builder: (_, ok, __) => ok ? const SizedBox.shrink() : accessBanner(),
+                  builder: (_, ok, _) => ok ? const SizedBox.shrink() : accessBanner(),
                 ),
               Expanded(
                 child: NotificationListener<ScrollStartNotification>(
@@ -3441,6 +3651,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
   bool p2pStatusOk = true;
   bool p2pSyncing = false;
   String? p2pSyncingPeerId;
+  String? p2pUpdatingPeerId;
   late bool crashLogs = !prefs.flag('nocrashlogs');
   bool browserAccess = false;
 
@@ -3813,18 +4024,16 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
       'lang': language.value,
     }).toString();
     try {
-      if (Platform.isWindows && target.exe != null && File(target.exe!).existsSync()) {
-        await Process.start(target.exe!, [setupUri], mode: ProcessStartMode.detached);
+      if ((Platform.isWindows || Platform.isLinux) && target.exe != null && File(target.exe!).existsSync()) {
+        await Process.start(target.exe!, [target.url], mode: ProcessStartMode.detached);
         return true;
       }
       if (Platform.isMacOS && target.name.isNotEmpty) {
-        final res = await Process.run('open', ['-a', target.name, setupUri]);
+        final res = await Process.run('open', ['-a', target.name, target.url]);
         if (res.exitCode == 0) return true;
       }
-      if (Platform.isLinux && target.exe != null && File(target.exe!).existsSync()) {
-        await Process.start(target.exe!, [setupUri], mode: ProcessStartMode.detached);
-        return true;
-      }
+    } catch (_) {}
+    try {
       if (await launchUrl(Uri.parse(setupUri), mode: LaunchMode.externalApplication)) {
         return true;
       }
@@ -3834,7 +4043,8 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
 
   Future<void> openExtensionGuide() async {
     final extDir = _extFolderPath();
-    final detected = detectBrowserTargets(metricsUsage);
+    final detected = await detectBrowserTargetsAsync(metricsUsage);
+    if (!mounted) return;
     final targets = detected.isNotEmpty
         ? detected
         : <({String id, String name, String? exe, String url})>[
@@ -3861,7 +4071,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                     Text(tr('extGuideIntro'), style: const TextStyle(color: cMuted, fontSize: 13)),
                     if (targets.length > 1) ...[
                       const SizedBox(height: 10),
-                      Text(tr('extMultiBrowserHint'), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
+                      Text(tr('extMultiBrowserHint').replaceAll('{n}', '${targets.length}'), style: const TextStyle(color: cMuted, fontSize: 12)),
                       const SizedBox(height: 6),
                       Wrap(spacing: 6, runSpacing: 6, children: [
                         for (var i = 0; i < targets.length; i++)
@@ -3873,7 +4083,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                       ]),
                     ],
                     const SizedBox(height: 12),
-                    Text(tr('extGuideStep1'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    Text(tr('extGuideStep1'), style: const TextStyle(fontSize: 13)),
                     const SizedBox(height: 8),
                     Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
                       FilledButton.icon(
@@ -3902,9 +4112,9 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                       ),
                     ]),
                     const SizedBox(height: 12),
-                    Text(tr('extGuideStep2'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    Text(tr('extGuideStep2'), style: const TextStyle(fontSize: 13)),
                     const SizedBox(height: 10),
-                    Text(tr('extGuideStep3'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    Text(tr('extGuideStep3'), style: const TextStyle(fontSize: 13)),
                     const SizedBox(height: 6),
                     Container(
                       width: double.infinity,
@@ -3934,7 +4144,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                     const SizedBox(height: 8),
                     Text(tr('extGuideFirefox'), style: const TextStyle(color: cMuted, fontSize: 12)),
                     const SizedBox(height: 10),
-                    Text(tr('extGuideStep4'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    Text(tr('extGuideStep4'), style: const TextStyle(fontSize: 13)),
                   ]),
                 ),
               ),
@@ -4204,14 +4414,19 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
               child: Row(children: [
                 Icon(d.platform.toLowerCase() == 'android' ? Icons.smartphone : Icons.computer, size: 18, color: cMuted),
                 const SizedBox(width: 8),
-                Expanded(child: Text('${d.name} (${d.host}:${d.port})', style: const TextStyle(fontWeight: FontWeight.w600))),
+                Expanded(
+                  child: Text(
+                    '${d.name}${d.version.isNotEmpty ? ' · v${d.version}' : ''} (${d.host}:${d.port})',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   tooltip: tr('p2pSyncNow'),
                   icon: p2pSyncing && p2pSyncingPeerId == d.id
                       ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.sync, size: 18),
-                  onPressed: p2pSyncing
+                  onPressed: p2pSyncing || p2pUpdatingPeerId != null
                       ? null
                       : () async {
                           setState(() {
@@ -4229,6 +4444,50 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                               p2pStatusText = ok ? tr('p2pSynced').replaceAll('{n}', '1') : tr('p2pSyncErr');
                             });
                           }
+                        },
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  tooltip: tr('p2pUpdateBtn'),
+                  icon: p2pUpdatingPeerId == d.id
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.system_update_alt, size: 18),
+                  onPressed: p2pSyncing || p2pUpdatingPeerId != null
+                      ? null
+                      : () async {
+                          setState(() {
+                            p2pUpdatingPeerId = d.id;
+                            p2pStatusOk = true;
+                            p2pStatusText = tr('p2pUpdating');
+                          });
+                          final status = await P2pSync.instance.triggerPeerUpdate(d);
+                          if (!mounted) return;
+                          final String msg;
+                          var ok = true;
+                          switch (status) {
+                            case 'started':
+                              msg = tr('p2pUpdateStarted').replaceAll('{name}', d.name);
+                              break;
+                            case 'up_to_date':
+                              msg = tr('p2pUpdateUpToDate').replaceAll('{name}', d.name);
+                              break;
+                            case 'store':
+                              msg = tr('p2pUpdateStore').replaceAll('{name}', d.name);
+                              break;
+                            case 'disabled':
+                              ok = false;
+                              msg = tr('p2pUpdateDisabled').replaceAll('{name}', d.name);
+                              break;
+                            default:
+                              ok = false;
+                              msg = tr('p2pUpdateFailed').replaceAll('{name}', d.name);
+                              break;
+                          }
+                          setState(() {
+                            p2pUpdatingPeerId = null;
+                            p2pStatusOk = ok;
+                            p2pStatusText = msg;
+                          });
                         },
                 ),
                 IconButton(
@@ -4640,7 +4899,23 @@ String _extUrlForBrowser(String idOrName) {
   return 'chrome://extensions';
 }
 
-List<({String id, String name, String? exe, String url})> detectBrowserTargets(Usage metricsUsage) {
+List<({String id, String name, String? exe, String url})>? _browserTargetsCache;
+Future<List<({String id, String name, String? exe, String url})>>? _browserTargetsPending;
+
+Future<List<({String id, String name, String? exe, String url})>> detectBrowserTargetsAsync(Usage metricsUsage) {
+  final cached = _browserTargetsCache;
+  if (cached != null) return Future.value(cached);
+  return _browserTargetsPending ??= _detectBrowserTargetsImpl(metricsUsage).then((list) {
+    _browserTargetsCache = list;
+    _browserTargetsPending = null;
+    return list;
+  }, onError: (_) {
+    _browserTargetsPending = null;
+    return const <({String id, String name, String? exe, String url})>[];
+  });
+}
+
+Future<List<({String id, String name, String? exe, String url})>> _detectBrowserTargetsImpl(Usage metricsUsage) async {
   final out = <({String id, String name, String? exe, String url})>[];
   final seenExes = <String>{};
   final seenNames = <String>{};
@@ -4678,12 +4953,12 @@ List<({String id, String name, String? exe, String url})> detectBrowserTargets(U
 
   if (Platform.isWindows) {
     try {
-      final uc = Process.runSync('reg', ['query', r'HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice', '/v', 'ProgId']);
+      final uc = await Process.run('reg', ['query', r'HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice', '/v', 'ProgId']).timeout(const Duration(seconds: 2));
       if (uc.exitCode == 0) {
         final m = RegExp(r'ProgId\s+REG_SZ\s+(.+)').firstMatch(uc.stdout.toString());
         final progId = m?.group(1)?.trim() ?? '';
         if (progId.isNotEmpty) {
-          final cmd = Process.runSync('reg', ['query', 'HKCR\\$progId\\shell\\open\\command', '/ve']);
+          final cmd = await Process.run('reg', ['query', 'HKCR\\$progId\\shell\\open\\command', '/ve']).timeout(const Duration(seconds: 2));
           if (cmd.exitCode == 0) {
             final cm = RegExp(r'REG_SZ\s+"?([^"\r\n]+\.exe)', caseSensitive: false).firstMatch(cmd.stdout.toString());
             final exe = cm?.group(1)?.trim();
@@ -4756,7 +5031,7 @@ List<({String id, String name, String? exe, String url})> detectBrowserTargets(U
     ];
     for (final c in bins) {
       try {
-        final res = Process.runSync('which', [c.bin]);
+        final res = await Process.run('which', [c.bin]).timeout(const Duration(seconds: 2));
         if (res.exitCode == 0) {
           final p = res.stdout.toString().trim().split('\n').first.trim();
           if (p.isNotEmpty) addTarget(c.id, c.name, p);

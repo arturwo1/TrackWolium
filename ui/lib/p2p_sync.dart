@@ -30,6 +30,7 @@ class PeerDevice {
     required this.port,
     required this.token,
     this.lastSync = 0,
+    this.version = '',
   });
 
   final String id;
@@ -39,6 +40,7 @@ class PeerDevice {
   final int port;
   final String token;
   final int lastSync;
+  final String version;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -48,6 +50,7 @@ class PeerDevice {
         'port': port,
         'token': token,
         'lastSync': lastSync,
+        'version': version,
       };
 
   static PeerDevice fromJson(Map<String, dynamic> m) => PeerDevice(
@@ -58,6 +61,7 @@ class PeerDevice {
         port: (m['port'] as num?)?.toInt() ?? kP2pPort,
         token: m['token'] as String? ?? '',
         lastSync: (m['lastSync'] as num?)?.toInt() ?? 0,
+        version: m['version'] as String? ?? '',
       );
 }
 
@@ -90,7 +94,7 @@ class P2pSync {
     db.execute('''
       CREATE TABLE IF NOT EXISTS browser_usage(day TEXT NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, ms INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', PRIMARY KEY(day, browser, domain)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS browser_timeline(day TEXT NOT NULL, slot INTEGER NOT NULL, browser TEXT NOT NULL, domain TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', ms INTEGER NOT NULL, PRIMARY KEY(day, slot, browser, domain)) WITHOUT ROWID;
-      CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 9096, last_sync INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 9096, last_sync INTEGER NOT NULL DEFAULT 0, version TEXT NOT NULL DEFAULT '') WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_usage(device TEXT NOT NULL, day TEXT NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(device, day, app, state)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_timeline(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(device, day, slot, app, state)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_apps(device TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, app)) WITHOUT ROWID;
@@ -118,6 +122,7 @@ class P2pSync {
       "ALTER TABLE remote_browser_usage ADD COLUMN title TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE remote_browser_usage ADD COLUMN url TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE remote_browser_timeline ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE devices ADD COLUMN version TEXT NOT NULL DEFAULT ''",
     ]) {
       try {
         db.execute(sql);
@@ -439,6 +444,38 @@ class P2pSync {
         return;
       }
 
+      if (req.method == 'POST' && path == '/p2p/update') {
+        final auth = req.headers.value(HttpHeaders.authorizationHeader) ?? '';
+        final token = auth.startsWith('Bearer ') ? auth.substring(7).trim() : '';
+        PeerDevice? matched;
+        for (final p in peers.value) {
+          if (p.token == token && token.isNotEmpty) {
+            matched = p;
+            break;
+          }
+        }
+        if (matched == null) {
+          _replyJson(req, 401, {'error': 'unauthorized'});
+          return;
+        }
+        if (storeBuild) {
+          _replyJson(req, 200, {'status': 'store'});
+          return;
+        }
+        if (!updaterSupported || File('${dataDir()}${Platform.pathSeparator}noupdates').existsSync()) {
+          _replyJson(req, 200, {'status': 'disabled'});
+          return;
+        }
+        final info = await checkUpdate();
+        if (info == null) {
+          _replyJson(req, 200, {'status': 'up_to_date', 'version': installedVersion()});
+          return;
+        }
+        unawaited(downloadAndInstall(info, (_) {}));
+        _replyJson(req, 200, {'status': 'started', 'version': info.latest});
+        return;
+      }
+
       _replyJson(req, 404, {'error': 'not_found'});
     } catch (_) {
       try {
@@ -532,6 +569,29 @@ class P2pSync {
     }
   }
 
+  Future<String> triggerPeerUpdate(PeerDevice peer) async {
+    final ep = parseEndpoint(peer.host, defaultPort: peer.port);
+    if (ep == null) return 'failed';
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 12)
+      ..idleTimeout = const Duration(seconds: 25);
+    try {
+      final req = await client.post(ep.host, ep.port, '/p2p/update');
+      req.headers.contentType = ContentType.json;
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${peer.token}');
+      req.write('{}');
+      final res = await req.close().timeout(const Duration(seconds: 25));
+      if (res.statusCode != 200) return 'failed';
+      final text = await utf8.decoder.bind(res).join().timeout(const Duration(seconds: 15));
+      final data = jsonDecode(text) as Map<String, dynamic>;
+      return data['status'] as String? ?? 'failed';
+    } catch (_) {
+      return 'failed';
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<int> syncAll() async {
     var ok = 0;
     for (final p in List<PeerDevice>.of(peers.value)) {
@@ -569,6 +629,7 @@ class P2pSync {
     try {
       if (!File(dbPath()).existsSync()) return;
       final db = sqlite3.open(dbPath());
+      db.execute('PRAGMA busy_timeout=3000;');
       try {
         ensureSchema(db);
         db.execute('DELETE FROM devices WHERE id = ?', [id]);
@@ -599,11 +660,12 @@ class P2pSync {
     try {
       Directory(dataDir()).createSync(recursive: true);
       final db = sqlite3.open(dbPath());
+      db.execute('PRAGMA busy_timeout=3000;');
       try {
         ensureSchema(db);
         db.execute(
-          'INSERT OR REPLACE INTO devices(id, name, platform, host, port, last_sync) VALUES(?, ?, ?, ?, ?, ?)',
-          [peer.id, peer.name, peer.platform, peer.host, peer.port, peer.lastSync],
+          'INSERT OR REPLACE INTO devices(id, name, platform, host, port, last_sync, version) VALUES(?, ?, ?, ?, ?, ?, ?)',
+          [peer.id, peer.name, peer.platform, peer.host, peer.port, peer.lastSync, peer.version],
         );
       } finally {
         db.dispose();
@@ -627,6 +689,7 @@ class P2pSync {
     final sysEvents = <Map<String, dynamic>>[];
     if (File(dbPath()).existsSync()) {
       final db = sqlite3.open(dbPath(), mode: OpenMode.readOnly);
+      db.execute('PRAGMA busy_timeout=3000;');
       try {
         for (final r in db.select('SELECT day, app, state, ms FROM usage')) {
           usage.add({'day': r['day'], 'app': r['app'], 'state': r['state'], 'ms': r['ms']});
@@ -774,7 +837,7 @@ class P2pSync {
       }
     }
     return {
-      'device': {'id': deviceId, 'name': deviceName, 'platform': platformName},
+      'device': {'id': deviceId, 'name': deviceName, 'platform': platformName, 'version': installedVersion()},
       'usage': usage,
       'timeline': timeline,
       'apps': apps,
@@ -802,18 +865,20 @@ class P2pSync {
     }
     final name = rawName.isNotEmpty ? rawName : (existingName.isNotEmpty ? existingName : tr('deviceDefault'));
     final plat = (devInfo['platform'] as String? ?? 'unknown').trim();
+    final ver = (devInfo['version'] as String? ?? '').trim();
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
     Directory(dataDir()).createSync(recursive: true);
     final iconDir = Directory('${dataDir()}${Platform.pathSeparator}remote_icons${Platform.pathSeparator}${_safeSeg(peerId)}');
     final db = sqlite3.open(dbPath());
+    db.execute('PRAGMA busy_timeout=3000;');
     try {
       ensureSchema(db);
       db.execute('BEGIN');
       try {
         db.execute(
-          'INSERT OR REPLACE INTO devices(id, name, platform, host, port, last_sync) VALUES(?, ?, ?, ?, ?, ?)',
-          [peerId, name, plat, host, port, nowSec],
+          'INSERT OR REPLACE INTO devices(id, name, platform, host, port, last_sync, version) VALUES(?, ?, ?, ?, ?, ?, ?)',
+          [peerId, name, plat, host, port, nowSec, ver],
         );
 
         final uList = data['usage'] as List<dynamic>? ?? const [];
@@ -981,6 +1046,7 @@ class P2pSync {
             port: port,
             token: p.token,
             lastSync: nowSec,
+            version: ver.isNotEmpty ? ver : p.version,
           )
         else
           p,

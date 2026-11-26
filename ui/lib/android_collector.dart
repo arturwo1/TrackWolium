@@ -338,6 +338,7 @@ class UsageBridge {
 
 Future<String?> saveBackup(UsageBridge bridge) async {
   final db = sqlite3.open(dbPath());
+  db.execute('PRAGMA busy_timeout=3000;');
   try {
     db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
   } finally {
@@ -353,6 +354,7 @@ Future<bool?> restoreBackup(UsageBridge bridge) async {
   if (bytes.length < 100 || String.fromCharCodes(bytes.sublist(0, 15)) != 'SQLite format 3') return false;
   final tmp = File('${Directory.systemTemp.path}${Platform.pathSeparator}wolium_restore.db')..writeAsBytesSync(bytes);
   final db = sqlite3.open(dbPath());
+  db.execute('PRAGMA busy_timeout=3000;');
   try {
     db.execute(_schema);
     db.execute('ATTACH DATABASE ? AS b', [tmp.path]);
@@ -429,6 +431,7 @@ class AndroidCollector {
       final sessions = buildSessions(events, now.millisecondsSinceEpoch);
       Directory(dataDir()).createSync(recursive: true);
       final db = sqlite3.open(dbPath());
+      db.execute('PRAGMA busy_timeout=3000;');
       try {
         db.execute(_schema);
         storeSessions(db, sessions, firstDay, DateTime(now.year, now.month, now.day), events);

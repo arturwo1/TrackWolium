@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <algorithm>
 #include "tw/platform.hpp"
+#include "tw/win_helpers.hpp"
 #include "tw/win_util.hpp"
 #include <dwmapi.h>
 #include <winver.h>
@@ -81,6 +82,30 @@ struct EnumContext {
   std::vector<AppSample>* out;
 };
 
+struct UwpChildSearch {
+  DWORD outer_pid;
+  std::wstring core_path;
+  std::wstring any_path;
+};
+
+BOOL CALLBACK find_uwp_child(HWND ch, LPARAM lparam) {
+  auto* s = reinterpret_cast<UwpChildSearch*>(lparam);
+  DWORD cpid = 0;
+  GetWindowThreadProcessId(ch, &cpid);
+  if (cpid == 0 || cpid == s->outer_pid) return TRUE;
+  std::wstring cpath = image_path(cpid);
+  if (cpath.empty()) return TRUE;
+  if (should_unwrap_uwp_host(to_utf8(lower(base_name(cpath))))) return TRUE;
+  wchar_t cls[64]{};
+  GetClassNameW(ch, cls, 64);
+  if (wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0) {
+    s->core_path = cpath;
+    return FALSE;
+  }
+  if (s->any_path.empty()) s->any_path = cpath;
+  return TRUE;
+}
+
 BOOL CALLBACK enum_windows(HWND h, LPARAM lparam) {
   auto* ctx = reinterpret_cast<EnumContext*>(lparam);
   if (!is_app_window(h)) return TRUE;
@@ -90,11 +115,21 @@ BOOL CALLBACK enum_windows(HWND h, LPARAM lparam) {
   std::wstring path = image_path(pid);
   if (path.empty()) return TRUE;
 
+  std::string key = to_utf8(lower(base_name(path)));
+  if (should_unwrap_uwp_host(key)) {
+    UwpChildSearch search{pid, {}, {}};
+    EnumChildWindows(h, find_uwp_child, reinterpret_cast<LPARAM>(&search));
+    std::wstring resolved = !search.core_path.empty() ? search.core_path : search.any_path;
+    if (!resolved.empty()) {
+      path = resolved;
+      key = to_utf8(lower(base_name(path)));
+    }
+  }
+
   State state = State::Open;
   if (h == ctx->foreground) state = State::Focused;
   else if (IsIconic(h)) state = State::Minimized;
 
-  std::string key = to_utf8(lower(base_name(path)));
   path_cache().emplace(key, path);
   ctx->out->push_back({key, state});
   return TRUE;
@@ -350,7 +385,7 @@ public:
   BatteryStat battery_stat() override {
     BatteryStat bat;
     SYSTEM_POWER_STATUS sps{};
-    if (GetSystemPowerStatus(&sps) && sps.BatteryFlag != 128 && sps.BatteryFlag != 255 && sps.BatteryLifePercent <= 100) {
+    if (GetSystemPowerStatus(&sps) && is_valid_battery_status(sps.ACLineStatus, sps.BatteryFlag, sps.BatteryLifePercent)) {
       bat.pct = static_cast<int>(sps.BatteryLifePercent);
       bat.charging = (sps.ACLineStatus == 1 || (sps.BatteryFlag & 8) != 0) ? 1 : 0;
       bat.valid = true;
@@ -379,12 +414,9 @@ private:
     if (wts_query && wts_free) {
       LPWSTR buf = nullptr;
       DWORD bytes = 0;
-      // WTS_CURRENT_SERVER_HANDLE=NULL, WTS_CURRENT_SESSION=(DWORD)-1, WTSSessionInfoEx=25
       if (wts_query(nullptr, static_cast<DWORD>(-1), 25, &buf, &bytes) && buf && bytes >= 16) {
-        // WTSINFOEXW layout: Level (ULONG=4B), Reserved (ULONG=4B), Data.WTSINFOEX_LEVEL1_W: SessionId(4), SessionState(4), SessionFlags(LONG at offset 16 or 12 depending alignment)
         const DWORD level = *reinterpret_cast<const DWORD*>(buf);
         if (level == 1 && bytes >= 24) {
-          // Offset 16 is SessionFlags in WTSINFOEXW (WTS_SESSIONSTATE_LOCK == 0 on Vista+/Win8+, UNLOCK == 1)
           const LONG flags = *reinterpret_cast<const LONG*>(reinterpret_cast<const unsigned char*>(buf) + 16);
           wts_free(buf);
           if (flags == 0) return true;

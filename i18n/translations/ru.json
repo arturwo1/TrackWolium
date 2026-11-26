@@ -435,6 +435,20 @@
     "browserTrackingRestrictedHint": "На Android 13+ служба доступности может быть заблокирована системой как «ограниченная настройка»: откройте «О приложении» → меню (⋮) в углу → «Разрешить ограниченные настройки», затем включите Wolium в Спец. возможностях.",
     "browserTrackingOpenAppInfo": "О приложении",
     "extSetupOpened": "Помощник открыт в браузере (ссылка скопирована: {url})",
-    "updateExtNotice": "После обновления Wolium нажмите ↻ (перезагрузить) у расширения Wolium на странице расширений браузера."
+    "updateExtNotice": "После обновления Wolium нажмите ↻ (перезагрузить) у расширения Wolium на странице расширений браузера.",
+    "navSysTabShort": "Система",
+    "searchLines": "Поиск линий...",
+    "lineRealFocus": "Реальный фокус",
+    "p2pUpdateBtn": "Обновить",
+    "p2pUpdating": "Обновление...",
+    "p2pUpdateStarted": "Обновление запущено на {name}",
+    "p2pUpdateUpToDate": "На {name} уже актуальная версия",
+    "p2pUpdateStore": "{name} обновляется через магазин",
+    "p2pUpdateDisabled": "Автообновление отключено на {name}",
+    "p2pUpdateFailed": "Не удалось обновить {name}",
+    "exportIncludeTitles": "Включить заголовки страниц (могут содержать личные данные)",
+    "chartMin": "Мин",
+    "chartMax": "Макс",
+    "chartAvg": "Средн."
   }
 }

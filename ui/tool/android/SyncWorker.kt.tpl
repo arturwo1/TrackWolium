@@ -527,19 +527,29 @@ object Sync {
           db.execSQL("INSERT OR IGNORE INTO sys_events(ts, kind, duration_ms, extra) VALUES(?, 'reboot', 0, '')", arrayOf<Any>(bootSec))
         }
         bootFile.writeText(bootSec.toString())
-        val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-        if (am != null) {
-          val mi = ActivityManager.MemoryInfo()
-          am.getMemoryInfo(mi)
-          if (mi.totalMem > 0) {
-            db.execSQL("INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?, 'ram', ?, ?)", arrayOf<Any>(nowSec, mi.totalMem / 1024L, mi.availMem / 1024L))
+        val metricFlags = try {
+          val mf = File(dir, "metrics")
+          if (mf.exists()) mf.readText().split(Regex("\\s+")).filter { it.isNotEmpty() }.toSet() else emptySet()
+        } catch (_: Exception) {
+          emptySet<String>()
+        }
+        if (metricFlags.contains("sysram")) {
+          val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+          if (am != null) {
+            val mi = ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            if (mi.totalMem > 0) {
+              db.execSQL("INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?, 'ram', ?, ?)", arrayOf<Any>(nowSec, mi.totalMem / 1024L, mi.availMem / 1024L))
+            }
           }
         }
-        val sf = StatFs(ctx.filesDir.absolutePath)
-        val totalKb = sf.totalBytes / 1024L
-        val freeKb = sf.availableBytes / 1024L
-        if (totalKb > 0) {
-          db.execSQL("INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?, 'disk:/data', ?, ?)", arrayOf<Any>(nowSec, totalKb, freeKb))
+        if (metricFlags.contains("sysdisk")) {
+          val sf = StatFs(ctx.filesDir.absolutePath)
+          val totalKb = sf.totalBytes / 1024L
+          val freeKb = sf.availableBytes / 1024L
+          if (totalKb > 0) {
+            db.execSQL("INSERT OR REPLACE INTO sysmon(ts, kind, a, b) VALUES(?, 'disk:/data', ?, ?)", arrayOf<Any>(nowSec, totalKb, freeKb))
+          }
         }
         sampleBattery(ctx, db, nowSec)
       } catch (_: Exception) {}
@@ -766,16 +776,29 @@ object Sync {
 
   fun text(ctx: Context, key: String): String {
     return try {
-      val lang = try {
+      val saved = try {
         File(dir(ctx), "lang").readText().trim()
       } catch (ex: Exception) {
         ""
       }
+      val lang = if (saved.isNotEmpty()) saved else Locale.getDefault().language.lowercase(Locale.ROOT)
       val all = JSONObject(ctx.assets.open("strings.json").bufferedReader().readText())
       val pick = if (all.has(lang)) all.getJSONObject(lang) else all.getJSONObject("en")
       if (pick.has(key)) pick.getString(key) else all.getJSONObject("en").getString(key)
     } catch (ex: Exception) {
       key
+    }
+  }
+
+  fun refreshChannels(ctx: Context) {
+    if (Build.VERSION.SDK_INT < 26) return
+    try {
+      val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      nm.createNotificationChannel(NotificationChannel("api", text(ctx, "apiNotifChannel"), NotificationManager.IMPORTANCE_LOW))
+      nm.createNotificationChannel(NotificationChannel("p2p", text(ctx, "p2pNotifChannel"), NotificationManager.IMPORTANCE_LOW))
+      nm.createNotificationChannel(NotificationChannel("limits", text(ctx, "limitChannel"), NotificationManager.IMPORTANCE_DEFAULT))
+      nm.createNotificationChannel(NotificationChannel("updates", text(ctx, "notifChannel"), NotificationManager.IMPORTANCE_DEFAULT))
+    } catch (_: Exception) {
     }
   }
 
@@ -841,14 +864,38 @@ object Sync {
     false
   }
 
-  fun checkUpdate(ctx: Context) {
+  fun triggerRemoteUpdate(ctx: Context): String {
+    if (isStore(ctx)) return "store"
+    val d = dir(ctx)
+    if (!File(d, "consent").exists() || File(d, "noupdates").exists()) return "disabled"
+    return try {
+      val current = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: return "failed"
+      val latest = http("https://github.com/$REPO/releases/latest/download/version.txt").trim()
+      if (!Regex("^[0-9]+(\\.[0-9]+)*$").matches(latest)) return "failed"
+      if (compare(current, latest) >= 0) {
+        cleanUpdates(ctx)
+        return "up_to_date"
+      }
+      Thread {
+        try {
+          checkUpdate(ctx, true)
+        } catch (_: Exception) {
+        }
+      }.start()
+      "started"
+    } catch (_: Exception) {
+      "failed"
+    }
+  }
+
+  fun checkUpdate(ctx: Context, force: Boolean = false) {
     if (isStore(ctx)) return
     val dir = dir(ctx)
     if (!File(dir, "consent").exists() || File(dir, "noupdates").exists()) return
     val current = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: return
     val gate = ctx.getSharedPreferences("wolium", Context.MODE_PRIVATE)
     val nowMs = System.currentTimeMillis()
-    if (nowMs - gate.getLong("update_checked", 0L) < 6L * 3600L * 1000L) return
+    if (!force && nowMs - gate.getLong("update_checked", 0L) < 6L * 3600L * 1000L) return
     gate.edit().putLong("update_checked", nowMs).apply()
     val latest = http("https://github.com/$REPO/releases/latest/download/version.txt").trim()
     if (!Regex("^[0-9]+(\\.[0-9]+)*$").matches(latest) || compare(current, latest) >= 0) {

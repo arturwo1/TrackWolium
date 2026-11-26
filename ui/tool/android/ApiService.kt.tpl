@@ -219,7 +219,7 @@ class ApiService : Service() {
     val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     val now = System.currentTimeMillis()
     if (method == "POST") {
-      if (path != "/v1/browser") return http(404, "{\"error\":\"not found\"}");
+      if (path != "/v1/browser") return http(404, "{\"error\":\"not found\"}")
       return try {
         val obj = org.json.JSONObject(reqBody)
         val browser = obj.optString("browser", "").trim().lowercase(Locale.ROOT).take(64)

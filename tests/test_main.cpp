@@ -17,6 +17,7 @@
 #include "tw/rpc.hpp"
 #include "tw/serialize.hpp"
 #include "tw/sqlite_store.hpp"
+#include "tw/win_helpers.hpp"
 #if defined(__linux__)
 #include "dbus_bridge.hpp"
 #endif
@@ -1058,6 +1059,22 @@ void test_engine_battery_telemetry() {
   CHECK(bat_rows == 4);
 }
 
+void test_win_helpers_and_default_metrics() {
+  CHECK(!tw::is_valid_battery_status(1, 128, 100));
+  CHECK(!tw::is_valid_battery_status(1, 136, 100));
+  CHECK(!tw::is_valid_battery_status(1, 255, 50));
+  CHECK(!tw::is_valid_battery_status(0, 1, 255));
+  CHECK(!tw::is_valid_battery_status(1, 0, 0));
+  CHECK(tw::is_valid_battery_status(0, 1, 82));
+  CHECK(tw::is_valid_battery_status(1, 8, 95));
+  CHECK(tw::is_valid_battery_status(1, 0, 100));
+  CHECK(tw::should_unwrap_uwp_host("applicationframehost.exe"));
+  CHECK(!tw::should_unwrap_uwp_host("calc.exe"));
+  tw::MetricsConfig def;
+  CHECK(!def.cpu && !def.ram && !def.peak && !def.io_read && !def.io_write && !def.sys_ram && !def.sys_disk && !def.no_time);
+  CHECK(!def.any());
+}
+
 int main() {
   test_accumulates_per_state();
   test_gap_is_ignored();
@@ -1104,6 +1121,7 @@ int main() {
   test_browser_api();
   test_sys_events();
   test_engine_battery_telemetry();
+  test_win_helpers_and_default_metrics();
 #ifdef _WIN32
   test_ipc_roundtrip();
 #endif

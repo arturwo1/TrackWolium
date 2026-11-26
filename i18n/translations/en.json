@@ -435,6 +435,20 @@
     "browserTrackingRestrictedHint": "On Android 13+, Accessibility may be blocked as a Restricted Setting: open App Info -> 3-dot menu (⋮) -> \"Allow restricted settings\", then enable Wolium in Accessibility.",
     "browserTrackingOpenAppInfo": "Open App Info",
     "extSetupOpened": "Setup helper opened in browser (URL copied: {url})",
-    "updateExtNotice": "After updating Wolium, click Reload (↻) on the Wolium extension in your browser extensions page."
+    "updateExtNotice": "After updating Wolium, click Reload (↻) on the Wolium extension in your browser extensions page.",
+    "navSysTabShort": "System",
+    "searchLines": "Search lines...",
+    "lineRealFocus": "Real focus",
+    "p2pUpdateBtn": "Update",
+    "p2pUpdating": "Updating...",
+    "p2pUpdateStarted": "Update started on {name}",
+    "p2pUpdateUpToDate": "{name} is already up to date",
+    "p2pUpdateStore": "{name} uses store updates",
+    "p2pUpdateDisabled": "Automatic updates are disabled on {name}",
+    "p2pUpdateFailed": "Could not update {name}",
+    "exportIncludeTitles": "Include page titles (may contain personal data)",
+    "chartMin": "Min",
+    "chartMax": "Max",
+    "chartAvg": "Avg"
   }
 }

@@ -14,6 +14,18 @@ const seriesColors = [
   Color(0xFF2EC4D6),
   Color(0xFFE6C84B),
   Color(0xFF9AA5B1),
+  Color(0xFFFF6B4A),
+  Color(0xFF19B596),
+  Color(0xFFD96BFF),
+  Color(0xFFA6E22E),
+  Color(0xFF7B9DFF),
+  Color(0xFFFFC168),
+  Color(0xFFE57373),
+  Color(0xFF4DD0E1),
+  Color(0xFFAED581),
+  Color(0xFFF06292),
+  Color(0xFFBA68C8),
+  Color(0xFFFFD54F),
 ];
 
 const statMetricIds = [
@@ -36,16 +48,17 @@ const _idColor = {
   'iow': 4,
   'sysram': 5,
   'sysdisk': 6,
-  'battery': 1,
-  'opens': 1,
-  'notifs': 2,
-  'unlocks': 3,
-  'appbattery': 6,
-  'power_sleep': 4,
-  'power_hibernate': 5,
-  'power_lock': 6,
-  'power_reboot': 7,
-  'power_shutdown': 0,
+  'battery': 7,
+  'opens': 8,
+  'notifs': 9,
+  'unlocks': 10,
+  'appbattery': 11,
+  'power_sleep': 12,
+  'power_hibernate': 13,
+  'power_lock': 14,
+  'power_reboot': 15,
+  'power_shutdown': 16,
+  'realfocus': 17,
 };
 
 Color metricColor(String id) => seriesColors[_idColor[id] ?? 0];
@@ -60,6 +73,8 @@ String formatCpuMs(int ms) => formatMs(ms);
 
 String metricName(String id) {
   switch (id) {
+    case 'realfocus':
+      return tr('lineRealFocus');
     case 'cpu':
       return tr('mCpu');
     case 'ram':
@@ -100,7 +115,8 @@ String metricName(String id) {
 }
 
 class ResSeries {
-  ResSeries(this.id, this.label, this.color, this.format, this.points, [List<Map<String, double>>? apps]) : apps = apps ?? List.generate(points.length, (_) => const <String, double>{});
+  ResSeries(this.id, this.label, this.color, this.format, this.points, [List<Map<String, double>>? apps, this.prevPoints = const []])
+      : apps = apps ?? List.generate(points.length, (_) => const <String, double>{});
 
   final String id;
   final String label;
@@ -108,33 +124,95 @@ class ResSeries {
   final String Function(double) format;
   final List<Offset> points;
   final List<Map<String, double>> apps;
+  final List<Offset> prevPoints;
 
   bool get isPeak => id == 'peak';
-  bool get isSum => id == 'opens' || id == 'notifs' || id == 'unlocks' || id == 'appbattery' || id.startsWith('power_');
+  bool get isSum => id == 'opens' || id == 'notifs' || id == 'unlocks' || id == 'appbattery' || id.startsWith('power_') || id == 'realfocus';
+
+  static int lowerBound(List<Offset> list, double x) {
+    var lo = 0;
+    var hi = list.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (list[mid].dx < x) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
 
   double maxIn(double a, double b) {
     var m = 0.0;
-    for (final p in points) {
-      if (p.dx >= a && p.dx <= b && p.dy > m) m = p.dy;
+    for (var i = lowerBound(points, a); i < points.length; i++) {
+      final p = points[i];
+      if (p.dx > b) break;
+      if (p.dy > m) m = p.dy;
     }
     return m;
   }
 
+  ({double min, double max, double avg}) statsIn(double a, double b) {
+    var minV = double.infinity;
+    var maxV = 0.0;
+    var sum = 0.0;
+    var count = 0;
+    for (var i = lowerBound(points, a); i < points.length; i++) {
+      final p = points[i];
+      if (p.dx > b) break;
+      if (p.dy < minV) minV = p.dy;
+      if (p.dy > maxV) maxV = p.dy;
+      sum += p.dy;
+      count++;
+    }
+    if (count == 0) return (min: 0.0, max: 0.0, avg: 0.0);
+    return (min: minV, max: maxV, avg: sum / count);
+  }
+
+  double? prevValueIn(double a, double b) {
+    if (prevPoints.isEmpty) return null;
+    final list = <double>[];
+    for (var i = lowerBound(prevPoints, a); i < prevPoints.length; i++) {
+      final p = prevPoints[i];
+      if (p.dx >= b) break;
+      list.add(p.dy);
+    }
+    if (list.isNotEmpty) return _fold(list);
+    final mid = (a + b) / 2;
+    final i = lowerBound(prevPoints, mid);
+    var best = -1;
+    var bestDist = double.infinity;
+    if (i < prevPoints.length) {
+      best = i;
+      bestDist = (prevPoints[i].dx - mid).abs();
+    }
+    if (i > 0 && (prevPoints[i - 1].dx - mid).abs() < bestDist) {
+      best = i - 1;
+      bestDist = (prevPoints[i - 1].dx - mid).abs();
+    }
+    if (best >= 0 && bestDist <= math.max(b - a, 600)) return prevPoints[best].dy;
+    return null;
+  }
+
   List<int> indexesIn(double a, double b) {
     final out = <int>[];
-    for (var i = 0; i < points.length; i++) {
-      if (points[i].dx >= a && points[i].dx < b) out.add(i);
+    for (var i = lowerBound(points, a); i < points.length; i++) {
+      if (points[i].dx >= b) break;
+      out.add(i);
     }
     if (out.isEmpty && points.isNotEmpty) {
       final mid = (a + b) / 2;
+      final i = lowerBound(points, mid);
       var best = 0;
       var d = double.infinity;
-      for (var i = 0; i < points.length; i++) {
-        final dist = (points[i].dx - mid).abs();
-        if (dist < d) {
-          d = dist;
-          best = i;
-        }
+      if (i < points.length) {
+        best = i;
+        d = (points[i].dx - mid).abs();
+      }
+      if (i > 0 && (points[i - 1].dx - mid).abs() < d) {
+        best = i - 1;
+        d = (points[i - 1].dx - mid).abs();
       }
       if (d <= math.max(b - a, 600)) out.add(best);
     }
@@ -230,7 +308,7 @@ List<ResSeries> buildSeries({
 
   if (ids.contains('cpu')) out.add(make('cpu', 0, _cpuText, (v, s, _) => v / (s * 1000) / cores * 100, clampTotal: true));
   if (ids.contains('ram')) out.add(make('ram', 1, _size, (v, _, c) => v / c));
-  if (ids.contains('peak')) out.add(make('peak', 2, _size, (v, _, __) => v.toDouble()));
+  if (ids.contains('peak')) out.add(make('peak', 2, _size, (v, _, _) => v.toDouble()));
   if (ids.contains('ior')) out.add(make('ior', 3, _rate, (v, s, _) => v / s));
   if (ids.contains('iow')) out.add(make('iow', 4, _rate, (v, s, _) => v / s));
   final sysDevs = <String>[];
@@ -247,7 +325,7 @@ List<ResSeries> buildSeries({
         final ptsDev = [for (final p in sys) if (p.device == dev && p.kind == 'ram') Offset(p.t.toDouble(), (p.total - p.free).toDouble())];
         if (ptsDev.isEmpty) continue;
         final dLabel = deviceNames[dev] ?? dev;
-        out.add(ResSeries('sysram:$dev', '${metricName('sysram')} ($dLabel)', seriesColors[(5 + i) % seriesColors.length], _size, ptsDev));
+        out.add(ResSeries('sysram:$dev', '${metricName('sysram')} ($dLabel)', seriesColors[(5 + i * 2) % seriesColors.length], _size, ptsDev));
       }
     }
   }
@@ -264,7 +342,7 @@ List<ResSeries> buildSeries({
       final mount = k.kind.substring(5);
       final label = multiDev ? '${metricName('sysdisk')} $mount ($dLabel)' : '${metricName('sysdisk')} $mount';
       final id = multiDev ? 'sysdisk:${k.device}:${k.kind}' : 'sysdisk:${k.kind}';
-      out.add(ResSeries(id, label, seriesColors[(6 + i) % seriesColors.length], _size, [for (final p in sys) if (p.device == k.device && p.kind == k.kind) Offset(p.t.toDouble(), (p.total - p.free).toDouble())]));
+      out.add(ResSeries(id, label, seriesColors[(18 + i) % seriesColors.length], _size, [for (final p in sys) if (p.device == k.device && p.kind == k.kind) Offset(p.t.toDouble(), (p.total - p.free).toDouble())]));
     }
   }
   if (ids.contains('battery')) {
@@ -283,7 +361,7 @@ List<ResSeries> buildSeries({
         final ptsBat = [for (final p in sys) if (p.device == dev && p.kind == 'battery') Offset(p.t.toDouble(), p.total.clamp(0, 100).toDouble())];
         if (ptsBat.isEmpty) continue;
         final dLabel = deviceNames[dev] ?? dev;
-        out.add(ResSeries('battery:$dev', '${metricName('battery')} ($dLabel)', seriesColors[(1 + i) % seriesColors.length], _pctText, ptsBat));
+        out.add(ResSeries('battery:$dev', '${metricName('battery')} ($dLabel)', seriesColors[(7 + i * 3) % seriesColors.length], _pctText, ptsBat));
       }
     }
   }

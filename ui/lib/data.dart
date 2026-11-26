@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'dart:math' as math;
 import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
@@ -86,6 +87,9 @@ void saveLanguage(String code) {
     Directory(dataDir()).createSync(recursive: true);
     File(langFile()).writeAsStringSync('$code\n');
   } catch (_) {}
+  if (Platform.isAndroid) {
+    const MethodChannel('wolium/usage').invokeMethod<void>('refreshNotifications').catchError((_) {});
+  }
 }
 
 class AppMeta {
@@ -228,12 +232,13 @@ class PresenceRow {
 }
 
 class DeviceInfo {
-  const DeviceInfo(this.id, this.name, this.platform, this.lastSync);
+  const DeviceInfo(this.id, this.name, this.platform, this.lastSync, [this.version = '']);
 
   final String id;
   final String name;
   final String platform;
   final int lastSync;
+  final String version;
 }
 
 class SiteUsage {
@@ -312,6 +317,9 @@ class Usage {
     if (!available) return null;
     try {
       _db = sqlite3.open(dbPath(), mode: OpenMode.readOnly);
+      try {
+        _db!.execute('PRAGMA busy_timeout=3000;');
+      } catch (_) {}
     } catch (_) {
       _db = null;
     }
@@ -336,11 +344,18 @@ class Usage {
     if (db == null) return [];
     try {
       return db
-          .select('SELECT id, name, platform, last_sync FROM devices ORDER BY name')
-          .map((r) => DeviceInfo(r['id'] as String, r['name'] as String, r['platform'] as String, r['last_sync'] as int))
+          .select('SELECT id, name, platform, last_sync, version FROM devices ORDER BY name')
+          .map((r) => DeviceInfo(r['id'] as String, r['name'] as String, r['platform'] as String, r['last_sync'] as int, r['version'] as String? ?? ''))
           .toList();
     } catch (_) {
-      return [];
+      try {
+        return db
+            .select('SELECT id, name, platform, last_sync FROM devices ORDER BY name')
+            .map((r) => DeviceInfo(r['id'] as String, r['name'] as String, r['platform'] as String, r['last_sync'] as int))
+            .toList();
+      } catch (_) {
+        return [];
+      }
     }
   }
 

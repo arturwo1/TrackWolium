@@ -20,3 +20,13 @@ for key, value in (("CompanyName", "DTSys"), ("FileDescription", "Wolium"), ("Pr
                    ("InternalName", "wolium"), ("LegalCopyright", "DTSys")):
     text = re.sub(r'(VALUE "%s", )"[^"]*"' % key, r'\1"%s"' % value, text)
 rc.write_text(text, encoding="utf-8")
+
+win32 = runner / "win32_window.cpp"
+if win32.exists():
+    wtext = win32.read_text(encoding="utf-8")
+    wtext = wtext.replace(
+        "ShowWindow(window_handle_, SW_SHOWNORMAL);",
+        "ShowWindow(window_handle_, IsZoomed(window_handle_) ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);",
+    )
+    win32.write_text(wtext, encoding="utf-8")
+

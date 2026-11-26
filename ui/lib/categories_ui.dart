@@ -255,7 +255,7 @@ Future<void> limitDialog(BuildContext context, {String? app, String? title, List
               if (app != null)
                 Text(title ?? app, style: const TextStyle(fontWeight: FontWeight.w700))
               else
-                DropdownButton<String>(
+                SelectBox<String>(
                   isExpanded: true,
                   value: target.isEmpty ? null : target,
                   items: [

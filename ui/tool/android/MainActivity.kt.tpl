@@ -31,6 +31,7 @@ class MainActivity : FlutterActivity() {
     super.onCreate(savedInstanceState)
     action = intent?.getStringExtra("action")
     try {
+      Sync.refreshChannels(applicationContext)
       val request = PeriodicWorkRequestBuilder<SyncWorker>(1, TimeUnit.HOURS).build()
       WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("wolium-sync", ExistingPeriodicWorkPolicy.UPDATE, request)
       val builder = Constraints.Builder()
@@ -214,6 +215,10 @@ class MainActivity : FlutterActivity() {
         }
         "requestNotifications" -> {
           if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 77)
+          result.success(null)
+        }
+        "refreshNotifications" -> {
+          Sync.refreshChannels(applicationContext)
           result.success(null)
         }
         "apiService" -> {

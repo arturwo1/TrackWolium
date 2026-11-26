@@ -8,6 +8,7 @@ import 'package:ffi/ffi.dart';
 const _fileMapRead = 4;
 const _eventModify = 2;
 const _synchronize = 0x00100000;
+const _swShow = 5;
 const _swRestore = 9;
 
 final DynamicLibrary? _k32 = Platform.isWindows ? DynamicLibrary.open('kernel32.dll') : null;
@@ -23,6 +24,7 @@ final _setEvent = _k32?.lookupFunction<Int32 Function(IntPtr), int Function(int)
 final _openMutex = _k32?.lookupFunction<IntPtr Function(Uint32, Int32, Pointer<Utf16>), int Function(int, int, Pointer<Utf16>)>('OpenMutexW');
 final _createMutex = _k32?.lookupFunction<IntPtr Function(Pointer<Void>, Int32, Pointer<Utf16>), int Function(Pointer<Void>, int, Pointer<Utf16>)>('CreateMutexW');
 final _findWindow = _u32?.lookupFunction<IntPtr Function(Pointer<Utf16>, Pointer<Utf16>), int Function(Pointer<Utf16>, Pointer<Utf16>)>('FindWindowW');
+final _isIconic = _u32?.lookupFunction<Int32 Function(IntPtr), int Function(int)>('IsIconic');
 final _showWindow = _u32?.lookupFunction<Int32 Function(IntPtr, Int32), int Function(int, int)>('ShowWindow');
 final _setForeground = _u32?.lookupFunction<Int32 Function(IntPtr), int Function(int)>('SetForegroundWindow');
 
@@ -90,7 +92,8 @@ void focusExistingWindow() {
   try {
     final hwnd = _findWindow!(cls, title);
     if (hwnd == 0) return;
-    _showWindow!(hwnd, _swRestore);
+    final iconic = _isIconic != null && _isIconic!(hwnd) != 0;
+    _showWindow!(hwnd, iconic ? _swRestore : _swShow);
     _setForeground!(hwnd);
   } finally {
     calloc.free(title);

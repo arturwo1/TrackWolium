@@ -39,11 +39,6 @@ class WindowState with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_wantMaximize) maximizeMainWindow();
     });
-    if (_wantMaximize) {
-      Timer(const Duration(milliseconds: 250), () {
-        if (_wantMaximize) maximizeMainWindow();
-      });
-    }
   }
 
   String _encode(WindowBox b) => '${b.left} ${b.top} ${b.right} ${b.bottom} ${b.maximized ? 1 : 0}';

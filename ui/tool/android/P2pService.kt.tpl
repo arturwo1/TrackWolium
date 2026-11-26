@@ -266,6 +266,12 @@ class P2pService : Service() {
       }
       return http(200, exportSnapshot())
     }
+    if (method == "POST" && path == "/p2p/update") {
+      val token = if (auth.startsWith("Bearer ")) auth.substring(7).trim() else ""
+      findPeerByToken(token) ?: return http(401, "{\"error\":\"unauthorized\"}")
+      val status = Sync.triggerRemoteUpdate(applicationContext)
+      return http(200, JSONObject().put("status", status).toString())
+    }
     return http(404, "{\"error\":\"not_found\"}")
   }
 
@@ -367,7 +373,8 @@ class P2pService : Service() {
       db.execSQL("CREATE TABLE IF NOT EXISTS sysmon(ts INTEGER NOT NULL, kind TEXT NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL, PRIMARY KEY(ts, kind)) WITHOUT ROWID")
       db.execSQL("CREATE TABLE IF NOT EXISTS afk(day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(day, slot, app)) WITHOUT ROWID")
       db.execSQL("CREATE TABLE IF NOT EXISTS sys_events(ts INTEGER NOT NULL, kind TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, extra TEXT NOT NULL DEFAULT '', PRIMARY KEY(ts, kind)) WITHOUT ROWID")
-      db.execSQL("CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 9096, last_sync INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID")
+      db.execSQL("CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, host TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 9096, last_sync INTEGER NOT NULL DEFAULT 0, version TEXT NOT NULL DEFAULT '') WITHOUT ROWID")
+      try { db.execSQL("ALTER TABLE devices ADD COLUMN version TEXT NOT NULL DEFAULT ''") } catch (_: Exception) {}
       db.execSQL("CREATE TABLE IF NOT EXISTS remote_usage(device TEXT NOT NULL, day TEXT NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(device, day, app, state)) WITHOUT ROWID")
       db.execSQL("CREATE TABLE IF NOT EXISTS remote_timeline(device TEXT NOT NULL, day TEXT NOT NULL, slot INTEGER NOT NULL, app TEXT NOT NULL, state INTEGER NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY(device, day, slot, app, state)) WITHOUT ROWID")
       db.execSQL("CREATE TABLE IF NOT EXISTS remote_apps(device TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL DEFAULT '', PRIMARY KEY(device, app)) WITHOUT ROWID")
@@ -395,6 +402,7 @@ class P2pService : Service() {
       val oldName = peer.optString("name", "").trim()
       val name = if (rawName.isNotEmpty()) rawName else if (oldName.isNotEmpty()) oldName else Sync.text(ctx, "deviceDefault")
       val plat = devInfo?.optString("platform", "")?.trim()?.ifEmpty { peer.optString("platform", "unknown") } ?: "unknown"
+      val ver = devInfo?.optString("version", "")?.trim() ?: ""
       val host = if (remoteHost.isNotEmpty()) remoteHost else peer.optString("host", "")
       val port = peer.optInt("port", PORT)
       val nowSec = System.currentTimeMillis() / 1000L
@@ -408,7 +416,7 @@ class P2pService : Service() {
         ensureSchema(db)
         db.beginTransaction()
         try {
-          db.execSQL("INSERT OR REPLACE INTO devices(id, name, platform, host, port, last_sync) VALUES(?, ?, ?, ?, ?, ?)", arrayOf<Any>(peerId, name, plat, host, port, nowSec))
+          db.execSQL("INSERT OR REPLACE INTO devices(id, name, platform, host, port, last_sync, version) VALUES(?, ?, ?, ?, ?, ?, ?)", arrayOf<Any>(peerId, name, plat, host, port, nowSec, ver))
           body.optJSONArray("usage")?.let { list ->
             val st = db.compileStatement("INSERT OR REPLACE INTO remote_usage(device, day, app, state, ms) VALUES(?, ?, ?, ?, ?)")
             for (i in 0 until list.length()) {
@@ -720,8 +728,13 @@ class P2pService : Service() {
           db.close()
         }
       }
+      val ver = try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: ""
+      } catch (_: Exception) {
+        ""
+      }
       return JSONObject()
-        .put("device", JSONObject().put("id", deviceIdForContext(ctx)).put("name", deviceNameForContext(ctx)).put("platform", "android"))
+        .put("device", JSONObject().put("id", deviceIdForContext(ctx)).put("name", deviceNameForContext(ctx)).put("platform", "android").put("version", ver))
         .put("usage", usage)
         .put("timeline", timeline)
         .put("apps", apps)

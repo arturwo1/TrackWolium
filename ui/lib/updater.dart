@@ -196,7 +196,7 @@ Future<bool> downloadAndInstall(UpdateInfo info, void Function(double) progress)
         }
       }
     }
-    if (buffer.length > 0) sink.add(buffer.takeBytes());
+    if (buffer.isNotEmpty) sink.add(buffer.takeBytes());
     await sink.flush();
     await sink.close();
     if (total > 0 && got != total) {

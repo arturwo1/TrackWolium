@@ -52,27 +52,34 @@ const _bottom = 22.0;
 const _tipWidth = 250.0;
 const _detailWidth = 250.0;
 
-double? seriesValueAt(ResSeries s, double sec) {
-  final p = s.points;
+double? seriesValueAt(ResSeries s, double sec, [List<Offset>? pts]) {
+  final p = pts ?? s.points;
   if (p.isEmpty) return null;
   if (p.length == 1) return (sec - p.first.dx).abs() <= 600 ? p.first.dy : null;
   if (sec < p.first.dx - 1e-3 || sec > p.last.dx + 1e-3) return null;
   if (sec <= p.first.dx) return p.first.dy;
   if (sec >= p.last.dx) return p.last.dy;
-  for (var i = 0; i < p.length - 1; i++) {
-    if (sec >= p[i].dx && sec <= p[i + 1].dx) {
-      final w = p[i + 1].dx - p[i].dx;
-      final t = w <= 0 ? 0.0 : (sec - p[i].dx) / w;
-      return p[i].dy * (1 - t) + p[i + 1].dy * t;
-    }
-  }
-  return null;
+  final hi = ResSeries.lowerBound(p, sec);
+  if (hi <= 0) return p.first.dy;
+  if (hi >= p.length) return p.last.dy;
+  final p0 = p[hi - 1];
+  final p1 = p[hi];
+  final w = p1.dx - p0.dx;
+  final t = w <= 0 ? 0.0 : (sec - p0.dx) / w;
+  return p0.dy * (1 - t) + p1.dy * t;
 }
 
-double seriesScaleTop(ResSeries s, double a, double b) {
+double seriesScaleTop(ResSeries s, double a, double b, {bool includePrev = false}) {
   if (s.id == 'battery' || s.id.startsWith('battery:')) return 100.0;
   final pad = (b - a) * 0.2;
-  final m = s.maxIn(a - pad, b + pad);
+  var m = s.maxIn(a - pad, b + pad);
+  if (includePrev && s.prevPoints.isNotEmpty) {
+    for (var i = ResSeries.lowerBound(s.prevPoints, a - pad); i < s.prevPoints.length; i++) {
+      final p = s.prevPoints[i];
+      if (p.dx > b + pad) break;
+      if (p.dy > m) m = p.dy;
+    }
+  }
   if (s.isSum) return math.max(2.0, m * 1.18);
   return (m <= 0 ? 1.0 : m) * 1.18;
 }
@@ -495,6 +502,26 @@ class _ActivityChartState extends State<ActivityChart> {
     return n == 0 ? null : sum / n;
   }
 
+  ({int min, int max})? mainMinMax() {
+    final maxI = (widget.total / bucket).ceil() - 1;
+    final lo = ((vx0 / bucket).floor()).clamp(0, maxI).toInt();
+    final hi = ((vx1 / bucket).ceil()).clamp(0, maxI).toInt();
+    if (hi < lo) return null;
+    var minV = -1;
+    var maxV = 0;
+    var any = false;
+    for (var i = lo; i <= hi; i++) {
+      final v = valueAt(i);
+      if (v > 0) {
+        if (minV < 0 || v < minV) minV = v;
+        if (v > maxV) maxV = v;
+        any = true;
+      }
+    }
+    if (!any) return (min: 0, max: 0);
+    return (min: minV < 0 ? 0 : minV, max: maxV);
+  }
+
   Bucket? bucketOf(int i) => (i < cLo || i >= cHi) ? null : cache[i - cLo];
 
   int valueAt(int i) => bucketOf(i)?.value ?? 0;
@@ -759,30 +786,35 @@ class _ActivityChartState extends State<ActivityChart> {
               width: c.maxWidth,
               height: widget.height,
               child: ClipRect(
-                child: ListenableBuilder(
-                  listenable: Listenable.merge([tip, lineHover, seriesFocus]),
-                  builder: (context, _) {
-                    final t = tip.value;
-                    return CustomPaint(
-                    painter: _ChartPainter(
-                      series: widget.series,
-                      focus: focusSeries,
-                      showTime: widget.showTime,
-                      buckets: cache,
-                      cLo: cLo,
-                      bucket: bucket,
-                      first: widget.first,
-                      total: widget.total,
-                      vx0: vx0,
-                      vx1: vx1,
-                      yBottom: 0,
-                      ySpan: top.toDouble(),
-                      hover: t != null && t.visible ? t.bucket : null,
-                      prev: widget.compare ? prevCache : const [],
-                      avg: widget.avgLine ? avgValue() : null,
-                    ),
-                    );
-                  },
+                child: RepaintBoundary(
+                  child: ListenableBuilder(
+                    listenable: Listenable.merge([tip, lineHover, seriesFocus]),
+                    builder: (context, _) {
+                      final t = tip.value;
+                      return CustomPaint(
+                        painter: _ChartPainter(
+                          series: widget.series,
+                          focus: focusSeries,
+                          hoverSeriesId: (t != null && t.visible) ? (t.seriesId ?? lineHover.value) : lineHover.value,
+                          showTime: widget.showTime,
+                          buckets: cache,
+                          cLo: cLo,
+                          bucket: bucket,
+                          first: widget.first,
+                          total: widget.total,
+                          vx0: vx0,
+                          vx1: vx1,
+                          yBottom: 0,
+                          ySpan: top.toDouble(),
+                          hover: t != null && t.visible ? t.bucket : null,
+                          prev: widget.compare ? prevCache : const [],
+                          avg: widget.avgLine ? avgValue() : null,
+                          avgLine: widget.avgLine,
+                          compare: widget.compare,
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
@@ -1043,6 +1075,8 @@ class _ActivityChartState extends State<ActivityChart> {
 
   Widget _mainTip(Bucket b, _Tip t, List<MapEntry<String, List<int>>> rows, double maxH) {
     final activeSites = sitesIn(t.bucket);
+    final mm = mainMinMax();
+    final mainAvg = avgValue();
     String? browserAppFor(String bId) {
       for (final e in rows) {
         if (Usage.browserIdForApp(e.key) == bId) return e.key;
@@ -1061,6 +1095,11 @@ class _ActivityChartState extends State<ActivityChart> {
           Text(rangeText(t.bucket), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 2),
           Text('${metricLabel(widget.metric)}: ${formatMs(b.value)}', style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w900, fontSize: 15)),
+          if (mm != null)
+            Text(
+              '${tr('chartMin')}: ${formatMs(mm.min)} · ${tr('chartMax')}: ${formatMs(mm.max)}${mainAvg != null ? ' · ${tr('chartAvg')}: ${formatMs(mainAvg.round())}' : ''}',
+              style: const TextStyle(color: cMuted, fontSize: 11, fontWeight: FontWeight.w600),
+            ),
           if (widget.compare && t.bucket >= cLo && t.bucket - cLo < prevCache.length)
             Text('${tr('comparePrev')}: ${formatMs(prevCache[t.bucket - cLo])}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
           const SizedBox(height: 6),
@@ -1147,6 +1186,8 @@ class _ActivityChartState extends State<ActivityChart> {
 
   Widget _seriesTip(ResSeries s, _Tip t, List<MapEntry<String, double>> apps, double a, double b, double maxH) {
     final total = s.valueIn(a, b);
+    final st = s.statsIn(vx0, vx1);
+    final prevVal = widget.compare ? s.prevValueIn(a, b) : null;
     return Material(
       type: MaterialType.transparency,
       child: ConstrainedBox(
@@ -1158,6 +1199,12 @@ class _ActivityChartState extends State<ActivityChart> {
             Text(rangeText(t.bucket), style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
             const SizedBox(height: 2),
             Text('${s.label}: ${s.format(total)}', style: TextStyle(color: s.color, fontWeight: FontWeight.w900, fontSize: 15)),
+            Text(
+              '${tr('chartMin')}: ${s.format(st.min)} · ${tr('chartMax')}: ${s.format(st.max)} · ${tr('chartAvg')}: ${s.format(st.avg)}',
+              style: const TextStyle(color: cMuted, fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+            if (prevVal != null)
+              Text('${tr('comparePrev')}: ${s.format(prevVal)}', style: const TextStyle(color: cMuted, fontSize: 12, fontWeight: FontWeight.w700)),
             if (apps.isNotEmpty) ...[
               const SizedBox(height: 6),
               Flexible(
@@ -1284,10 +1331,30 @@ class _ActivityChartState extends State<ActivityChart> {
 }
 
 class _ChartPainter extends CustomPainter {
-  _ChartPainter({required this.series, required this.focus, required this.showTime, required this.buckets, required this.cLo, required this.bucket, required this.first, required this.total, required this.vx0, required this.vx1, required this.yBottom, required this.ySpan, required this.hover, this.prev = const [], this.avg});
+  _ChartPainter({
+    required this.series,
+    required this.focus,
+    required this.hoverSeriesId,
+    required this.showTime,
+    required this.buckets,
+    required this.cLo,
+    required this.bucket,
+    required this.first,
+    required this.total,
+    required this.vx0,
+    required this.vx1,
+    required this.yBottom,
+    required this.ySpan,
+    required this.hover,
+    this.prev = const [],
+    this.avg,
+    this.avgLine = false,
+    this.compare = false,
+  });
 
   final List<ResSeries> series;
   final ResSeries? focus;
+  final String? hoverSeriesId;
   final bool showTime;
   final List<Bucket?> buckets;
   final int cLo;
@@ -1301,6 +1368,77 @@ class _ChartPainter extends CustomPainter {
   final int? hover;
   final List<int> prev;
   final double? avg;
+  final bool avgLine;
+  final bool compare;
+
+  List<Offset> _decimateScreenPoints(List<Offset> src, double plotW) {
+    final maxPts = math.max(120, (plotW * 1.5).ceil());
+    if (src.length <= maxPts) return src;
+    final out = <Offset>[];
+    var bucketPx = -1000000;
+    Offset? firstP;
+    Offset? minP;
+    Offset? maxP;
+    Offset? lastP;
+    void flush() {
+      if (firstP == null) return;
+      out.add(firstP!);
+      if (minP != null && minP != firstP && minP != lastP) out.add(minP!);
+      if (maxP != null && maxP != firstP && maxP != minP && maxP != lastP) out.add(maxP!);
+      if (lastP != null && lastP != firstP) out.add(lastP!);
+    }
+    for (final p in src) {
+      final px = p.dx.floor();
+      if (px != bucketPx) {
+        flush();
+        bucketPx = px;
+        firstP = p;
+        minP = p;
+        maxP = p;
+        lastP = p;
+      } else {
+        if (p.dy < minP!.dy) minP = p;
+        if (p.dy > maxP!.dy) maxP = p;
+        lastP = p;
+      }
+    }
+    flush();
+    return out;
+  }
+
+  void _drawDashedPolyline(Canvas canvas, List<Offset> pts, Paint paint) {
+    if (pts.length < 2) return;
+    const dashLen = 6.0;
+    const gapLen = 5.0;
+    var drawing = true;
+    var rem = dashLen;
+    for (var i = 0; i < pts.length - 1; i++) {
+      var ax = pts[i].dx;
+      var ay = pts[i].dy;
+      final bx = pts[i + 1].dx;
+      final by = pts[i + 1].dy;
+      final dx = bx - ax;
+      final dy = by - ay;
+      var seg = math.sqrt(dx * dx + dy * dy);
+      if (seg < 0.01) continue;
+      final ux = dx / seg;
+      final uy = dy / seg;
+      while (seg > 0.01) {
+        final step = math.min(seg, rem);
+        final nx = ax + ux * step;
+        final ny = ay + uy * step;
+        if (drawing) canvas.drawLine(Offset(ax, ay), Offset(nx, ny), paint);
+        ax = nx;
+        ay = ny;
+        seg -= step;
+        rem -= step;
+        if (rem <= 0.01) {
+          drawing = !drawing;
+          rem = drawing ? dashLen : gapLen;
+        }
+      }
+    }
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1321,7 +1459,7 @@ class _ChartPainter extends CustomPainter {
       canvas.drawLine(Offset(_left, y), Offset(size.width - _right, y), grid);
       final f = focus ?? (!showTime && series.length == 1 ? series.first : null);
       final percent = f == null && !showTime && series.length > 1;
-      final shown = percent ? '${(100 * (2 - k) / 2).round()}%' : (f == null ? formatMs((yBottom + ySpan * (2 - k) / 2).round()) : (k == 2 ? f.format(0) : f.format(seriesScaleTop(f, vx0, vx1) * (2 - k) / 2)));
+      final shown = percent ? '${(100 * (2 - k) / 2).round()}%' : (f == null ? formatMs((yBottom + ySpan * (2 - k) / 2).round()) : (k == 2 ? f.format(0) : f.format(seriesScaleTop(f, vx0, vx1, includePrev: compare) * (2 - k) / 2)));
       final tp = TextPainter(text: TextSpan(text: shown, style: f == null ? label : TextStyle(color: f.color, fontSize: 11, fontWeight: FontWeight.w700)), textDirection: TextDirection.ltr)..layout();
       tp.paint(canvas, Offset(math.max(0.0, _left - tp.width - 6), y - tp.height / 2));
     }
@@ -1349,145 +1487,187 @@ class _ChartPainter extends CustomPainter {
       lastEnd = dx + tp.width;
       tp.paint(canvas, Offset(dx, size.height - tp.height));
     }
+
     final dim = focus != null;
     final fade = dim ? 0.3 : 1.0;
-    if (buckets.isEmpty || !showTime) {
-      paintSeries(canvas, plotW, plotH, span);
-      return;
-    }
+    final badges = <({double y, Color color, String text})>[];
 
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(_left, 0, plotW, _top + plotH + 1));
-    final maxI = (total / bucket).ceil() - 1;
-    final lo = ((vx0 / bucket).floor() - 1).clamp(0, maxI).toInt();
-    final hi = ((vx1 / bucket).ceil() + 1).clamp(0, maxI).toInt();
-    final pts = [for (var i = lo; i <= hi; i++) Offset(xOf(center(i)), yOf(valueOf(i)))];
-    final baseY = yOf(0);
-    if (pts.length >= 2) {
-      final path = Path()..moveTo(pts.first.dx, pts.first.dy);
-      const minY = _top;
-      final maxY = math.max(baseY, _top + plotH);
-      for (var i = 0; i < pts.length - 1; i++) {
-        final p0 = i == 0 ? pts[i] : pts[i - 1];
-        final p1 = pts[i];
-        final p2 = pts[i + 1];
-        final p3 = i + 2 < pts.length ? pts[i + 2] : p2;
-        double cy(double y) => y.clamp(minY - 200, maxY).toDouble();
-        final lowest = math.max(p1.dy, p2.dy);
-        final highest = math.min(p1.dy, p2.dy);
-        double bound(double y) => y.clamp(highest, lowest).toDouble();
-        path.cubicTo(
-          p1.dx + (p2.dx - p0.dx) / 6,
-          bound(cy(p1.dy + (p2.dy - p0.dy) / 6)),
-          p2.dx - (p3.dx - p1.dx) / 6,
-          bound(cy(p2.dy - (p3.dy - p1.dy) / 6)),
-          p2.dx,
-          p2.dy,
-        );
-      }
-      final fill = Path.from(path)
-        ..lineTo(pts.last.dx, baseY)
-        ..lineTo(pts.first.dx, baseY)
-        ..close();
-      canvas.drawPath(
-        fill,
-        Paint()
-          ..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [cPrimary.withValues(alpha: 0.28 * fade), cPrimary.withValues(alpha: 0)])
-              .createShader(Rect.fromLTWH(_left, _top, plotW, plotH)),
-      );
-      canvas.drawPath(
-        path,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.2
-          ..strokeJoin = StrokeJoin.round
-          ..color = cPrimary.withValues(alpha: fade),
-      );
-    }
-    paintSeries(canvas, plotW, plotH, span);
-    if (prev.isNotEmpty && !dim) {
-      final dash = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6
-        ..color = cMuted.withValues(alpha: 0.85);
-      final path = Path();
-      var started = false;
-      for (var i = lo; i <= hi; i++) {
-        final k = i - cLo;
-        final v = k < 0 || k >= prev.length ? 0 : prev[k];
-        final pt = Offset(xOf(center(i)), yOf(v.toDouble()));
-        if (!started) {
-          path.moveTo(pt.dx, pt.dy);
-          started = true;
-        } else {
-          path.lineTo(pt.dx, pt.dy);
+
+    if (buckets.isNotEmpty && showTime) {
+      final maxI = (total / bucket).ceil() - 1;
+      final lo = ((vx0 / bucket).floor() - 1).clamp(0, maxI).toInt();
+      final hi = ((vx1 / bucket).ceil() + 1).clamp(0, maxI).toInt();
+      final pts = [for (var i = lo; i <= hi; i++) Offset(xOf(center(i)), yOf(valueOf(i)))];
+      final baseY = yOf(0);
+      if (pts.length >= 2) {
+        final path = Path()..moveTo(pts.first.dx, pts.first.dy);
+        const minY = _top;
+        final maxY = math.max(baseY, _top + plotH);
+        for (var i = 0; i < pts.length - 1; i++) {
+          final p0 = i == 0 ? pts[i] : pts[i - 1];
+          final p1 = pts[i];
+          final p2 = pts[i + 1];
+          final p3 = i + 2 < pts.length ? pts[i + 2] : p2;
+          double cy(double y) => y.clamp(minY - 200, maxY).toDouble();
+          final lowest = math.max(p1.dy, p2.dy);
+          final highest = math.min(p1.dy, p2.dy);
+          double bound(double y) => y.clamp(highest, lowest).toDouble();
+          path.cubicTo(
+            p1.dx + (p2.dx - p0.dx) / 6,
+            bound(cy(p1.dy + (p2.dy - p0.dy) / 6)),
+            p2.dx - (p3.dx - p1.dx) / 6,
+            bound(cy(p2.dy - (p3.dy - p1.dy) / 6)),
+            p2.dx,
+            p2.dy,
+          );
         }
-      }
-      for (final m in path.computeMetrics()) {
-        var d = 0.0;
-        while (d < m.length) {
-          canvas.drawPath(m.extractPath(d, math.min(m.length, d + 6)), dash);
-          d += 11;
-        }
-      }
-    }
-    if (avg != null && !dim) {
-      final y = yOf(avg!);
-      final line = Paint()
-        ..strokeWidth = 1.2
-        ..color = cWarn.withValues(alpha: 0.9);
-      for (var x = _left; x < _left + plotW; x += 10) {
-        canvas.drawLine(Offset(x, y), Offset(math.min(x + 5, _left + plotW), y), line);
-      }
-      final tp = TextPainter(text: TextSpan(text: '${tr('avgLine')}: ${formatMs(avg!.round())}', style: const TextStyle(color: cWarn, fontSize: 11, fontWeight: FontWeight.w700)), textDirection: TextDirection.ltr)..layout();
-      tp.paint(canvas, Offset(_left + plotW - tp.width - 4, math.max(_top, y - tp.height - 2)));
-    }
-    if (hover != null && !dim) {
-      final p = Offset(xOf(center(hover!)), yOf(valueOf(hover!)));
-      canvas.drawLine(
-          Offset(p.dx, _top),
-          Offset(p.dx, _top + plotH),
+        final fill = Path.from(path)
+          ..lineTo(pts.last.dx, baseY)
+          ..lineTo(pts.first.dx, baseY)
+          ..close();
+        canvas.drawPath(
+          fill,
           Paint()
-            ..color = cPrimary.withValues(alpha: 0.35)
-            ..strokeWidth = 1);
-      canvas.drawCircle(p, 5, Paint()..color = cBg);
-      canvas.drawCircle(
-          p,
-          5,
+            ..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [cPrimary.withValues(alpha: 0.28 * fade), cPrimary.withValues(alpha: 0)])
+                .createShader(Rect.fromLTWH(_left, _top, plotW, plotH)),
+        );
+        canvas.drawPath(
+          path,
           Paint()
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2.2
-            ..color = cPrimary);
+            ..strokeJoin = StrokeJoin.round
+            ..color = cPrimary.withValues(alpha: fade),
+        );
+      }
+      if (compare && prev.isNotEmpty && !dim) {
+        final prevPts = <Offset>[];
+        for (var i = lo; i <= hi; i++) {
+          final k = i - cLo;
+          final v = k < 0 || k >= prev.length ? 0 : prev[k];
+          prevPts.add(Offset(xOf(center(i)), yOf(v.toDouble())));
+        }
+        _drawDashedPolyline(
+          canvas,
+          _decimateScreenPoints(prevPts, plotW),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.6
+            ..color = cMuted.withValues(alpha: 0.85),
+        );
+      }
+      if (avg != null && !dim) {
+        final y = yOf(avg!).clamp(_top, _top + plotH).toDouble();
+        final line = Paint()
+          ..strokeWidth = 1.2
+          ..color = cWarn.withValues(alpha: 0.9);
+        for (var x = _left; x < _left + plotW; x += 10) {
+          canvas.drawLine(Offset(x, y), Offset(math.min(x + 5, _left + plotW), y), line);
+        }
+        badges.add((y: y, color: cWarn, text: '${tr('chartAvg')}: ${formatMs(avg!.round())}'));
+      }
     }
+
+    final activeDotSeries = focus ??
+        (hoverSeriesId != null ? series.cast<ResSeries?>().firstWhere((s) => s!.id == hoverSeriesId, orElse: () => null) : null) ??
+        (!showTime && series.isNotEmpty ? series.first : null);
+
+    paintSeries(canvas, plotW, plotH, span, activeDotSeries, badges);
+
+    if (hover != null && activeDotSeries == null && showTime && !dim) {
+      final p = Offset(xOf(center(hover!)), yOf(valueOf(hover!)));
+      canvas.drawLine(
+        Offset(p.dx, _top),
+        Offset(p.dx, _top + plotH),
+        Paint()
+          ..color = cPrimary.withValues(alpha: 0.35)
+          ..strokeWidth = 1,
+      );
+      canvas.drawCircle(p, 5, Paint()..color = cBg);
+      canvas.drawCircle(
+        p,
+        5,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2
+          ..color = cPrimary,
+      );
+    }
+
+    if (badges.isNotEmpty) {
+      badges.sort((a, b) => a.y.compareTo(b.y));
+      final maxBadges = badges.length > 6 ? 6 : badges.length;
+      final placed = <({double top, double width, double height, Color color, TextPainter tp})>[];
+      var lastBottom = _top + 1;
+      for (var i = 0; i < maxBadges; i++) {
+        final b = badges[i];
+        final tp = TextPainter(
+          text: TextSpan(text: b.text, style: TextStyle(color: b.color, fontSize: 11, fontWeight: FontWeight.w800)),
+          textDirection: TextDirection.ltr,
+          maxLines: 1,
+        )..layout(maxWidth: math.max(80.0, plotW - 16));
+        final boxH = tp.height + 6;
+        final boxW = tp.width + 12;
+        var yTop = (b.y - boxH / 2).clamp(_top + 2, _top + plotH - boxH - 2).toDouble();
+        if (yTop < lastBottom + 3) yTop = lastBottom + 3;
+        if (yTop + boxH > _top + plotH - 2) break;
+        lastBottom = yTop + boxH;
+        placed.add((top: yTop, width: boxW, height: boxH, color: b.color, tp: tp));
+      }
+      final fillPaint = Paint()..color = cBg;
+      final borderPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2;
+      for (final p in placed) {
+        final rect = Rect.fromLTWH(_left + plotW - p.width - 6, p.top, p.width, p.height);
+        final rr = RRect.fromRectAndRadius(rect, const Radius.circular(6));
+        canvas.drawRRect(rr, fillPaint);
+        borderPaint.color = p.color.withValues(alpha: 0.9);
+        canvas.drawRRect(rr, borderPaint);
+        p.tp.paint(canvas, Offset(rect.left + 6, rect.top + 3));
+      }
+    }
+
     canvas.restore();
   }
 
-  void paintSeries(Canvas canvas, double plotW, double plotH, double span) {
+  void paintSeries(Canvas canvas, double plotW, double plotH, double span, ResSeries? activeDotSeries, List<({double y, Color color, String text})> badges) {
     if (series.isEmpty) return;
     double xOf(double sec) => _left + (sec - vx0) / span * plotW;
-    canvas.save();
-    canvas.clipRect(Rect.fromLTWH(_left, 0, plotW, _top + plotH + 1));
     final ordered = [for (final s in series) if (s.id != focus?.id) s, if (focus != null) focus!];
     final hoverSec = hover == null ? null : (hover! + 0.5) * bucket;
     final targetX = hoverSec == null ? null : xOf(hoverSec);
-    if (targetX != null && (!showTime || focus != null)) {
-      final guideColor = (focus?.color ?? series.first.color).withValues(alpha: 0.35);
+    if (targetX != null && activeDotSeries != null) {
       canvas.drawLine(
         Offset(targetX, _top),
         Offset(targetX, _top + plotH),
         Paint()
-          ..color = guideColor
+          ..color = activeDotSeries.color.withValues(alpha: 0.35)
           ..strokeWidth = 1,
       );
     }
-    final dots = <({Offset c, Color color, double r, double stroke})>[];
+    final pad = span * 0.2;
+    final minX = vx0 - pad;
+    final maxX = vx1 + pad;
+    final linePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeJoin = StrokeJoin.round
+      ..strokeCap = StrokeCap.round;
+    ({Offset c, Color color, double r, double stroke})? activeDot;
     for (final s in ordered) {
       final isFocus = focus != null && s.id == focus!.id;
-      final top = seriesScaleTop(s, vx0, vx1);
+      final top = seriesScaleTop(s, vx0, vx1, includePrev: compare);
       double yOf(double v) => _top + plotH * (1 - (v / top).clamp(0.0, 1.0));
-      final pad = span * 0.2;
-      final pts = [for (final p in s.points) if (p.dx >= vx0 - pad && p.dx <= vx1 + pad) Offset(xOf(p.dx), yOf(p.dy))];
-      if (pts.isEmpty) continue;
+      final rawPts = <Offset>[];
+      for (var i = ResSeries.lowerBound(s.points, minX); i < s.points.length; i++) {
+        final p = s.points[i];
+        if (p.dx > maxX) break;
+        rawPts.add(Offset(xOf(p.dx), yOf(p.dy)));
+      }
+      if (rawPts.isEmpty) continue;
+      final pts = _decimateScreenPoints(rawPts, plotW);
       final alpha = focus == null ? 0.95 : (isFocus ? 1.0 : 0.28);
       final width = focus == null ? 2.0 : (isFocus ? 3.4 : 1.5);
       final color = s.color.withValues(alpha: alpha);
@@ -1498,48 +1678,77 @@ class _ChartPainter extends CustomPainter {
         for (var i = 1; i < pts.length; i++) {
           path.lineTo(pts[i].dx, pts[i].dy);
         }
-        canvas.drawPath(
-          path,
-          Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = width
-            ..strokeJoin = StrokeJoin.round
-            ..strokeCap = StrokeCap.round
-            ..color = color,
-        );
+        linePaint
+          ..strokeWidth = width
+          ..color = color;
+        canvas.drawPath(path, linePaint);
       }
-      if (hoverSec != null && targetX != null) {
-        final v = seriesValueAt(s, hoverSec);
-        if (v != null && (s.points.length > 1 || (hoverSec - s.points.first.dx).abs() <= math.max(bucket * 0.6, 600))) {
-          final c = Offset(targetX, yOf(v));
-          final primary = isFocus || (focus == null && series.length == 1 && !showTime);
-          dots.add((
-            c: c,
-            color: s.color.withValues(alpha: focus == null ? 1.0 : (isFocus ? 1.0 : 0.55)),
-            r: primary ? 5.0 : 3.5,
-            stroke: primary ? 2.2 : 1.8,
+      if (compare && s.prevPoints.isNotEmpty && (focus == null || isFocus)) {
+        final rawPrev = <Offset>[];
+        for (var i = ResSeries.lowerBound(s.prevPoints, minX); i < s.prevPoints.length; i++) {
+          final p = s.prevPoints[i];
+          if (p.dx > maxX) break;
+          rawPrev.add(Offset(xOf(p.dx), yOf(p.dy)));
+        }
+        if (rawPrev.length >= 2) {
+          _drawDashedPolyline(
+            canvas,
+            _decimateScreenPoints(rawPrev, plotW),
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = isFocus ? 2.0 : 1.4
+              ..color = s.color.withValues(alpha: isFocus ? 0.72 : 0.45),
+          );
+        }
+      }
+      if (avgLine && (focus == null || isFocus)) {
+        final st = s.statsIn(vx0, vx1);
+        if (st.avg > 0) {
+          final y = yOf(st.avg).clamp(_top, _top + plotH).toDouble();
+          final avgPaint = Paint()
+            ..strokeWidth = 1.1
+            ..color = s.color.withValues(alpha: isFocus ? 0.9 : 0.55);
+          for (var x = _left; x < _left + plotW; x += 10) {
+            canvas.drawLine(Offset(x, y), Offset(math.min(x + 5, _left + plotW), y), avgPaint);
+          }
+          final showSolo = !showTime && series.length == 1;
+          badges.add((
+            y: y,
+            color: s.color,
+            text: showSolo || isFocus ? '${tr('chartAvg')}: ${s.format(st.avg)}' : '${s.label}: ${s.format(st.avg)}',
           ));
         }
       }
+      if (hoverSec != null && targetX != null && activeDotSeries != null && s.id == activeDotSeries.id) {
+        final v = seriesValueAt(s, hoverSec);
+        if (v != null && (s.points.length > 1 || (hoverSec - s.points.first.dx).abs() <= math.max(bucket * 0.6, 600))) {
+          activeDot = (
+            c: Offset(targetX, yOf(v)),
+            color: s.color,
+            r: 5.0,
+            stroke: 2.2,
+          );
+        }
+      }
     }
-    for (final d in dots) {
-      canvas.drawCircle(d.c, d.r, Paint()..color = cBg);
+    if (activeDot != null) {
+      canvas.drawCircle(activeDot.c, activeDot.r, Paint()..color = cBg);
       canvas.drawCircle(
-        d.c,
-        d.r,
+        activeDot.c,
+        activeDot.r,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = d.stroke
-          ..color = d.color,
+          ..strokeWidth = activeDot.stroke
+          ..color = activeDot.color,
       );
     }
-    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant _ChartPainter old) {
     return !identical(series, old.series) ||
         focus?.id != old.focus?.id ||
+        hoverSeriesId != old.hoverSeriesId ||
         showTime != old.showTime ||
         !identical(buckets, old.buckets) ||
         cLo != old.cLo ||
@@ -1552,6 +1761,8 @@ class _ChartPainter extends CustomPainter {
         ySpan != old.ySpan ||
         hover != old.hover ||
         !identical(prev, old.prev) ||
-        avg != old.avg;
+        avg != old.avg ||
+        avgLine != old.avgLine ||
+        compare != old.compare;
   }
 }

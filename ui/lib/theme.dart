@@ -189,14 +189,75 @@ class NavItem extends StatelessWidget {
 }
 
 class SelectBox<T> extends StatelessWidget {
-  const SelectBox({super.key, required this.value, required this.items, required this.onChanged});
+  const SelectBox({super.key, required this.value, required this.items, required this.onChanged, this.isExpanded = false});
 
   final T? value;
   final List<DropdownMenuItem<T>> items;
   final ValueChanged<T?> onChanged;
+  final bool isExpanded;
+
+  Future<void> _openSheet(BuildContext context) async {
+    buzz(0);
+    final picked = await showModalBottomSheet<({T? value})>(
+      context: context,
+      backgroundColor: cBg,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(rLg))),
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            for (final item in items)
+              ListTile(
+                selected: item.value == value,
+                selectedColor: cPrimary,
+                title: item.child,
+                trailing: item.value == value ? const Icon(Icons.check, size: 18, color: cPrimary) : null,
+                onTap: () {
+                  buzz(0);
+                  Navigator.pop(ctx, (value: item.value));
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) onChanged(picked.value);
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (Platform.isAndroid) {
+      Widget? label;
+      for (final item in items) {
+        if (item.value == value) {
+          label = item.child;
+          break;
+        }
+      }
+      label ??= items.isNotEmpty ? items.first.child : const SizedBox.shrink();
+      return InkWell(
+        onTap: () => _openSheet(context),
+        borderRadius: BorderRadius.circular(rMd),
+        child: Container(
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: cPanel,
+            borderRadius: BorderRadius.circular(rMd),
+            border: Border.fromBorderSide(line),
+          ),
+          child: Row(mainAxisSize: isExpanded ? MainAxisSize.max : MainAxisSize.min, children: [
+            if (isExpanded)
+              Expanded(child: DefaultTextStyle(style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis, child: label))
+            else
+              Flexible(child: DefaultTextStyle(style: const TextStyle(color: cPrimary, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis, child: label)),
+            const SizedBox(width: 4),
+            const Icon(Icons.arrow_drop_down, color: cMuted),
+          ]),
+        ),
+      );
+    }
     return DefaultSelectionStyle(
       mouseCursor: SystemMouseCursors.click,
       child: MouseRegion(
@@ -213,6 +274,7 @@ class SelectBox<T> extends StatelessWidget {
             child: DropdownButton<T>(
               value: value,
               items: items,
+              isExpanded: isExpanded,
               onChanged: (v) {
                 buzz(0);
                 onChanged(v);
@@ -243,7 +305,13 @@ class EllipsisText extends StatelessWidget {
         ..layout(maxWidth: c.maxWidth.isFinite ? c.maxWidth : double.infinity);
       final w = Text(text, style: style, maxLines: 1, overflow: TextOverflow.ellipsis);
       if (!tp.didExceedMaxLines) return w;
-      return Tooltip(message: text, triggerMode: TooltipTriggerMode.tap, showDuration: const Duration(seconds: 4), waitDuration: const Duration(milliseconds: 250), child: w);
+      return Tooltip(
+        message: text,
+        triggerMode: Platform.isAndroid ? TooltipTriggerMode.longPress : TooltipTriggerMode.tap,
+        showDuration: const Duration(seconds: 4),
+        waitDuration: const Duration(milliseconds: 250),
+        child: w,
+      );
     });
   }
 }
